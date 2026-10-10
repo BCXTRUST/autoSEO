@@ -104,7 +104,13 @@ export interface ThreadSelection {
   rejectReason?: string;
 }
 
-/** Plan 6.4 step 1. A missing timestamp counts as active: the driver just listed the thread. */
+/**
+ * Plan 6.4 step 1. The date that matters is the newest post already in the thread.
+ * A thread opened in 2007 is fine when someone replied this week. A thread whose last
+ * reply is older than the activity window is finished: a new reply will not get an answer.
+ * No visible date is the same as too old. A missing timestamp used to count as fresh,
+ * which is how a reply landed under a post from October 2024.
+ */
 export function selectThreadCandidate(input: {
   relevance: number;
   openQuestion: boolean;
@@ -121,10 +127,9 @@ export function selectThreadCandidate(input: {
   if (input.laneId && input.excludedLaneIds.includes(input.laneId)) {
     return { selected: false, rejectReason: "lane_excluded" };
   }
-  if (input.lastActivityAt) {
-    const ageDays = (input.now.getTime() - input.lastActivityAt.getTime()) / 86_400_000;
-    if (ageDays > input.activityDays) return { selected: false, rejectReason: "inactive" };
-  }
+  if (!input.lastActivityAt) return { selected: false, rejectReason: "inactive" };
+  const ageDays = (input.now.getTime() - input.lastActivityAt.getTime()) / 86_400_000;
+  if (ageDays > input.activityDays) return { selected: false, rejectReason: "inactive" };
   if (mentionsAllowedDomain(input.pageText, input.allowedDomains)) {
     return { selected: false, rejectReason: "already_linked" };
   }

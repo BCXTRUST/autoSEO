@@ -403,8 +403,11 @@ export const LbContentSchema = z.object({
   maxReplyChars: z.number().int().min(200).max(10_000).default(1200),
   /** `queue` sends a failed facts-only check to the drafts queue; `discard` drops it. */
   mode: LbContentModeSchema.default("discard"),
-  /** Thread activity window for selection (plan 6.4). */
-  threadActivityDays: z.number().int().min(1).max(3650).default(180),
+  /**
+   * Newest post in the thread must be this recent. One month: a reply under a post
+   * from last year does not get an answer.
+   */
+  threadActivityDays: z.number().int().min(1).max(3650).default(30),
   excludedLaneIds: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
   /** Per-project OpenRouter model ids. Deployment defaults apply when a lane is omitted. */
   modelLanes: LbModelLaneOverrideSchema.default({}),
@@ -482,7 +485,7 @@ export const LbProjectConfigSchema = z.object({
     bannedClaims: [],
     maxReplyChars: 1200,
     mode: "discard" as const,
-    threadActivityDays: 180,
+    threadActivityDays: 30,
     excludedLaneIds: [],
     modelLanes: {},
   })),
