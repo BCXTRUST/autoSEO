@@ -807,6 +807,7 @@ function watchUrl(raw: string | null | undefined): string | null {
   if (typeof raw !== "string" || !raw.startsWith("https://")) return null;
   const url = new URL(raw);
   if (!url.searchParams.has("autoconnect")) url.searchParams.set("autoconnect", "true");
+  if (!url.searchParams.has("reconnect")) url.searchParams.set("reconnect", "true");
   if (!url.searchParams.has("resize")) url.searchParams.set("resize", "scale");
   url.searchParams.set("view_only", "true");
   return url.toString();

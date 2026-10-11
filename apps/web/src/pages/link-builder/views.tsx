@@ -1053,6 +1053,7 @@ export function watchingFrameSrc(url: string): string {
     const page = parsed.pathname.endsWith("/vnc.html") || parsed.pathname.endsWith("/embed.html");
     if (!page) return url;
     parsed.searchParams.set("autoconnect", "true");
+    parsed.searchParams.set("reconnect", "true");
     parsed.searchParams.set("resize", "scale");
     parsed.searchParams.set("view_only", "true");
     const wsPath = novncClientPath(parsed.pathname);

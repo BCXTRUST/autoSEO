@@ -4305,6 +4305,7 @@ function embeddableScreenUrl(url: string | null): string | null {
     const socketPath = novncClientPath(parsed.pathname);
     if (socketPath && !parsed.searchParams.get("path")) parsed.searchParams.set("path", socketPath);
     if (!parsed.searchParams.get("autoconnect")) parsed.searchParams.set("autoconnect", "true");
+    if (!parsed.searchParams.get("reconnect")) parsed.searchParams.set("reconnect", "true");
     return parsed.toString();
   } catch {
     return url;

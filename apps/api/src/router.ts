@@ -1412,7 +1412,7 @@ export function createRouter(deps: RouterDeps) {
           };
         }
         let session: { url: string | null };
-        const timeout = abortAfter(30_000);
+        const timeout = abortAfter(90_000);
         try {
           const ctx = await computerScreenContext(
             deps.prisma,

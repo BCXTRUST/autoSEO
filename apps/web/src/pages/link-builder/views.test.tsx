@@ -188,7 +188,7 @@ describe("link builder screens", () => {
     expect(html).toContain('data-frame="url"');
     expect(html).toContain(`src="${watchingFrameSrc(stream).replaceAll("&", "&amp;")}"`);
     expect(watchingFrameSrc(stream)).toContain("autoconnect=true");
-    expect(watchingFrameSrc(stream)).not.toContain("reconnect=true");
+    expect(watchingFrameSrc(stream)).toContain("reconnect=true");
     expect(watchingFrameSrc(stream)).toContain("path=novnc%2Fremote%2Fview%2F9.abc%2Fwebsockify");
     expect(html).toContain('title="Computer"');
     expect(html).toContain("allow-scripts allow-same-origin");
