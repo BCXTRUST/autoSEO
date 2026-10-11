@@ -12,11 +12,10 @@ import type {
 } from "@rakazo/contracts";
 import {
   FIXTURE_DEMO_SLUG,
+  formatNextRun,
   formatPackagePrice,
   mentionsExampleDomain,
   mentionsFixtureHost,
-  applyRunPhrase,
-  formatNextRun,
   primaryProblemQueryFromProject,
   showHostToCustomer,
   WORK_STAGE_LABELS,
@@ -49,7 +48,8 @@ import {
   wizardStepIssues,
 } from "./model.js";
 import {
-  OVERVIEW_COUNTS,
+  homeLine,
+  homeStatus,
   type OverviewFeedItem,
   type OverviewIntent,
   overviewAction,
@@ -57,10 +57,11 @@ import {
   overviewFrame,
   overviewHasPlacement,
   overviewPace,
-  overviewPill,
   overviewStage,
   overviewWorking,
+  personTicket,
   statusNotes,
+  stuckHelp,
   whyNotFeedLines,
 } from "./overview.js";
 
@@ -68,10 +69,7 @@ const inputClass =
   "w-full rounded-xl border border-[#2A2A31] bg-[#141416] px-3 py-2 text-[14px] text-[#ECECEE] outline-none";
 
 /** Host, status, and task text. Empty query keeps every row. */
-export function matchesTaskQuery(
-  query: string,
-  parts: Array<string | null | undefined>,
-): boolean {
+export function matchesTaskQuery(query: string, parts: Array<string | null | undefined>): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
   return parts.some((part) => (part ?? "").replaceAll("_", " ").toLowerCase().includes(needle));
@@ -102,7 +100,11 @@ export function DashboardView({
       <div className="grid gap-3 md:grid-cols-2">
         {cards.map((card) => {
           const help = card.operatorHelp ?? null;
-          const activity = customerActivityLabel(card.activityLabel);
+          const status = homeStatus({
+            activity: card.activity,
+            activityLabel: card.activityLabel,
+            needsYou: Boolean(help),
+          });
           return (
             <BuiCard key={card.id} className="flex flex-col gap-3 p-4">
               <div className="flex items-start justify-between gap-3">
@@ -115,6 +117,7 @@ export function DashboardView({
                   <div className="text-[16px] text-[#ECECEE]">{card.name}</div>
                   <div className="text-[12.5px] text-[#85858A]">{card.brandName}</div>
                 </button>
+                <Pill label={status} />
                 {help && onHelp ? (
                   <button
                     type="button"
@@ -124,28 +127,21 @@ export function DashboardView({
                   >
                     {help.label}
                   </button>
-                ) : activity ? (
-                  <Pill label={activity} />
                 ) : null}
               </div>
               <button
                 type="button"
-                className="flex flex-col gap-3 text-left"
+                className="text-left"
                 aria-label={`Open ${card.name}`}
                 onClick={() => onOpen(card)}
               >
-                <div className="flex flex-wrap items-center gap-4">
-                  <Ring label={QUOTA_LABELS.newPerDay} value={card.newToday} max={card.newPerDay} />
-                  <Ring
-                    label={QUOTA_LABELS.livePerDay}
-                    value={card.liveToday}
-                    max={card.livePerDay}
-                  />
-                  <WeekBar value={card.liveWeek} max={card.liveWeekCap} />
-                </div>
-                <div className="truncate text-[12.5px] text-[#A6A6AD]">
-                  {card.lastEvent ?? "No events yet"}
-                </div>
+                <p className="text-[14px] text-[#ECECEE]">
+                  {homeLine({
+                    status,
+                    liveToday: card.liveToday,
+                    livePerDay: card.livePerDay,
+                  })}
+                </p>
               </button>
             </BuiCard>
           );
@@ -153,11 +149,6 @@ export function DashboardView({
       </div>
     </main>
   );
-}
-
-function customerActivityLabel(label: string): string | null {
-  if (/^needs operator\b/i.test(label)) return null;
-  return label;
 }
 
 export function CreditPackagesView({
@@ -395,8 +386,8 @@ export function ProjectView({
   onSurface,
   onStart,
   onPause,
-  onStop,
-  onInstruct,
+  onStop: _onStop,
+  onInstruct: _onInstruct,
   onDecideDraft,
   onSave,
   onSuggestPage,
@@ -408,6 +399,7 @@ export function ProjectView({
   screenError,
   screenPending,
   onHelp,
+  onFixed,
 }: {
   project: LbProjectDetail;
   status: LbProjectStatusView | null;
@@ -424,6 +416,7 @@ export function ProjectView({
   onPause: () => void;
   onStop: () => void;
   onInstruct?: (phrase: string) => Promise<void>;
+  onFixed?: (ticketId: string) => void;
   onDecideDraft?: (draftId: string, decision: "approved" | "discarded") => void;
   onSave?: (draft: WizardDraft) => void | Promise<void>;
   onSuggestPage?: (input: {
@@ -440,38 +433,24 @@ export function ProjectView({
   onHelp?: () => void;
 }) {
   const [intent, setIntent] = useState<OverviewIntent>(null);
-  const [phrase, setPhrase] = useState("");
-  const [phraseNote, setPhraseNote] = useState<string | null>(null);
   useEffect(() => {
     if (!intent || busy) return;
     setIntent(null);
   }, [intent, busy]);
   const working = overviewWorking({ activity: status?.activity ?? null, intent });
   const help = status?.operatorHelp ?? null;
-  const pill = help ? null : overviewPill({ activityLabel: status?.activityLabel ?? null, intent });
-  function applyPhrase() {
-    if (!onInstruct || !project.quotas) return;
-    const applied = applyRunPhrase({
-      phrase,
-      quotas: project.quotas,
-      schedule: project.schedule,
-      newToday: status?.run?.newToday ?? 0,
-      liveToday: status?.run?.liveToday ?? 0,
-    });
-    if (!applied) {
-      setPhraseNote(null);
-      return;
-    }
-    void onInstruct(phrase).then(() => {
-      setPhrase("");
-      setPhraseNote(`${applied.summary}. Next run ${formatNextRun(new Date(), applied.schedule)}`);
-    });
-  }
-  function request(kind: "start" | "pause" | "stop") {
-    const next: OverviewIntent =
-      kind === "start" ? "working" : kind === "pause" ? "paused" : "stopped";
+  const needed = personTicket(tickets);
+  const stuck = needed ? stuckHelp(needed) : null;
+  const statusWord = homeStatus({
+    activity: status?.activity ?? null,
+    activityLabel: status?.activityLabel ?? null,
+    intent,
+    needsYou: Boolean(help) || Boolean(needed),
+  });
+  function request(kind: "start" | "pause") {
+    const next: OverviewIntent = kind === "start" ? "working" : "paused";
     setIntent(next);
-    const run = kind === "start" ? onStart() : kind === "pause" ? onPause() : onStop();
+    const run = kind === "start" ? onStart() : onPause();
     void Promise.resolve(run).catch(() => setIntent(null));
   }
   const watching = surface === "dashboard";
@@ -497,7 +476,8 @@ export function ProjectView({
           </button>
         )}
         <div className="flex flex-wrap items-start gap-3">
-          {help && onHelp ? (
+          <Pill label={statusWord} />
+          {help && onHelp && !stuck ? (
             <button
               type="button"
               className="rounded-full bg-[#232327] px-2 py-1 text-[12px] text-[#ECECEE]"
@@ -506,20 +486,7 @@ export function ProjectView({
             >
               {help.label}
             </button>
-          ) : pill ? (
-            <Pill label={pill} />
           ) : null}
-          <button
-            type="button"
-            aria-label="Settings"
-            aria-current={watching ? undefined : "page"}
-            className={`rounded-full px-3 py-1.5 text-[13px] ${
-              watching ? "text-[#A6A6AD]" : "bg-[#232327] text-[#ECECEE]"
-            }`}
-            onClick={() => onSurface("settings")}
-          >
-            Settings
-          </button>
           <CreditBudget
             balance={status?.credits?.balance ?? null}
             note={creditNote}
@@ -536,52 +503,45 @@ export function ProjectView({
           <BuiButton label="Pause" onClick={() => request("pause")} disabled={busy}>
             Pause
           </BuiButton>
-          <BuiButton label="Stop" onClick={() => request("stop")} disabled={busy}>
-            Stop
+          <BuiButton label="Change schedule" onClick={() => onSurface("settings")} disabled={busy}>
+            Change schedule
           </BuiButton>
-          <form
-            className="flex min-w-[220px] flex-1 items-center gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              applyPhrase();
-            }}
-          >
-            <input
-              aria-label="Change the run"
-              placeholder="continue"
-              value={phrase}
-              onChange={(event) => setPhrase(event.target.value)}
-              className={inputClass}
-            />
-            <BuiButton
-              tone="accent"
-              label="Apply"
-              disabled={busy || !onInstruct}
-              onClick={() => applyPhrase()}
-            >
-              Apply
-            </BuiButton>
-          </form>
         </div>
         {watching ? (
-          <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+          <div className="flex flex-col gap-1">
             <TodayCount
-              label={OVERVIEW_COUNTS.newToday}
-              value={status?.run?.newToday ?? 0}
-              max={status?.newPerDay ?? project.quotas?.newPerDay ?? 0}
-            />
-            <TodayCount
-              label={OVERVIEW_COUNTS.liveToday}
+              label="Links that count"
               value={status?.run?.liveToday ?? 0}
               max={status?.livePerDay ?? project.quotas?.livePerDay ?? 0}
             />
+            {statusNotes(status?.whyNot)
+              .concat(whyNotFeedLines(status?.whyNot))
+              .map((line) => (
+                <p key={line} className="text-[12.5px] text-[#A6A6AD]">
+                  {line}
+                </p>
+              ))}
           </div>
         ) : null}
       </div>
-      {phraseNote ? (
-        <p role="status" className="text-[13px] text-[#ECECEE]">
-          {phraseNote}
-        </p>
+      {stuck && needed ? (
+        <section
+          aria-label="Needs you"
+          className="rounded-2xl border border-[#2A2A31] bg-[#141416] p-4"
+        >
+          <p className="text-[15px] text-[#ECECEE]">{stuck.stuck}</p>
+          <p className="mt-1 text-[13px] text-[#A6A6AD]">{stuck.next}</p>
+          <div className="mt-3">
+            <BuiButton
+              tone="accent"
+              label="I fixed it, continue"
+              disabled={busy || !onFixed}
+              onClick={() => onFixed?.(needed.id)}
+            >
+              I fixed it, continue
+            </BuiButton>
+          </div>
+        </section>
       ) : null}
       {watching ? (
         <Dashboard
@@ -667,6 +627,8 @@ export function OperatorView({
           )}
         </div>
       )}
+      <p className="text-[15px] text-[#ECECEE]">{stuckHelp(ticket).stuck}</p>
+      <p className="text-[13px] text-[#A6A6AD]">{stuckHelp(ticket).next}</p>
       <label className="text-[13px] text-[#A6A6AD]">
         Note
         <textarea
@@ -678,13 +640,8 @@ export function OperatorView({
       </label>
       {done ? <SuccessPop label={done} /> : null}
       <div className="flex gap-3">
-        <BuiButton
-          tone="accent"
-          label="I've solved it, continue"
-          onClick={onContinue}
-          disabled={busy}
-        >
-          I've solved it, continue
+        <BuiButton tone="accent" label="I fixed it, continue" onClick={onContinue} disabled={busy}>
+          I fixed it, continue
         </BuiButton>
         <BuiButton label="Skip host" onClick={onSkip} disabled={busy}>
           Skip host
@@ -754,7 +711,9 @@ function Dashboard({
   });
   const [taskQuery, setTaskQuery] = useState("");
   const taskColumn = useRef<HTMLDivElement>(null);
-  const visibleItems = items.filter((item) => matchesTaskQuery(taskQuery, [item.label, item.status]));
+  const visibleItems = items.filter((item) =>
+    matchesTaskQuery(taskQuery, [item.label, item.status]),
+  );
   const visibleForums = forums.filter((host) =>
     matchesTaskQuery(taskQuery, [host.registrableDomain, host.status]),
   );
@@ -819,38 +778,34 @@ function Dashboard({
             host={focusHost?.registrableDomain ?? null}
             notes={statusNotes(status?.whyNot)}
             error={status?.run?.lastError ?? null}
-            newToday={status?.run?.newToday ?? 0}
-            newPerDay={status?.newPerDay ?? project.quotas?.newPerDay ?? 0}
             liveToday={status?.run?.liveToday ?? 0}
             livePerDay={status?.livePerDay ?? project.quotas?.livePerDay ?? 0}
             warming={hosts.some((host) => host.status === "warming")}
-            nextRun={
-              project.schedule ? formatNextRun(new Date(), project.schedule) : null
-            }
+            nextRun={project.schedule ? formatNextRun(new Date(), project.schedule) : null}
           />
           <div
             ref={taskColumn}
             data-task-column=""
             className="rk-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain"
           >
-          <input
-            aria-label="Filter tasks"
-            placeholder="Filter"
-            value={taskQuery}
-            onChange={(event) => setTaskQuery(event.target.value)}
-            className={`${inputClass} sticky top-0 z-10 shrink-0`}
-          />
-          {visibleItems.length > 0 || taskQuery.trim() === "" ? (
-            <ActivityFeed items={visibleItems} />
-          ) : null}
-          <ForumsPicked hosts={visibleForums} threads={visibleThreadRows} />
-          <LinksPlaced rows={visibleLinks} />
-          <DraftNotes
-            drafts={visibleDraftRows}
-            draftsOnly={project.disclosureMode === "drafts_only"}
-            onDecide={onDecideDraft}
-          />
-          {status?.costs ? <CostNote costs={status.costs} /> : null}
+            <input
+              aria-label="Filter tasks"
+              placeholder="Filter"
+              value={taskQuery}
+              onChange={(event) => setTaskQuery(event.target.value)}
+              className={`${inputClass} sticky top-0 z-10 shrink-0`}
+            />
+            {visibleItems.length > 0 || taskQuery.trim() === "" ? (
+              <ActivityFeed items={visibleItems} />
+            ) : null}
+            <ForumsPicked hosts={visibleForums} threads={visibleThreadRows} />
+            <LinksPlaced rows={visibleLinks} />
+            <DraftNotes
+              drafts={visibleDraftRows}
+              draftsOnly={project.disclosureMode === "drafts_only"}
+              onDecide={onDecideDraft}
+            />
+            {status?.costs ? <CostNote costs={status.costs} /> : null}
           </div>
         </div>
       </div>
@@ -866,8 +821,6 @@ function NowPanel({
   host,
   notes,
   error,
-  newToday,
-  newPerDay,
   liveToday,
   livePerDay,
   warming,
@@ -880,8 +833,6 @@ function NowPanel({
   host: string | null;
   notes: string[];
   error: string | null;
-  newToday: number;
-  newPerDay: number;
   liveToday: number;
   livePerDay: number;
   warming: boolean;
@@ -891,8 +842,7 @@ function NowPanel({
   const facts = [
     WORK_STAGE_LABELS[stage],
     host,
-    newPerDay > 0 ? `${OVERVIEW_COUNTS.newToday} ${newToday}/${newPerDay}` : null,
-    livePerDay > 0 ? `${OVERVIEW_COUNTS.liveToday} ${liveToday}/${livePerDay}` : null,
+    livePerDay > 0 ? `Links that count ${liveToday}/${livePerDay}` : null,
     warming && nextRun ? `Warm-up. Next run ${nextRun}` : null,
     ...pace,
     ...notes,
@@ -1091,7 +1041,10 @@ function WorkingScreen({
   screenPending?: boolean;
 }) {
   return (
-    <section aria-label={label} className="flex h-full min-h-0 items-start justify-end bg-[#0c0c0e] p-4">
+    <section
+      aria-label={label}
+      className="flex h-full min-h-0 items-start justify-end bg-[#0c0c0e] p-4"
+    >
       <BuiCard className="flex w-fit max-w-md flex-col gap-3 px-4 py-3">
         <p className="text-[13px] text-[#8A8A90]">{WORK_STAGE_LABELS[stage]}</p>
         {screenError ? (
@@ -1189,7 +1142,6 @@ function ForumsPicked({ hosts, threads }: { hosts: LbHostView[]; threads: LbThre
             className="flex items-baseline justify-between gap-3 border-b border-[#2A2A31] px-3 py-2 text-[13px] last:border-b-0"
           >
             <span className="text-[#ECECEE]">{host.registrableDomain}</span>
-            <span className="text-[12px] text-[#8A8A90]">{host.status.replaceAll("_", " ")}</span>
           </div>
         ))}
         {threads.map((thread) => (
@@ -1830,50 +1782,5 @@ function CreditBudget({
 function Pill({ label }: { label: string }) {
   return (
     <span className="rounded-full bg-[#232327] px-2 py-1 text-[12px] text-[#ECECEE]">{label}</span>
-  );
-}
-
-function Ring({ label, value, max }: { label: string; value: number; max: number }) {
-  const radius = 16;
-  const circ = 2 * Math.PI * radius;
-  const pct = max <= 0 ? 0 : Math.min(1, value / max);
-  return (
-    <div role="img" className="flex items-center gap-2" aria-label={`${label} ${value} of ${max}`}>
-      <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden>
-        <circle cx="20" cy="20" r={radius} stroke="#2A2A31" strokeWidth="3" fill="none" />
-        <circle
-          cx="20"
-          cy="20"
-          r={radius}
-          stroke="#7785ff"
-          strokeWidth="3"
-          fill="none"
-          strokeDasharray={`${circ * pct} ${circ}`}
-          transform="rotate(-90 20 20)"
-        />
-      </svg>
-      <span className="text-[12px] text-[#ECECEE]">
-        {label} {value}/{max}
-      </span>
-    </div>
-  );
-}
-
-function WeekBar({ value, max }: { value: number; max: number | null }) {
-  const pct = !max || max <= 0 ? 0 : Math.min(100, Math.round((value / max) * 100));
-  return (
-    <div
-      role="img"
-      className="min-w-24 flex-1"
-      aria-label={`${QUOTA_LABELS.liveWeek} ${value} of ${max ?? value}`}
-    >
-      <div className="mb-1 text-[12px] text-[#A6A6AD]">
-        {QUOTA_LABELS.liveWeek} {value}
-        {max ? `/${max}` : ""}
-      </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-[#2A2A31]">
-        <div className="h-full bg-[#3dbb72]" style={{ width: `${pct}%` }} />
-      </div>
-    </div>
   );
 }
