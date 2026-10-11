@@ -60,7 +60,10 @@ describe("project computer screen", () => {
     expect(publicScreenError(new Error("bad e2b_livekey postgres://user:pass@db/railway"))).toBe(
       "bad e2b_redacted postgres://redacted",
     );
-    expect(publicScreenError(new Error("signal: terminated"))).toBe("Could not open the computer");
+    expect(publicScreenError(new Error("signal: terminated"))).toBe("Failed to connect to server");
+    expect(publicScreenError(new Error("The computer took too long to start"))).toBe(
+      "Failed to connect to server",
+    );
   });
 
   it("returns the stored team screen without opening another machine", async () => {

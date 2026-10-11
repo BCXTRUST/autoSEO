@@ -15,10 +15,10 @@ import { LinkBuilderPreview } from "./preview.js";
 import {
   CreditPackagesView,
   DashboardView,
+  matchesTaskQuery,
   OperatorView,
   ProjectView,
   WizardView,
-  matchesTaskQuery,
   watchingFrameSrc,
 } from "./views.js";
 
@@ -209,10 +209,10 @@ describe("link builder screens", () => {
         onPause={noop}
         onStop={noop}
         busy={false}
-        screenError="Could not open the computer"
+        screenError="Failed to connect to server"
       />,
     );
-    expect(failed).toContain("Could not open the computer");
+    expect(failed).toContain("Failed to connect to server");
     expect(failed).not.toContain("<iframe");
     expect(failed).not.toContain("No session");
   });
@@ -349,9 +349,7 @@ describe("link builder screens", () => {
     expect(matchesTaskQuery("", ["krank.de", "dead"])).toBe(true);
     expect(matchesTaskQuery("  krank.de ", ["krank.de", "dead"])).toBe(true);
     expect(matchesTaskQuery("KRANK", ["lifters-lounge.com", "dead"])).toBe(false);
-    expect(matchesTaskQuery("pending email", ["frauenselbsthilfe.de", "pending_email"])).toBe(
-      true,
-    );
+    expect(matchesTaskQuery("pending email", ["frauenselbsthilfe.de", "pending_email"])).toBe(true);
     expect(matchesTaskQuery("Registrieren", ["Registrieren on phpbb.de", "done"])).toBe(true);
     expect(matchesTaskQuery("dead", ["medizin-forum.de", "warming"])).toBe(false);
   });
