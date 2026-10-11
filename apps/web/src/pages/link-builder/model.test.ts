@@ -21,11 +21,11 @@ import {
 describe("link builder wizard", () => {
   it("lists five setup steps and keeps policy defaults off the rail", () => {
     expect([...WIZARD_STEPS]).toEqual([
-      "Brand & domains",
-      "Persona & inbox",
-      "Quotas & schedule",
-      "Topics & targets",
-      "Review",
+      "Brand",
+      "Who writes",
+      "How many links",
+      "Which pages",
+      "Start",
     ]);
   });
 

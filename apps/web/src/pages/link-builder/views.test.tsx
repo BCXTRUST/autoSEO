@@ -111,13 +111,16 @@ describe("link builder screens", () => {
     expect(html).not.toContain("needs operator");
   });
 
-  it("puts the responsibility sentence under Start building and does not render a checkbox", () => {
+  it("puts the responsibility sentence under Start and does not render a checkbox", () => {
     const html = renderToStaticMarkup(<LinkBuilderPreview screen="review" />);
-    expect(html).toContain("Start building");
+    expect(html).toContain("Start");
     expect(html).toContain("responsible for this content");
     expect(html).not.toContain('type="checkbox"');
     expect(html).toContain("Writes as the persona");
-    expect(html).toContain("New accounts per day");
+    expect(html).toContain("Live links per day");
+    expect(html).not.toContain("New accounts per day");
+    expect(html).not.toContain("inbox.example");
+    expect(html).not.toContain("proxy.example");
     expect(html).not.toContain("New / day");
     expect(html).not.toContain("Week cap");
   });
@@ -413,11 +416,13 @@ describe("link builder screens", () => {
 
   it("renders the brand step", () => {
     const html = renderToStaticMarkup(<LinkBuilderPreview screen="wizard" />);
-    expect(html).toContain("Brand &amp; domains");
-    expect(html).toContain("Persona &amp; inbox");
-    expect(html).toContain("Quotas &amp; schedule");
-    expect(html).toContain("Topics &amp; targets");
-    expect(html).toContain("Review");
+    expect(html).toContain("Brand");
+    expect(html).toContain("Who writes");
+    expect(html).toContain("How many links");
+    expect(html).toContain("Which pages");
+    expect(html).toContain("Start");
+    expect(html).not.toContain("Persona &amp; inbox");
+    expect(html).not.toContain("Quotas &amp; schedule");
     expect(html).not.toContain("Policy");
     expect(html).not.toContain("Countries to post in");
     expect(html).not.toContain("Forums to skip");
@@ -436,7 +441,7 @@ describe("link builder screens", () => {
     expect(html).not.toContain("Captell token");
     expect(html).not.toContain("Check balance");
     expect(html).toContain('aria-current="step"');
-    expect(html).toContain("Step 5 of 5: Review");
+    expect(html).toContain("Step 5 of 5: Start");
   });
 
   it("shows the computer working and a growing feed instead of NEW/LIVE rings", () => {

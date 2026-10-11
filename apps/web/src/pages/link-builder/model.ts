@@ -22,21 +22,26 @@ import {
 export const RESPONSIBILITY_SENTENCE = LB_RESPONSIBILITY_ACK_SENTENCE;
 
 export const WIZARD_STEPS = [
-  "Brand & domains",
-  "Persona & inbox",
-  "Quotas & schedule",
-  "Topics & targets",
-  "Review",
+  "Brand",
+  "Who writes",
+  "How many links",
+  "Which pages",
+  "Start",
 ] as const;
 
 /** One short line under each step title. Same order as `WIZARD_STEPS`. */
 export const WIZARD_STEP_HINTS = [
-  "Name the project, the brand, and the sites posts may link to.",
-  "The person who writes, and where forum mail goes.",
-  "How many accounts to open, and how many links to publish.",
-  "Each page posts may link to, and what to say about it.",
+  "The name people know, and the sites posts may link to.",
+  "The name and voice used on forums.",
+  "How many links to post each day, and each week.",
+  "The pages posts may link to, and what to say about them.",
   "Check this, then start.",
 ] as const;
+
+/** Placeholder hosts must never appear on a setup screen. */
+export function isSetupPlaceholder(value: string | null | undefined): boolean {
+  return /inbox\.example|proxy\.example/i.test(value ?? "");
+}
 
 export const QUOTA_LABELS = {
   newPerDay: "New accounts per day",
@@ -202,7 +207,7 @@ export function wizardStepIssues(step: number, draft: WizardDraft): string[] {
     const issues = Array.from({ length: review }, (_, index) =>
       wizardStepIssues(index, draft),
     ).flat();
-    if (!draft.mailboxId) issues.push("Inbox is still provisioning");
+    if (!draft.mailboxId) issues.push("Not ready yet. Wait a moment, then try again.");
     return issues;
   }
   if (step === 0) return brandIssues(draft);
