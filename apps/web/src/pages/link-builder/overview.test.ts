@@ -1,7 +1,8 @@
 import type { LbRunStepView, LbWhyNot } from "@rakazo/contracts";
-import { describe, expect, it } from "vitest";
 import type { ScheduleWindow } from "@rakazo/linkbuilder-core";
+import { describe, expect, it } from "vitest";
 import {
+  homeStatus,
   overviewAction,
   overviewFeed,
   overviewFrame,
@@ -41,6 +42,23 @@ function step(index: number, lastAction: string, artifactIds: string[] = []): Lb
 }
 
 describe("overview feed", () => {
+  it("names the home as posting, waiting, needs you, or paused", () => {
+    expect(homeStatus({ activity: "running" })).toBe("Posting");
+    expect(homeStatus({ activity: "overtime" })).toBe("Posting");
+    expect(homeStatus({ intent: "working" })).toBe("Posting");
+    expect(homeStatus({ activity: "paused" })).toBe("Paused");
+    expect(homeStatus({ intent: "paused", activity: "running" })).toBe("Paused");
+    expect(homeStatus({ activity: "needs_operator" })).toBe("Needs you");
+    expect(homeStatus({ activityLabel: "needs operator ×4", activity: "running" })).toBe(
+      "Needs you",
+    );
+    expect(homeStatus({ needsYou: true, activity: "running" })).toBe("Needs you");
+    expect(homeStatus({ activity: "idle" })).toBe("Waiting");
+    expect(homeStatus({ activity: "stopped" })).toBe("Waiting");
+    expect(homeStatus({ activity: "out_of_window" })).toBe("Waiting");
+    expect(homeStatus({})).toBe("Waiting");
+  });
+
   it("hides an all-zero why-not report and keeps real blockers", () => {
     expect(whyNotFeedLines(zeroWhy)).toEqual([]);
     expect(whyNotFeedLines(null)).toEqual([]);

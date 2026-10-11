@@ -15,10 +15,10 @@ import { LinkBuilderPreview } from "./preview.js";
 import {
   CreditPackagesView,
   DashboardView,
+  matchesTaskQuery,
   OperatorView,
   ProjectView,
   WizardView,
-  matchesTaskQuery,
   watchingFrameSrc,
 } from "./views.js";
 
@@ -68,7 +68,12 @@ describe("link builder screens", () => {
     expect(html).toContain("Live links per day");
     expect(html).toContain("Live links per week");
     expect(html).not.toContain("needs operator");
-    expect(html).toContain("running");
+    expect(html).toContain("Posting");
+    expect(html).not.toContain("running");
+    expect(html).not.toContain("Discovered");
+    expect(html).not.toContain("Qualified");
+    expect(html).not.toContain("Warming");
+    expect(html).not.toContain("Parked");
   });
 
   it("names the site and runs the action when the user can help without the desktop", () => {
@@ -333,6 +338,10 @@ describe("link builder screens", () => {
     );
     expect(html).toContain('aria-label="Forums"');
     expect(html).toContain("rueckenforum.de");
+    expect(html).not.toContain("qualified");
+    expect(html).not.toContain("Discovered");
+    expect(html).not.toContain("Warming");
+    expect(html).not.toContain("Parked");
     expect(html).toContain('aria-label="Links placed"');
     expect(html).toContain("board.example.org");
     expect(html).not.toContain("fragen-");
@@ -349,9 +358,7 @@ describe("link builder screens", () => {
     expect(matchesTaskQuery("", ["krank.de", "dead"])).toBe(true);
     expect(matchesTaskQuery("  krank.de ", ["krank.de", "dead"])).toBe(true);
     expect(matchesTaskQuery("KRANK", ["lifters-lounge.com", "dead"])).toBe(false);
-    expect(matchesTaskQuery("pending email", ["frauenselbsthilfe.de", "pending_email"])).toBe(
-      true,
-    );
+    expect(matchesTaskQuery("pending email", ["frauenselbsthilfe.de", "pending_email"])).toBe(true);
     expect(matchesTaskQuery("Registrieren", ["Registrieren on phpbb.de", "done"])).toBe(true);
     expect(matchesTaskQuery("dead", ["medizin-forum.de", "warming"])).toBe(false);
   });

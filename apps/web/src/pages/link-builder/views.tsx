@@ -11,12 +11,12 @@ import type {
   LbThreadView,
 } from "@rakazo/contracts";
 import {
+  applyRunPhrase,
   FIXTURE_DEMO_SLUG,
+  formatNextRun,
   formatPackagePrice,
   mentionsExampleDomain,
   mentionsFixtureHost,
-  applyRunPhrase,
-  formatNextRun,
   primaryProblemQueryFromProject,
   showHostToCustomer,
   WORK_STAGE_LABELS,
@@ -49,6 +49,7 @@ import {
   wizardStepIssues,
 } from "./model.js";
 import {
+  homeStatus,
   OVERVIEW_COUNTS,
   type OverviewFeedItem,
   type OverviewIntent,
@@ -57,7 +58,6 @@ import {
   overviewFrame,
   overviewHasPlacement,
   overviewPace,
-  overviewPill,
   overviewStage,
   overviewWorking,
   statusNotes,
@@ -68,10 +68,7 @@ const inputClass =
   "w-full rounded-xl border border-[#2A2A31] bg-[#141416] px-3 py-2 text-[14px] text-[#ECECEE] outline-none";
 
 /** Host, status, and task text. Empty query keeps every row. */
-export function matchesTaskQuery(
-  query: string,
-  parts: Array<string | null | undefined>,
-): boolean {
+export function matchesTaskQuery(query: string, parts: Array<string | null | undefined>): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
   return parts.some((part) => (part ?? "").replaceAll("_", " ").toLowerCase().includes(needle));
@@ -102,7 +99,11 @@ export function DashboardView({
       <div className="grid gap-3 md:grid-cols-2">
         {cards.map((card) => {
           const help = card.operatorHelp ?? null;
-          const activity = customerActivityLabel(card.activityLabel);
+          const status = homeStatus({
+            activity: card.activity,
+            activityLabel: card.activityLabel,
+            needsYou: Boolean(help),
+          });
           return (
             <BuiCard key={card.id} className="flex flex-col gap-3 p-4">
               <div className="flex items-start justify-between gap-3">
@@ -115,6 +116,7 @@ export function DashboardView({
                   <div className="text-[16px] text-[#ECECEE]">{card.name}</div>
                   <div className="text-[12.5px] text-[#85858A]">{card.brandName}</div>
                 </button>
+                <Pill label={status} />
                 {help && onHelp ? (
                   <button
                     type="button"
@@ -124,8 +126,6 @@ export function DashboardView({
                   >
                     {help.label}
                   </button>
-                ) : activity ? (
-                  <Pill label={activity} />
                 ) : null}
               </div>
               <button
@@ -153,11 +153,6 @@ export function DashboardView({
       </div>
     </main>
   );
-}
-
-function customerActivityLabel(label: string): string | null {
-  if (/^needs operator\b/i.test(label)) return null;
-  return label;
 }
 
 export function CreditPackagesView({
@@ -448,7 +443,12 @@ export function ProjectView({
   }, [intent, busy]);
   const working = overviewWorking({ activity: status?.activity ?? null, intent });
   const help = status?.operatorHelp ?? null;
-  const pill = help ? null : overviewPill({ activityLabel: status?.activityLabel ?? null, intent });
+  const statusWord = homeStatus({
+    activity: status?.activity ?? null,
+    activityLabel: status?.activityLabel ?? null,
+    intent,
+    needsYou: Boolean(help),
+  });
   function applyPhrase() {
     if (!onInstruct || !project.quotas) return;
     const applied = applyRunPhrase({
@@ -497,6 +497,7 @@ export function ProjectView({
           </button>
         )}
         <div className="flex flex-wrap items-start gap-3">
+          <Pill label={statusWord} />
           {help && onHelp ? (
             <button
               type="button"
@@ -506,8 +507,6 @@ export function ProjectView({
             >
               {help.label}
             </button>
-          ) : pill ? (
-            <Pill label={pill} />
           ) : null}
           <button
             type="button"
@@ -754,7 +753,9 @@ function Dashboard({
   });
   const [taskQuery, setTaskQuery] = useState("");
   const taskColumn = useRef<HTMLDivElement>(null);
-  const visibleItems = items.filter((item) => matchesTaskQuery(taskQuery, [item.label, item.status]));
+  const visibleItems = items.filter((item) =>
+    matchesTaskQuery(taskQuery, [item.label, item.status]),
+  );
   const visibleForums = forums.filter((host) =>
     matchesTaskQuery(taskQuery, [host.registrableDomain, host.status]),
   );
@@ -824,33 +825,31 @@ function Dashboard({
             liveToday={status?.run?.liveToday ?? 0}
             livePerDay={status?.livePerDay ?? project.quotas?.livePerDay ?? 0}
             warming={hosts.some((host) => host.status === "warming")}
-            nextRun={
-              project.schedule ? formatNextRun(new Date(), project.schedule) : null
-            }
+            nextRun={project.schedule ? formatNextRun(new Date(), project.schedule) : null}
           />
           <div
             ref={taskColumn}
             data-task-column=""
             className="rk-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain"
           >
-          <input
-            aria-label="Filter tasks"
-            placeholder="Filter"
-            value={taskQuery}
-            onChange={(event) => setTaskQuery(event.target.value)}
-            className={`${inputClass} sticky top-0 z-10 shrink-0`}
-          />
-          {visibleItems.length > 0 || taskQuery.trim() === "" ? (
-            <ActivityFeed items={visibleItems} />
-          ) : null}
-          <ForumsPicked hosts={visibleForums} threads={visibleThreadRows} />
-          <LinksPlaced rows={visibleLinks} />
-          <DraftNotes
-            drafts={visibleDraftRows}
-            draftsOnly={project.disclosureMode === "drafts_only"}
-            onDecide={onDecideDraft}
-          />
-          {status?.costs ? <CostNote costs={status.costs} /> : null}
+            <input
+              aria-label="Filter tasks"
+              placeholder="Filter"
+              value={taskQuery}
+              onChange={(event) => setTaskQuery(event.target.value)}
+              className={`${inputClass} sticky top-0 z-10 shrink-0`}
+            />
+            {visibleItems.length > 0 || taskQuery.trim() === "" ? (
+              <ActivityFeed items={visibleItems} />
+            ) : null}
+            <ForumsPicked hosts={visibleForums} threads={visibleThreadRows} />
+            <LinksPlaced rows={visibleLinks} />
+            <DraftNotes
+              drafts={visibleDraftRows}
+              draftsOnly={project.disclosureMode === "drafts_only"}
+              onDecide={onDecideDraft}
+            />
+            {status?.costs ? <CostNote costs={status.costs} /> : null}
           </div>
         </div>
       </div>
@@ -1091,7 +1090,10 @@ function WorkingScreen({
   screenPending?: boolean;
 }) {
   return (
-    <section aria-label={label} className="flex h-full min-h-0 items-start justify-end bg-[#0c0c0e] p-4">
+    <section
+      aria-label={label}
+      className="flex h-full min-h-0 items-start justify-end bg-[#0c0c0e] p-4"
+    >
       <BuiCard className="flex w-fit max-w-md flex-col gap-3 px-4 py-3">
         <p className="text-[13px] text-[#8A8A90]">{WORK_STAGE_LABELS[stage]}</p>
         {working ? (
@@ -1189,7 +1191,6 @@ function ForumsPicked({ hosts, threads }: { hosts: LbHostView[]; threads: LbThre
             className="flex items-baseline justify-between gap-3 border-b border-[#2A2A31] px-3 py-2 text-[13px] last:border-b-0"
           >
             <span className="text-[#ECECEE]">{host.registrableDomain}</span>
-            <span className="text-[12px] text-[#8A8A90]">{host.status.replaceAll("_", " ")}</span>
           </div>
         ))}
         {threads.map((thread) => (

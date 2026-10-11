@@ -1,8 +1,8 @@
 import type { LbOperatorTicketView, LbRunStepView, LbWhyNot } from "@rakazo/contracts";
 import {
+  formatNextRun,
   foundForumLine,
   foundThreadLine,
-  formatNextRun,
   isCannedResearchLine,
   isStaleResearchLine,
   isWithinWindow,
@@ -12,10 +12,10 @@ import {
   parseClockTime,
   RESEARCH_OPENING,
   researchResultName,
+  type ScheduleWindow,
   searchedGoogleLine,
   showHostToCustomer,
   stageFromActivity,
-  type ScheduleWindow,
   type WorkStage,
 } from "@rakazo/linkbuilder-core";
 
@@ -88,6 +88,27 @@ export function overviewPill(input: {
   if (input.intent === "stopped") return "stopped";
   if (input.activityLabel && /^needs operator\b/i.test(input.activityLabel)) return null;
   return input.activityLabel;
+}
+
+export const HOME_STATUSES = ["Posting", "Waiting", "Needs you", "Paused"] as const;
+export type HomeStatus = (typeof HOME_STATUSES)[number];
+
+/** The only status a home screen shows. Not a host board. */
+export function homeStatus(input: {
+  activity?: string | null;
+  activityLabel?: string | null;
+  intent?: OverviewIntent;
+  needsYou?: boolean;
+}): HomeStatus {
+  const label = input.activityLabel ?? "";
+  if (input.needsYou || input.activity === "needs_operator" || /^needs operator\b/i.test(label)) {
+    return "Needs you";
+  }
+  if (input.intent === "paused" || input.activity === "paused") return "Paused";
+  if (input.intent === "working" || input.activity === "running" || input.activity === "overtime") {
+    return "Posting";
+  }
+  return "Waiting";
 }
 
 /** Skips and holds that are part of a healthy run. Not failures. */
@@ -302,13 +323,7 @@ export function overviewPace(input: {
   const recent = gaps.slice(-8);
   const units = liveLeft > 0 ? liveLeft : newLeft;
   const noun =
-    liveLeft > 0
-      ? units === 1
-        ? "link"
-        : "links"
-      : units === 1
-        ? "account"
-        : "accounts";
+    liveLeft > 0 ? (units === 1 ? "link" : "links") : units === 1 ? "account" : "accounts";
   if (units > 0 && recent.length >= 2) {
     const sorted = [...recent].sort((left, right) => left - right);
     const median = sorted[Math.floor(sorted.length / 2)] ?? sorted[0]!;
