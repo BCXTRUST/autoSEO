@@ -53,6 +53,26 @@ describe("planRealStep", () => {
     ).toEqual({ kind: "select_host" });
   });
 
+  it("rechecks a site-admin hold only when that check is due", () => {
+    const host = { id: "h1", ...hostState("pending_admin") };
+    expect(planRealStep(input({ host }))).toEqual({ kind: "select_host" });
+    expect(planRealStep(input({ host, adminCheckDue: true }))).toEqual({ kind: "open_session" });
+    expect(
+      planRealStep(
+        input({
+          host,
+          adminCheckDue: true,
+          session: { ...onHost, helperConnected: false },
+        }),
+      ),
+    ).toEqual({ kind: "helper_connected" });
+    expect(
+      planRealStep(
+        input({ host, adminCheckDue: true, session: { ...onHost, helperConnected: true } }),
+      ),
+    ).toEqual({ kind: "admin_check" });
+  });
+
   it("opens a session before any browser step on a new host", () => {
     expect(planRealStep(input({}))).toEqual({ kind: "open_session" });
     expect(

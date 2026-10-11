@@ -41,6 +41,7 @@ import { Prisma, type PrismaClient } from "@rakazo/db";
 import { BrowserEngineUnavailable } from "@rakazo/linkbuilder-browser";
 import {
   acceptLanguageFor,
+  adminRecheckDue,
   assertSessionCoherence,
   boardTopicQueriesFromProject,
   brandNameSources,
@@ -65,9 +66,6 @@ import {
   PAGE_HELPER_VERSION,
   type PlanCaps,
   pacedDelayMs,
-  shouldSkipDesktopPage,
-  skippedHostLine,
-  stepCountsTowardPageGiveUp,
   proxyStickyKey,
   type RealStepKind,
   type RunCounters,
@@ -77,7 +75,10 @@ import {
   redactSecrets,
   resolvePersonaDisplayName,
   shouldCount,
+  shouldSkipDesktopPage,
+  skippedHostLine,
   spamRetryDecision,
+  stepCountsTowardPageGiveUp,
   transitionHost,
   transitionPlacement,
   transitionProject,
@@ -87,6 +88,7 @@ import {
 } from "@rakazo/linkbuilder-core";
 import {
   acceptCookieWall,
+  adminHoldOnVerify,
   type BoardDriver,
   boardDriverFor,
   type CaptchaChallenge,
@@ -273,6 +275,7 @@ export const REAL_STEP_HANDLERS: Record<RealStepKind, StepHandler> = {
   register,
   captcha,
   email_verify: emailVerify,
+  admin_check: adminCheck,
   warmup,
   warmup_post: (ctx) => publish(ctx, true),
   post: (ctx) => publish(ctx, false),
@@ -455,6 +458,7 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     },
     include: { accounts: true, placements: { select: { status: true } } },
   });
+  const dueAdmin = await adminHostsDue(ctx, rows);
   const deny = new Set(ctx.project.denyHosts.map((host) => host.toLowerCase()));
   const prefer = new Set(ctx.project.preferHosts.map((host) => host.toLowerCase()));
   const candidates = rows.filter((row) => {
@@ -484,6 +488,7 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
       );
     }
     if (row.status === "ready") return !row.placements.some((p) => p.status !== "pending");
+    if (row.status === "pending_admin") return dueAdmin.has(row.id);
     return true;
   });
   const eligible = [];
@@ -512,6 +517,9 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
         hostId: host.id,
         outcome: { refused: "registration_cap" },
       };
+    }
+    if (rows.some((row) => row.status === "pending_admin")) {
+      return { kind: "wait", reason: "admin_approval" };
     }
     return { kind: "wait", reason: "no_workable_host" };
   }
@@ -548,6 +556,28 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
       }
     },
   };
+}
+
+async function adminHostsDue(
+  ctx: StepContext,
+  rows: readonly { id: string; status: string }[],
+): Promise<Set<string>> {
+  const pending = rows.filter((row) => row.status === "pending_admin");
+  if (pending.length === 0) return new Set();
+  const checks = await ctx.services.prisma.lbRunStep.findMany({
+    where: { hostId: { in: pending.map((row) => row.id) }, kind: "admin_check" },
+    orderBy: { createdAt: "desc" },
+    select: { hostId: true, createdAt: true },
+  });
+  const last = new Map<string, Date>();
+  for (const step of checks) {
+    if (step.hostId && !last.has(step.hostId)) last.set(step.hostId, step.createdAt);
+  }
+  return new Set(
+    pending
+      .filter((row) => adminRecheckDue(last.get(row.id) ?? null, ctx.now))
+      .map((row) => row.id),
+  );
 }
 
 async function registrationCapAlreadyTold(ctx: StepContext, hostId: string): Promise<boolean> {
@@ -1241,9 +1271,7 @@ async function genericJourneyStep(
     return withSolve({
       ...base,
       lastAction: "The board refused the registration",
-      apply: detail
-        ? (tx) => moveHost(tx, host, "failed", { statusReason: detail })
-        : undefined,
+      apply: detail ? (tx) => moveHost(tx, host, "failed", { statusReason: detail }) : undefined,
     });
   }
   const ticket =
@@ -1900,7 +1928,11 @@ async function finishRegistration(
       credits,
     );
   }
-  return withEvent(await registrationOutcome(ctx, host, entry, result, artifactIds), event, credits);
+  return withEvent(
+    await registrationOutcome(ctx, host, entry, result, artifactIds),
+    event,
+    credits,
+  );
 }
 
 async function unmappedForm(
@@ -1968,6 +2000,29 @@ async function rotateUsername(ctx: StepContext, host: HostRow): Promise<void> {
     where: { id: account.id },
     data: { username, siteLoginId: stored.login.id },
   });
+}
+
+async function adminCheck(ctx: StepContext): Promise<StepResult> {
+  const host = requireHost(ctx);
+  const entry = requireSession(ctx, host);
+  const driver = requireDriver(host, entry);
+  const activation = await driver.activationResult(entry.session);
+  const site = host.registrableDomain;
+  if (activation === "active") {
+    return {
+      kind: "step",
+      lastAction: `Site admin approved the registration at ${site}`,
+      hostId: host.id,
+      outcome: { activation, waiting: "registration" },
+      apply: (tx) => moveHost(tx, host, "account_active"),
+    };
+  }
+  return {
+    kind: "step",
+    lastAction: `Checked ${site}. Still waiting for the site admin to approve the registration`,
+    hostId: host.id,
+    outcome: { activation, waiting: "registration" },
+  };
 }
 
 async function emailVerify(ctx: StepContext): Promise<StepResult> {
@@ -2634,6 +2689,28 @@ async function verify(ctx: StepContext): Promise<StepResult> {
     fetchImpl: ctx.services.verifyFetch,
     allowPrivateNetwork: ctx.services.allowPrivateVerify,
   });
+  const hold = checked.outcome.status === "dead" ? adminHoldOnVerify(checked.html) : null;
+  if (hold) {
+    const site = host.registrableDomain;
+    return {
+      kind: "step",
+      lastAction:
+        hold === "post"
+          ? `Waiting for the site admin to approve the post at ${site}`
+          : `Waiting for the site admin to approve the registration at ${site}`,
+      hostId: host.id,
+      outcome: { waiting: hold, httpStatus: checked.httpStatus },
+      apply: async (tx) => {
+        await tx.lbPlacement.update({
+          where: { id: placement.id },
+          data: {
+            nextVerifyAt: new Date(ctx.now.getTime() + ctx.services.verifyDelayMs),
+            verifyCount: placement.verifyCount + 1,
+          },
+        });
+      },
+    };
+  }
   const snapshotId = await ctx.storeArtifact(
     `verify-${placement.id}.html`,
     "text/html",

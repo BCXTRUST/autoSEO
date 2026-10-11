@@ -77,6 +77,7 @@ describe("overview feed", () => {
       ]),
     ).toEqual({ status: "open", reason: "missing_password" });
     expect(personTicket([{ status: "open", reason: "captcha_unsolved" }])).toBeNull();
+    expect(personTicket([{ status: "open", reason: "admin_approval" }])).toBeNull();
   });
 
   it("hides an all-zero why-not report and keeps real blockers", () => {

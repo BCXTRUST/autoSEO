@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   adminActivationNotice,
+  adminHoldOnVerify,
   captchaRejected,
   classifyRegistration,
   formErrorFixable,
+  postAwaitingAdmin,
   usernameFormatRejected,
 } from "./messages.js";
 
@@ -72,10 +74,8 @@ describe("registration notices", () => {
       ).kind,
     ).toBe("pending_admin");
     expect(
-      classifyRegistration(
-        "Probleme mit dem Mail-Client? Win11 aktiviert aber Update.",
-        false,
-      ).kind,
+      classifyRegistration("Probleme mit dem Mail-Client? Win11 aktiviert aber Update.", false)
+        .kind,
     ).not.toBe("pending_email");
     expect(classifyRegistration("Your account has now been activated.", false).kind).toBe("active");
     expect(
@@ -99,5 +99,19 @@ describe("registration notices", () => {
       adminActivationNotice("An administrator must activate your account before you can log in."),
     ).toBe(true);
     expect(adminActivationNotice("An activation key has been sent to your email.")).toBe(false);
+    expect(postAwaitingAdmin("Your post is awaiting moderation.")).toBe(true);
+    expect(postAwaitingAdmin("Dieser Beitrag wartet auf die Freigabe eines Moderators.")).toBe(
+      true,
+    );
+    expect(
+      postAwaitingAdmin(
+        "Dein Benutzerkonto wurde erstellt. Es muss jedoch erst durch einen Administrator freigeschaltet werden.",
+      ),
+    ).toBe(false);
+    expect(adminHoldOnVerify("Your reply is awaiting approval.")).toBe("post");
+    expect(
+      adminHoldOnVerify("An administrator must activate your account before you can log in."),
+    ).toBe("registration");
+    expect(adminHoldOnVerify("Topic not found")).toBeNull();
   });
 });

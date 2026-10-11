@@ -27,6 +27,21 @@ export function captchaRejected(text: string): boolean {
 export function adminActivationNotice(text: string): boolean {
   return PENDING_ADMIN.test(text);
 }
+
+const POST_AWAITING_ADMIN =
+  /awaiting (?:moderation|approval)|pending (?:moderation|approval)|(?:post|reply|message|beitrag|thema) (?:is |has been |wird )?(?:awaiting|wartet)|must be approved by (?:a |an )?(?:moderator|administrator)|wartet auf (?:die )?freigabe|muss .{0,80}(?:moderator|administrator) freigegeben|wird erst nach (?:der )?freischaltung sichtbar|your (?:post|reply|message) will be visible after/i;
+
+/** The topic page says the site admin still has to approve this post. Not a registration notice. */
+export function postAwaitingAdmin(text: string): boolean {
+  return POST_AWAITING_ADMIN.test(text);
+}
+
+/** Which admin hold a verify page is showing, if it is a hold and not a missing post. */
+export function adminHoldOnVerify(html: string): "registration" | "post" | null {
+  if (postAwaitingAdmin(html)) return "post";
+  if (adminActivationNotice(html)) return "registration";
+  return null;
+}
 const REGISTRATION_CLOSED =
   /registration (is )?(disabled|closed)|registrierung (ist )?deaktiviert/i;
 const POSTED =

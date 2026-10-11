@@ -12,7 +12,6 @@ import type {
 } from "@rakazo/contracts";
 import {
   FIXTURE_DEMO_SLUG,
-  formatNextRun,
   formatPackagePrice,
   mentionsExampleDomain,
   mentionsFixtureHost,
@@ -48,6 +47,7 @@ import {
   wizardStepIssues,
 } from "./model.js";
 import {
+  doneCounts,
   homeLine,
   homeStatus,
   type OverviewFeedItem,
@@ -56,12 +56,12 @@ import {
   overviewFeed,
   overviewFrame,
   overviewHasPlacement,
-  overviewPace,
   overviewStage,
   overviewWorking,
   personTicket,
   statusNotes,
   stuckHelp,
+  waitLines,
   whyNotFeedLines,
 } from "./overview.js";
 
@@ -370,7 +370,7 @@ function StepMark({ index, done }: { index: number; done: boolean }) {
   return <span className="mt-0.5 w-3.5 shrink-0 text-center tabular-nums">{index + 1}</span>;
 }
 
-export type ProjectSurface = "dashboard" | "settings";
+export type ProjectSurface = "dashboard" | "details" | "settings";
 
 export function ProjectView({
   project,
@@ -506,22 +506,16 @@ export function ProjectView({
           <BuiButton label="Change schedule" onClick={() => onSurface("settings")} disabled={busy}>
             Change schedule
           </BuiButton>
+          <BuiButton label="Details" onClick={() => onSurface("details")} disabled={busy}>
+            Details
+          </BuiButton>
         </div>
         {watching ? (
-          <div className="flex flex-col gap-1">
-            <TodayCount
-              label="Links that count"
-              value={status?.run?.liveToday ?? 0}
-              max={status?.livePerDay ?? project.quotas?.livePerDay ?? 0}
-            />
-            {statusNotes(status?.whyNot)
-              .concat(whyNotFeedLines(status?.whyNot))
-              .map((line) => (
-                <p key={line} className="text-[12.5px] text-[#A6A6AD]">
-                  {line}
-                </p>
-              ))}
-          </div>
+          <TodayCount
+            label="Links that count"
+            value={status?.run?.liveToday ?? 0}
+            max={status?.livePerDay ?? project.quotas?.livePerDay ?? 0}
+          />
         ) : null}
       </div>
       {stuck && needed ? (
@@ -558,6 +552,17 @@ export function ProjectView({
           screenError={screenError}
           screenPending={screenPending}
           loadArtifact={loadArtifact}
+          onOpenDetails={() => onSurface("details")}
+        />
+      ) : surface === "details" ? (
+        <DetailsView
+          project={project}
+          status={status}
+          hosts={hosts}
+          placements={placements}
+          steps={steps}
+          threads={threads}
+          drafts={drafts}
           onDecideDraft={onDecideDraft}
         />
       ) : (
@@ -665,7 +670,7 @@ function Dashboard({
   screenError,
   screenPending,
   loadArtifact,
-  onDecideDraft,
+  onOpenDetails,
 }: {
   project: LbProjectDetail;
   status: LbProjectStatusView | null;
@@ -680,7 +685,7 @@ function Dashboard({
   screenError?: string | null;
   screenPending?: boolean;
   loadArtifact?: ArtifactLoader;
-  onDecideDraft?: (draftId: string, decision: "approved" | "discarded") => void;
+  onOpenDetails: () => void;
 }) {
   const hideExampleCopy = project.slug !== FIXTURE_DEMO_SLUG;
   const visiblePlacements = placements.filter((row) =>
@@ -695,43 +700,27 @@ function Dashboard({
     showHostToCustomer(thread.domain, project.slug),
   );
   const visibleDrafts = drafts.filter((draft) => customerDraft(draft, hideExampleCopy));
+  const draftBodies = new Set(visibleDrafts.map((draft) => draft.body.trim()));
   const searches = status?.costs?.day.searchQueries ?? 0;
   const items = overviewFeed({
     steps,
     lastEvent: status?.lastEvent ?? null,
     working,
     blockers: whyNotFeedLines(status?.whyNot),
-    notes: statusNotes(status?.whyNot),
     hideExampleCopy,
     hasPlacement,
     forumName: forums[0]?.registrableDomain ?? null,
     threadName: visibleThreads[0]?.title ?? null,
     searches,
     searchQuery: primaryProblemQueryFromProject(project),
-  });
-  const [taskQuery, setTaskQuery] = useState("");
+  }).filter((item) => !draftBodies.has(item.label.trim()));
   const taskColumn = useRef<HTMLDivElement>(null);
-  const visibleItems = items.filter((item) =>
-    matchesTaskQuery(taskQuery, [item.label, item.status]),
-  );
-  const visibleForums = forums.filter((host) =>
-    matchesTaskQuery(taskQuery, [host.registrableDomain, host.status]),
-  );
-  const visibleThreadRows = visibleThreads.filter((thread) =>
-    matchesTaskQuery(taskQuery, [thread.title, thread.domain]),
-  );
-  const visibleLinks = visiblePlacements.filter((row) =>
-    matchesTaskQuery(taskQuery, [row.domain, row.status]),
-  );
-  const visibleDraftRows = visibleDrafts.filter((draft) =>
-    matchesTaskQuery(taskQuery, [draft.body, draft.status]),
-  );
   const feedTail = `${items.length}:${items[items.length - 1]?.id ?? ""}`;
   useEffect(() => {
     const node = taskColumn.current;
-    if (!node || taskQuery.trim()) return;
+    if (!node) return;
     node.scrollTop = node.scrollHeight;
-  }, [feedTail, taskQuery]);
+  }, [feedTail]);
   const frame = overviewFrame({ steps, tickets, screenUrl });
   const action = overviewAction(
     items,
@@ -744,19 +733,14 @@ function Dashboard({
     stepKinds: steps.map((step) => step.kind),
     hasPlacement,
   });
-  const focusHost =
-    forums.find((host) =>
-      ["registering", "pending_email", "pending_admin", "warming"].includes(host.status),
-    ) ?? null;
-  const pace = overviewPace({
-    now: new Date(),
-    schedule: project.schedule,
-    steps,
-    liveToday: status?.run?.liveToday ?? 0,
-    livePerDay: status?.livePerDay ?? project.quotas?.livePerDay ?? 0,
-    newToday: status?.run?.newToday ?? 0,
-    newPerDay: status?.newPerDay ?? project.quotas?.newPerDay ?? 0,
-  });
+  const done = doneCounts(hosts, placements, project.slug);
+  const specific = waitLines({ hosts, steps, slug: project.slug });
+  const waits =
+    specific.length > 0
+      ? specific
+      : statusNotes(status?.whyNot)
+          .filter((line) => /waiting/i.test(line))
+          .map((text, index) => ({ id: `note:${index}`, text }));
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-4" aria-label="Dashboard">
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1.55fr)_minmax(240px,380px)] gap-4">
@@ -770,42 +754,13 @@ function Dashboard({
           loadArtifact={loadArtifact}
         />
         <div className="flex min-h-0 flex-col gap-3">
-          <NowPanel
-            working={working}
-            action={action}
-            stage={stage}
-            pace={pace}
-            host={focusHost?.registrableDomain ?? null}
-            notes={statusNotes(status?.whyNot)}
-            error={status?.run?.lastError ?? null}
-            liveToday={status?.run?.liveToday ?? 0}
-            livePerDay={status?.livePerDay ?? project.quotas?.livePerDay ?? 0}
-            warming={hosts.some((host) => host.status === "warming")}
-            nextRun={project.schedule ? formatNextRun(new Date(), project.schedule) : null}
-          />
+          <DoneCard done={done} waits={waits} onOpenDetails={onOpenDetails} />
           <div
             ref={taskColumn}
             data-task-column=""
             className="rk-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain"
           >
-            <input
-              aria-label="Filter tasks"
-              placeholder="Filter"
-              value={taskQuery}
-              onChange={(event) => setTaskQuery(event.target.value)}
-              className={`${inputClass} sticky top-0 z-10 shrink-0`}
-            />
-            {visibleItems.length > 0 || taskQuery.trim() === "" ? (
-              <ActivityFeed items={visibleItems} />
-            ) : null}
-            <ForumsPicked hosts={visibleForums} threads={visibleThreadRows} />
-            <LinksPlaced rows={visibleLinks} />
-            <DraftNotes
-              drafts={visibleDraftRows}
-              draftsOnly={project.disclosureMode === "drafts_only"}
-              onDecide={onDecideDraft}
-            />
-            {status?.costs ? <CostNote costs={status.costs} /> : null}
+            <ActivityFeed items={items} />
           </div>
         </div>
       </div>
@@ -813,57 +768,121 @@ function Dashboard({
   );
 }
 
-function NowPanel({
-  working,
-  action,
-  stage,
-  pace,
-  host,
-  notes,
-  error,
-  liveToday,
-  livePerDay,
-  warming,
-  nextRun,
+function DoneCard({
+  done,
+  waits,
+  onOpenDetails,
 }: {
-  working: boolean;
-  action: string;
-  stage: (typeof WORK_STAGES)[number];
-  pace: string[];
-  host: string | null;
-  notes: string[];
-  error: string | null;
-  liveToday: number;
-  livePerDay: number;
-  warming: boolean;
-  nextRun: string | null;
+  done: ReturnType<typeof doneCounts>;
+  waits: ReturnType<typeof waitLines>;
+  onOpenDetails: () => void;
 }) {
-  const headline = action || (working ? "Working" : "Waiting");
-  const facts = [
-    WORK_STAGE_LABELS[stage],
-    host,
-    livePerDay > 0 ? `Links that count ${liveToday}/${livePerDay}` : null,
-    warming && nextRun ? `Warm-up. Next run ${nextRun}` : null,
-    ...pace,
-    ...notes,
-    error,
-  ].filter((line): line is string => Boolean(line));
+  const counts = [
+    ["Registered", done.registered],
+    ["Posted", done.posted],
+    ["Skipped", done.skipped],
+  ] as const;
   return (
-    <section aria-label="Now" aria-live="polite" className="shrink-0">
+    <section aria-label="Done" className="shrink-0">
       <BuiCard className="flex flex-col gap-3 px-3.5 py-3.5">
-        {working ? (
-          <LoadingState label={headline} />
-        ) : (
-          <p className="text-[15px] font-medium leading-snug text-[#ECECEE]">{headline}</p>
-        )}
-        <ul className="flex flex-col gap-1.5">
-          {facts.map((line) => (
-            <li key={line} className="text-[13px] leading-snug text-[#C8C8CD]">
-              {line}
-            </li>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-[15px] font-medium text-[#ECECEE]">Done</h2>
+          <button
+            type="button"
+            className="text-[12.5px] text-[#A6A6AD]"
+            aria-label="Open details"
+            onClick={onOpenDetails}
+          >
+            Details
+          </button>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {counts.map(([label, value]) => (
+            <button
+              key={label}
+              type="button"
+              aria-label={label}
+              className="rounded-xl bg-[#18181b] px-2 py-2 text-left"
+              onClick={onOpenDetails}
+            >
+              <span className="block text-[18px] tabular-nums text-[#ECECEE]">{value}</span>
+              <span className="block text-[12px] text-[#8A8A90]">{label}</span>
+            </button>
           ))}
-        </ul>
+        </div>
+        {waits.length > 0 ? (
+          <ul aria-label="Waiting" className="flex flex-col gap-2">
+            {waits.map((wait) => (
+              <li key={wait.id}>
+                <button
+                  type="button"
+                  className="w-full text-left text-[13px] leading-snug text-[#ECECEE]"
+                  onClick={onOpenDetails}
+                >
+                  {wait.text}
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-[13px] text-[#8A8A90]">Nothing is waiting on a site admin.</p>
+        )}
       </BuiCard>
+    </section>
+  );
+}
+
+function DetailsView({
+  project,
+  status,
+  hosts,
+  placements,
+  steps,
+  threads,
+  drafts,
+  onDecideDraft,
+}: {
+  project: LbProjectDetail;
+  status: LbProjectStatusView | null;
+  hosts: LbHostView[];
+  placements: LbPlacementView[];
+  steps: LbRunStepView[];
+  threads: LbThreadView[];
+  drafts: LbDraftView[];
+  onDecideDraft?: (draftId: string, decision: "approved" | "discarded") => void;
+}) {
+  const hideExampleCopy = project.slug !== FIXTURE_DEMO_SLUG;
+  const forums = hosts.filter((host) => showHostToCustomer(host.registrableDomain, project.slug));
+  const visibleThreads = threads.filter((thread) =>
+    showHostToCustomer(thread.domain, project.slug),
+  );
+  const visiblePlacements = placements.filter((row) =>
+    showHostToCustomer(row.domain, project.slug),
+  );
+  const visibleDrafts = drafts.filter((draft) => customerDraft(draft, hideExampleCopy));
+  const waits = waitLines({ hosts, steps, slug: project.slug });
+  return (
+    <section className="flex flex-col gap-4" aria-label="Details">
+      <section aria-label="Waiting" className="flex flex-col gap-2">
+        <h2 className="text-[12px] text-[#8A8A90]">Waiting</h2>
+        {waits.length === 0 ? (
+          <p className="text-[13px] text-[#8A8A90]">Nothing is waiting.</p>
+        ) : (
+          waits.map((wait) => (
+            <p key={wait.id} className="text-[14px] text-[#ECECEE]">
+              {wait.text}
+            </p>
+          ))
+        )}
+      </section>
+      <ForumsPicked hosts={forums} threads={visibleThreads} />
+      <LinksPlaced rows={visiblePlacements} />
+      <DraftNotes
+        drafts={visibleDrafts}
+        draftsOnly={project.disclosureMode === "drafts_only"}
+        onDecide={onDecideDraft}
+      />
+      {status?.costs ? <CostNote costs={status.costs} /> : null}
     </section>
   );
 }

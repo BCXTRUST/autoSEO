@@ -579,7 +579,7 @@ export function LinkBuilderPreview({ screen }: { screen: string }) {
 }
 
 function VitaminexpressComputer({ onProjects }: { onProjects: () => void }) {
-  const [surface, setSurface] = useState<"dashboard" | "settings">("dashboard");
+  const [surface, setSurface] = useState<"dashboard" | "details" | "settings">("dashboard");
   const status: LbProjectStatusView = {
     projectId: "vitaminexpress",
     projectStatus: "active",
