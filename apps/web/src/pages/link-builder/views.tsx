@@ -47,7 +47,9 @@ import {
   wizardStepIssues,
 } from "./model.js";
 import {
-  doneCounts,
+  cornerLabel,
+  dashboardSummary,
+  type doneCounts,
   homeLine,
   homeStatus,
   type OverviewFeedItem,
@@ -59,7 +61,7 @@ import {
   overviewStage,
   overviewWorking,
   personTicket,
-  statusNotes,
+  showOnDashboard,
   stuckHelp,
   waitLines,
   whyNotFeedLines,
@@ -454,6 +456,13 @@ export function ProjectView({
     void Promise.resolve(run).catch(() => setIntent(null));
   }
   const watching = surface === "dashboard";
+  const summary = dashboardSummary({
+    hosts,
+    placements,
+    steps,
+    slug: project.slug,
+    whyNot: status?.whyNot,
+  });
   return (
     <main
       className={
@@ -511,10 +520,14 @@ export function ProjectView({
           </BuiButton>
         </div>
         {watching ? (
-          <TodayCount
-            label="Links that count"
-            value={status?.run?.liveToday ?? 0}
-            max={status?.livePerDay ?? project.quotas?.livePerDay ?? 0}
+          <DoneStrip
+            done={summary.done}
+            notes={summary.notes}
+            links={{
+              value: status?.run?.liveToday ?? 0,
+              max: status?.livePerDay ?? project.quotas?.livePerDay ?? 0,
+            }}
+            onOpen={() => onSurface("details")}
           />
         ) : null}
       </div>
@@ -552,7 +565,6 @@ export function ProjectView({
           screenError={screenError}
           screenPending={screenPending}
           loadArtifact={loadArtifact}
-          onOpenDetails={() => onSurface("details")}
         />
       ) : surface === "details" ? (
         <DetailsView
@@ -670,7 +682,6 @@ function Dashboard({
   screenError,
   screenPending,
   loadArtifact,
-  onOpenDetails,
 }: {
   project: LbProjectDetail;
   status: LbProjectStatusView | null;
@@ -685,7 +696,6 @@ function Dashboard({
   screenError?: string | null;
   screenPending?: boolean;
   loadArtifact?: ArtifactLoader;
-  onOpenDetails: () => void;
 }) {
   const hideExampleCopy = project.slug !== FIXTURE_DEMO_SLUG;
   const visiblePlacements = placements.filter((row) =>
@@ -713,7 +723,7 @@ function Dashboard({
     threadName: visibleThreads[0]?.title ?? null,
     searches,
     searchQuery: primaryProblemQueryFromProject(project),
-  }).filter((item) => !draftBodies.has(item.label.trim()));
+  }).filter((item) => !draftBodies.has(item.label.trim()) && showOnDashboard(item.label));
   const taskColumn = useRef<HTMLDivElement>(null);
   const feedTail = `${items.length}:${items[items.length - 1]?.id ?? ""}`;
   useEffect(() => {
@@ -733,102 +743,66 @@ function Dashboard({
     stepKinds: steps.map((step) => step.kind),
     hasPlacement,
   });
-  const done = doneCounts(hosts, placements, project.slug);
-  const specific = waitLines({ hosts, steps, slug: project.slug });
-  const waits =
-    specific.length > 0
-      ? specific
-      : statusNotes(status?.whyNot)
-          .filter((line) => /waiting/i.test(line))
-          .map((text, index) => ({ id: `note:${index}`, text }));
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-4" aria-label="Dashboard">
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1.55fr)_minmax(240px,380px)] gap-4">
         <ComputerPane
           working={working}
-          action={action}
+          action={cornerLabel(action, WORK_STAGE_LABELS[stage])}
           stage={stage}
           frame={frame}
           screenError={screenError}
           screenPending={screenPending}
           loadArtifact={loadArtifact}
         />
-        <div className="flex min-h-0 flex-col gap-3">
-          <DoneCard done={done} waits={waits} onOpenDetails={onOpenDetails} />
-          <div
-            ref={taskColumn}
-            data-task-column=""
-            className="rk-scroll flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overscroll-contain"
-          >
-            <ActivityFeed items={items} />
-          </div>
+        <div
+          ref={taskColumn}
+          data-task-column=""
+          className="rk-scroll flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain"
+        >
+          <ActivityFeed items={items} />
         </div>
       </div>
     </section>
   );
 }
 
-function DoneCard({
+function DoneStrip({
   done,
-  waits,
-  onOpenDetails,
+  notes,
+  links,
+  onOpen,
 }: {
   done: ReturnType<typeof doneCounts>;
-  waits: ReturnType<typeof waitLines>;
-  onOpenDetails: () => void;
+  notes: { id: string; text: string }[];
+  links: { value: number; max: number };
+  onOpen: () => void;
 }) {
   const counts = [
-    ["Registered", done.registered],
-    ["Posted", done.posted],
-    ["Skipped", done.skipped],
+    ["registered", done.registered],
+    ["posted", done.posted],
+    ["skipped", done.skipped],
   ] as const;
   return (
-    <section aria-label="Done" className="shrink-0">
-      <BuiCard className="flex flex-col gap-3 px-3.5 py-3.5">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-[15px] font-medium text-[#ECECEE]">Done</h2>
-          <button
-            type="button"
-            className="text-[12.5px] text-[#A6A6AD]"
-            aria-label="Open details"
-            onClick={onOpenDetails}
-          >
-            Details
-          </button>
-        </div>
-        <div className="grid grid-cols-3 gap-2">
-          {counts.map(([label, value]) => (
-            <button
-              key={label}
-              type="button"
-              aria-label={label}
-              className="rounded-xl bg-[#18181b] px-2 py-2 text-left"
-              onClick={onOpenDetails}
-            >
-              <span className="block text-[18px] tabular-nums text-[#ECECEE]">{value}</span>
-              <span className="block text-[12px] text-[#8A8A90]">{label}</span>
-            </button>
-          ))}
-        </div>
-        {waits.length > 0 ? (
-          <ul aria-label="Waiting" className="flex flex-col gap-2">
-            {waits.map((wait) => (
-              <li key={wait.id}>
-                <button
-                  type="button"
-                  className="w-full text-left text-[13px] leading-snug text-[#ECECEE]"
-                  onClick={onOpenDetails}
-                >
-                  {wait.text}
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-[13px] text-[#8A8A90]">Nothing is waiting on a site admin.</p>
-        )}
-      </BuiCard>
-    </section>
+    <button type="button" aria-label="Done" className="max-w-[28rem] text-right" onClick={onOpen}>
+      <span className="block text-[13px] text-[#ECECEE]">
+        {counts.map(([label, value], index) => (
+          <span key={label}>
+            {index > 0 ? <span className="text-[#5E5E66]"> · </span> : null}
+            <span className="tabular-nums">{value}</span> {label}
+          </span>
+        ))}
+      </span>
+      {notes.map((note) => (
+        <span key={note.id} className="mt-0.5 block truncate text-[12.5px] text-[#A6A6AD]">
+          {note.text}
+        </span>
+      ))}
+      <span className="mt-0.5 block text-[12.5px] text-[#A6A6AD]">
+        Links that count{" "}
+        <span className="text-[15px] tabular-nums text-[#ECECEE]">{`${links.value}/${links.max}`}</span>
+      </span>
+    </button>
   );
 }
 
@@ -884,14 +858,6 @@ function DetailsView({
       />
       {status?.costs ? <CostNote costs={status.costs} /> : null}
     </section>
-  );
-}
-
-function TodayCount({ label, value, max }: { label: string; value: number; max: number }) {
-  return (
-    <p className="text-[13px] text-[#A6A6AD]">
-      {label} <span className="text-[15px] tabular-nums text-[#ECECEE]">{`${value}/${max}`}</span>
-    </p>
   );
 }
 

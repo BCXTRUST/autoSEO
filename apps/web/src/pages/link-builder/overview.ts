@@ -265,6 +265,50 @@ export function waitLines(input: {
   return lines;
 }
 
+/** Counts for the top of the dashboard. Host rows win; the status totals fill a gap. */
+export function dashboardSummary(input: {
+  hosts: readonly { id: string; registrableDomain: string; status: string }[];
+  placements: readonly { domain: string; status: string }[];
+  steps: readonly { id: string; lastAction: string | null }[];
+  slug?: string | null;
+  whyNot?: LbWhyNot | null;
+}): { done: DoneCounts; notes: WaitLine[] } {
+  const counted = doneCounts(input.hosts, input.placements, input.slug);
+  const why = input.whyNot;
+  const done: DoneCounts = {
+    registered: Math.max(counted.registered, (why?.pendingEmail ?? 0) + (why?.pendingAdmin ?? 0)),
+    posted: counted.posted,
+    skipped: Math.max(
+      counted.skipped,
+      (why?.unsupportedCaptcha ?? 0) + (why?.parked ?? 0) + (why?.spamBlocked ?? 0),
+    ),
+  };
+  const named = waitLines(input);
+  const notes =
+    named.length > 0
+      ? named.slice(0, 3)
+      : statusNotes(why)
+          .slice(0, 3)
+          .map((text, index) => ({ id: `note:${index}`, text }));
+  return { done, notes };
+}
+
+/** The screen chip stays a short action. A wait or a paragraph stays off the picture. */
+export function cornerLabel(action: string, fallback: string): string {
+  const text = action.trim();
+  if (!text || text.length > 72) return fallback;
+  if (/waiting for|skipped \d/i.test(text)) return fallback;
+  return text;
+}
+
+/** The check list stays short. Post text and essays stay on Details. */
+export function showOnDashboard(label: string): boolean {
+  const text = label.trim();
+  if (!text || text.length > 90 || text.includes("\n")) return false;
+  const sentences = text.split(/[.!?]/).filter((part) => part.trim().length > 0);
+  return !(sentences.length > 1 && text.length > 60);
+}
+
 function skippedSites(count: number, why: string): string {
   const sites = count === 1 ? "1 site" : `${count} sites`;
   return `Skipped ${sites}. ${why}`;

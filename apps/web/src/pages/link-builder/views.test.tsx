@@ -759,6 +759,21 @@ describe("link builder screens", () => {
     expect(html).not.toContain("40 tokens");
   });
 
+  it("keeps a long post off the dashboard and puts the counts on top", () => {
+    const post = step(0, "place", []);
+    post.lastAction =
+      "die Muskelfunktion, und ein Mangel kann sich unter anderem durch Muskelkrämpfe bemerkbar machen. Schätzungen gehen davon aus, dass bis zu 75 Prozent der Bevölkerung an einem Magnesiummangel leiden.";
+    const html = renderOverview(statusView({ activity: "running", activityLabel: "running" }), [
+      post,
+    ]);
+    expect(html).not.toContain("Muskelkrämpfe");
+    expect(html).toContain(">0</span> registered");
+    expect(html).toContain(">0</span> posted");
+    expect(html).toContain(">0</span> skipped");
+    expect(html).not.toContain("Filter");
+    expect(html).not.toContain("waiting for an admin. Expected");
+  });
+
   it("shows credit packages with prices before a project exists", () => {
     const html = renderToStaticMarkup(
       <CreditPackagesView
