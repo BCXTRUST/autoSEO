@@ -1055,7 +1055,6 @@ export function watchingFrameSrc(url: string): string {
     parsed.searchParams.set("autoconnect", "true");
     parsed.searchParams.set("resize", "scale");
     parsed.searchParams.set("view_only", "true");
-    parsed.searchParams.set("reconnect", "true");
     const wsPath = novncClientPath(parsed.pathname);
     if (wsPath) parsed.searchParams.set("path", wsPath);
     if (url.startsWith("http://") || url.startsWith("https://")) return parsed.toString();
@@ -1094,14 +1093,14 @@ function WorkingScreen({
     <section aria-label={label} className="flex h-full min-h-0 items-start justify-end bg-[#0c0c0e] p-4">
       <BuiCard className="flex w-fit max-w-md flex-col gap-3 px-4 py-3">
         <p className="text-[13px] text-[#8A8A90]">{WORK_STAGE_LABELS[stage]}</p>
-        {working ? (
+        {screenError ? (
+          <p className="text-[22px] font-medium leading-none text-[#ECECEE]">{screenError}</p>
+        ) : working ? (
           <LoadingState label={label} prominent />
         ) : (
           <p className="text-[22px] font-medium leading-none text-[#ECECEE]">{label}</p>
         )}
-        {screenError ? (
-          <p className="text-[13px] text-[#C8C8CD]">{screenError}</p>
-        ) : screenPending ? (
+        {screenError ? null : screenPending ? (
           <p className="text-[12px] text-[#6C6C70]">Starting computer</p>
         ) : closed ? (
           <p className="text-[12px] text-[#6C6C70]">No session</p>

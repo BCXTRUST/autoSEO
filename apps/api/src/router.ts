@@ -1412,7 +1412,7 @@ export function createRouter(deps: RouterDeps) {
           };
         }
         let session: { url: string | null };
-        const timeout = abortAfter(5_000);
+        const timeout = abortAfter(30_000);
         try {
           const ctx = await computerScreenContext(
             deps.prisma,
@@ -1435,15 +1435,14 @@ export function createRouter(deps: RouterDeps) {
             { ...ctx, signal: timeout.signal },
           );
         } catch (error) {
-          const message = screenConnectErrorMessage(error);
           if (!timeout.signal.aborted && !isComputerScreenUnavailable(error)) {
             console.error("computer screenUrl", error);
           }
-          return { url: null, ...(timeout.signal.aborted ? {} : { error: message }) };
+          return { url: null, error: screenConnectErrorMessage(error) };
         } finally {
           timeout.cancel();
         }
-        if (!session.url) return { url: null, error: "empty screen url" };
+        if (!session.url) return { url: null, error: "Failed to connect to server" };
         scheduleComputerSleep(deps.jobs, bot.computer.id);
         const viewUrl = withViewOnly(
           session.url,
@@ -3181,8 +3180,10 @@ async function latestComputerScreenshotArtifact(
 }
 
 function screenConnectErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) return error.message.trim().slice(0, 240);
-  return "screen unavailable";
+  if (error instanceof Error && /not provisioned|is stopped/i.test(error.message)) {
+    return error.message.trim().slice(0, 240);
+  }
+  return "Failed to connect to server";
 }
 
 async function expireStaleComputerControl(

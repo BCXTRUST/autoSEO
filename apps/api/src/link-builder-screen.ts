@@ -88,7 +88,11 @@ export function publicScreenError(error: unknown): string {
     error instanceof Error && error.message.trim()
       ? error.message.trim()
       : "Could not open the computer";
-  if (/signal:\s*terminated|operation was aborted/i.test(raw)) return "Could not open the computer";
+  if (
+    /signal:\s*terminated|operation was aborted|took too long to start|failed to connect/i.test(raw)
+  ) {
+    return "Failed to connect to server";
+  }
   const cleaned = raw
     .replace(/postgres(?:ql)?:\/\/\S+/gi, "postgres://redacted")
     .replace(/e2b_[A-Za-z0-9_-]+/gi, "e2b_redacted")
@@ -144,7 +148,7 @@ export async function openProjectComputerScreen(
     return await Promise.race([flight, deadline.promise]);
   } catch (error) {
     if (error instanceof ORPCError) throw error;
-    if (isStillStarting(error)) return { url: null, error: null };
+    if (isStillStarting(error)) return { url: null, error: "Failed to connect to server" };
     const message = publicScreenError(error);
     console.error("link builder screen", error instanceof Error ? error.name : "Error", message);
     return { url: null, error: message };
@@ -171,7 +175,7 @@ async function openScreen(
     }
     computer = await bootTeamComputer(deps, actor, computer, boot);
     const url = await connectTeamScreen(deps, actor, computer);
-    if (!url) return { url: null, error: "Could not open the computer" };
+    if (!url) return { url: null, error: "Failed to connect to server" };
     void showForumSearch(deps, actor, project, computer);
     return { url, error: null };
   } catch (error) {
@@ -197,9 +201,7 @@ async function teamComputer(deps: ProjectScreenDeps, actor: Actor): Promise<Team
     where: { workspaceId: actor.workspaceId },
     orderBy: { updatedAt: "desc" },
   });
-  return (
-    choosePersonaComputer(rows) ?? rows.find((row) => row.scope === "team") ?? rows[0] ?? null
-  );
+  return choosePersonaComputer(rows) ?? rows.find((row) => row.scope === "team") ?? rows[0] ?? null;
 }
 
 async function bootTeamComputer(
