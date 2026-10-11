@@ -35,6 +35,7 @@ import {
   addWizardPage,
   disclosureLabel,
   draftFromProject,
+  isSetupPlaceholder,
   normalizePageUrl,
   PAGE_BOX_LIMIT,
   pageDomains,
@@ -267,7 +268,7 @@ export function WizardView({
     allowedDomains: string[];
   }) => Promise<{ keyword: string; rule: string }>;
 }) {
-  const title = WIZARD_STEPS[step] ?? "Review";
+  const title = WIZARD_STEPS[step] ?? "Start";
   const last = WIZARD_STEPS.length - 1;
   return (
     <main
@@ -314,8 +315,12 @@ export function WizardView({
           ) : (
             <BuiCard className="flex flex-col gap-3 p-4">
               {step === 0 ? <BrandFields draft={draft} onChange={onChange} /> : null}
-              {step === 1 ? <PersonaFields draft={draft} onChange={onChange} /> : null}
-              {step === 2 ? <QuotaFields draft={draft} onChange={onChange} /> : null}
+              {step === 1 ? (
+                <PersonaFields draft={draft} onChange={onChange} showMail={false} />
+              ) : null}
+              {step === 2 ? (
+                <QuotaFields draft={draft} onChange={onChange} showAccounts={false} />
+              ) : null}
               {step === last ? <ReviewFields draft={draft} /> : null}
             </BuiCard>
           )}
@@ -337,8 +342,8 @@ export function WizardView({
             ) : (
               <div className="flex flex-col items-end gap-2">
                 {started ? <SuccessPop label="Started" /> : null}
-                <BuiButton tone="accent" label="Start building" onClick={onStart} disabled={busy}>
-                  Start building
+                <BuiButton tone="accent" label="Start" onClick={onStart} disabled={busy}>
+                  Start
                 </BuiButton>
                 <p className="max-w-sm text-right text-[12px] text-[#85858A]">
                   {RESPONSIBILITY_SENTENCE}
@@ -1439,7 +1444,8 @@ function SettingsPanel({
           {leases.map((lease) => (
             <li key={lease.id}>
               {lease.country} · {lease.kind.replaceAll("_", " ")} ·{" "}
-              {lease.expiresAt ? lease.expiresAt.slice(0, 16) : "open"} · {lease.providerId}
+              {lease.expiresAt ? lease.expiresAt.slice(0, 16) : "open"}
+              {isSetupPlaceholder(lease.providerId) ? "" : ` · ${lease.providerId}`}
             </li>
           ))}
         </ul>
@@ -1536,9 +1542,11 @@ function BrandFields({
 function PersonaFields({
   draft,
   onChange,
+  showMail = true,
 }: {
   draft: WizardDraft;
   onChange: (draft: WizardDraft) => void;
+  showMail?: boolean;
 }) {
   return (
     <>
@@ -1573,11 +1581,11 @@ function PersonaFields({
           </select>
         </Field>
       ) : null}
-      <div className="text-[13px] text-[#A6A6AD]">
-        {draft.mailboxAddress
-          ? `Forum mail arrives at ${draft.mailboxAddress}`
-          : "The inbox is created when you continue."}
-      </div>
+      {showMail && draft.mailboxAddress && !isSetupPlaceholder(draft.mailboxAddress) ? (
+        <div className="text-[13px] text-[#A6A6AD]">
+          Forum mail arrives at {draft.mailboxAddress}
+        </div>
+      ) : null}
     </>
   );
 }
@@ -1585,21 +1593,26 @@ function PersonaFields({
 function QuotaFields({
   draft,
   onChange,
+  showAccounts = true,
 }: {
   draft: WizardDraft;
   onChange: (draft: WizardDraft) => void;
+  /** Setup asks for links. Account openings stay on the settings page. */
+  showAccounts?: boolean;
 }) {
   return (
     <>
       <div className="flex flex-col gap-3">
-        <Field label={QUOTA_LABELS.newPerDay}>
-          <input
-            aria-label={QUOTA_LABELS.newPerDay}
-            className={inputClass}
-            value={draft.newPerDay}
-            onChange={(event) => onChange({ ...draft, newPerDay: event.target.value })}
-          />
-        </Field>
+        {showAccounts ? (
+          <Field label={QUOTA_LABELS.newPerDay}>
+            <input
+              aria-label={QUOTA_LABELS.newPerDay}
+              className={inputClass}
+              value={draft.newPerDay}
+              onChange={(event) => onChange({ ...draft, newPerDay: event.target.value })}
+            />
+          </Field>
+        ) : null}
         <Field label={QUOTA_LABELS.livePerDay}>
           <input
             aria-label={QUOTA_LABELS.livePerDay}
@@ -1759,7 +1772,6 @@ function ReviewFields({ draft }: { draft: WizardDraft }) {
           ["Sites", draft.allowedDomains || "—"],
           ["Countries", draft.markets.map((market) => market.country).join(", ")],
           ["Name on forums", draft.displayName || "—"],
-          ["Inbox", draft.mailboxAddress ?? "—"],
           ...draft.pages
             .filter((page) => page.url.trim() || page.keyword.trim())
             .flatMap((page, index) => [
@@ -1767,7 +1779,6 @@ function ReviewFields({ draft }: { draft: WizardDraft }) {
               [`Keyword ${index + 1}`, page.keyword || "—"],
               [`Rules ${index + 1}`, page.rules || "—"],
             ]),
-          [QUOTA_LABELS.newPerDay, draft.newPerDay],
           [QUOTA_LABELS.livePerDay, draft.livePerDay],
           [QUOTA_LABELS.liveWeek, draft.liveWeekCap || "—"],
           ["How posts identify you", disclosureLabel(draft.disclosureMode)],
