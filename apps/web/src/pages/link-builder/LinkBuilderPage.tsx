@@ -661,6 +661,13 @@ function ProjectRoute({ projectId }: { projectId: string }) {
       onStart={() => act("start")}
       onPause={() => act("pause")}
       onStop={() => act("stop")}
+      onFixed={(ticketId) => {
+        setBusy(true);
+        void rpc.linkBuilder.operator
+          .continue({ projectId, ticketId })
+          .then(() => reload())
+          .finally(() => setBusy(false));
+      }}
       onInstruct={async (instruction) => {
         setBusy(true);
         try {

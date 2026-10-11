@@ -2,6 +2,7 @@ import type { LbRunStepView, LbWhyNot } from "@rakazo/contracts";
 import type { ScheduleWindow } from "@rakazo/linkbuilder-core";
 import { describe, expect, it } from "vitest";
 import {
+  homeLine,
   homeStatus,
   overviewAction,
   overviewFeed,
@@ -10,6 +11,8 @@ import {
   overviewPace,
   overviewStage,
   overviewWorking,
+  personTicket,
+  stuckHelp,
   whyNotFeedLines,
 } from "./overview.js";
 
@@ -59,6 +62,23 @@ describe("overview feed", () => {
     expect(homeStatus({})).toBe("Waiting");
   });
 
+  it("says what is stuck and hides captcha from the home box", () => {
+    expect(homeLine({ status: "Posting", liveToday: 1, livePerDay: 2 })).toBe(
+      "Posting 1 of 2 links today",
+    );
+    expect(stuckHelp({ domain: "example.com", reason: "missing_password" })).toEqual({
+      stuck: "Stuck. example.com needs a password.",
+      next: "Add the password, then continue.",
+    });
+    expect(
+      personTicket([
+        { status: "open", reason: "captcha_unsolved" },
+        { status: "open", reason: "missing_password" },
+      ]),
+    ).toEqual({ status: "open", reason: "missing_password" });
+    expect(personTicket([{ status: "open", reason: "captcha_unsolved" }])).toBeNull();
+  });
+
   it("hides an all-zero why-not report and keeps real blockers", () => {
     expect(whyNotFeedLines(zeroWhy)).toEqual([]);
     expect(whyNotFeedLines(null)).toEqual([]);
@@ -71,7 +91,11 @@ describe("overview feed", () => {
         proxy: "degraded",
         reasons: ["operator_parked", "pending_email", "spam_filtered", "proxy_degraded"],
       }),
-    ).toEqual(["Parked 1", "Spam blocked 1", "Proxy degraded"]);
+    ).toEqual([
+      "Skipped 1 site. Needs a person.",
+      "Skipped 1 site. Marked as spam.",
+      "The connection is weak.",
+    ]);
   });
 
   it("appends steps in order and marks the latest one working", () => {

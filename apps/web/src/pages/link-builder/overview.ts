@@ -111,6 +111,65 @@ export function homeStatus(input: {
   return "Waiting";
 }
 
+/** One line for a home card. Posting includes today's counted links. */
+export function homeLine(input: {
+  status: HomeStatus;
+  liveToday: number;
+  livePerDay: number;
+}): string {
+  if (input.status === "Posting") {
+    return `Posting ${input.liveToday} of ${input.livePerDay} links today`;
+  }
+  return input.status;
+}
+
+const PERSON_REASONS = new Set(["missing_password", "admin_approval"]);
+
+/** Open ticket a person can finish. Captcha and unknown pages stay off this screen. */
+export function personTicket<T extends { status: string; reason: string }>(
+  tickets: readonly T[],
+): T | null {
+  return (
+    tickets.find((ticket) => ticket.status === "open" && PERSON_REASONS.has(ticket.reason)) ?? null
+  );
+}
+
+/** What is stuck, and the one next step. */
+export function stuckHelp(ticket: { domain: string; reason: string }): {
+  stuck: string;
+  next: string;
+} {
+  const site = ticket.domain.trim() || "this site";
+  switch (ticket.reason) {
+    case "captcha_unsolved":
+      return { stuck: `Stuck on a captcha at ${site}.`, next: "Solve the captcha, then continue." };
+    case "two_factor":
+      return { stuck: `Stuck on a login code at ${site}.`, next: "Enter the code, then continue." };
+    case "missing_password":
+      return {
+        stuck: `Stuck. ${site} needs a password.`,
+        next: "Add the password, then continue.",
+      };
+    case "admin_approval":
+      return {
+        stuck: `Waiting for an admin at ${site}.`,
+        next: "Continue when the admin has approved it.",
+      };
+    case "unknown_page_state":
+      return {
+        stuck: `Stuck on a page we do not recognize at ${site}.`,
+        next: "Finish the page, then continue.",
+      };
+    case "unmapped_form":
+      return {
+        stuck: `Stuck on a form we do not know at ${site}.`,
+        next: "Fill the form, then continue.",
+      };
+    default:
+      return { stuck: `Stuck at ${site}.`, next: "Finish the page, then continue." };
+  }
+}
+
 /** Skips and holds that are part of a healthy run. Not failures. */
 export function statusNotes(whyNot: LbWhyNot | null | undefined): string[] {
   if (!whyNot) return [];
@@ -139,18 +198,24 @@ export function statusNotes(whyNot: LbWhyNot | null | undefined): string[] {
   return lines;
 }
 
+function skippedSites(count: number, why: string): string {
+  const sites = count === 1 ? "1 site" : `${count} sites`;
+  return `Skipped ${sites}. ${why}`;
+}
+
 /** Non-zero blockers only. Warm-up, skips, and mail holds stay off this list. */
 export function whyNotFeedLines(whyNot: LbWhyNot | null | undefined): string[] {
   if (!whyNot) return [];
   const lines: string[] = [];
-  if (whyNot.parked > 0) lines.push(`Parked ${whyNot.parked}`);
-  if (whyNot.spamBlocked > 0) lines.push(`Spam blocked ${whyNot.spamBlocked}`);
-  if (whyNot.modelErrors > 0) lines.push(`Model errors ${whyNot.modelErrors}`);
-  if (whyNot.modelRefusals > 0) lines.push(`Model refusals ${whyNot.modelRefusals}`);
-  if (whyNot.proxy === "degraded") lines.push("Proxy degraded");
-  if (whyNot.reasons.includes("captcha_balance_low")) lines.push("Captcha balance is low");
-  if (whyNot.reasons.includes("week_cap_reached")) lines.push("Live links this week are full");
-  if (whyNot.reasons.includes("new_quota_reached")) lines.push("New links today are full");
+  if (whyNot.parked > 0) lines.push(skippedSites(whyNot.parked, "Needs a person."));
+  if (whyNot.spamBlocked > 0) lines.push(skippedSites(whyNot.spamBlocked, "Marked as spam."));
+  if (whyNot.modelErrors > 0) lines.push(skippedSites(whyNot.modelErrors, "The writer failed."));
+  if (whyNot.modelRefusals > 0)
+    lines.push(skippedSites(whyNot.modelRefusals, "The writer refused."));
+  if (whyNot.proxy === "degraded") lines.push("The connection is weak.");
+  if (whyNot.reasons.includes("captcha_balance_low")) lines.push("Captcha credits are low.");
+  if (whyNot.reasons.includes("week_cap_reached")) lines.push("Live links this week are full.");
+  if (whyNot.reasons.includes("new_quota_reached")) lines.push("Today's links are full.");
   return lines;
 }
 

@@ -64,9 +64,11 @@ describe("link builder screens", () => {
 
   it("shows NEW and LIVE rings and hides a view-only operator count", () => {
     const html = renderToStaticMarkup(<LinkBuilderPreview screen="dashboard" />);
-    expect(html).toContain("New accounts per day");
-    expect(html).toContain("Live links per day");
-    expect(html).toContain("Live links per week");
+    expect(html).toContain("Posting 1 of 2 links today");
+    expect(html).toContain("Posting 0 of 1 links today");
+    expect(html).not.toContain("New accounts per day");
+    expect(html).not.toContain("Live links per day");
+    expect(html).not.toContain("Live links per week");
     expect(html).not.toContain("needs operator");
     expect(html).toContain("Posting");
     expect(html).not.toContain("running");
@@ -132,7 +134,7 @@ describe("link builder screens", () => {
 
   it("offers continue and skip on the operator ticket", () => {
     const html = renderToStaticMarkup(<LinkBuilderPreview screen="operator" />);
-    expect(html).toContain("solved it, continue");
+    expect(html).toContain("I fixed it, continue");
     expect(html).toContain("Skip host");
     expect(html).toContain("Live screen");
     expect(html).toContain("fragen.nordlicht.example");
@@ -302,6 +304,8 @@ describe("link builder screens", () => {
     );
     expect(html).not.toContain("fragen-1ej2xe.example");
     expect(html).not.toContain("I've solved it");
+    expect(html).toContain("Stuck. board.example.org needs a password.");
+    expect(html).toContain("I fixed it, continue");
     expect(html).not.toContain("Open computer");
     expect(html).not.toContain('role="tablist"');
     expect(html).not.toContain(">Captchas<");
@@ -368,7 +372,7 @@ describe("link builder screens", () => {
     expect(html).not.toContain("placed_submitted");
     expect(html).not.toContain("Sandbox answer");
     expect(html).not.toContain(">Captchas<");
-    expect(html).toContain('aria-label="Settings"');
+    expect(html).toContain('aria-label="Change schedule"');
   });
 
   it("gives each page its own box and stops the plus at 10", () => {
@@ -460,9 +464,9 @@ describe("link builder screens", () => {
       discovered,
       probed,
     ]);
-    expect(html).toContain("New accounts per day");
-    expect(html).toContain("Live links today");
-    expect(html).toContain(">0/2</span>");
+    expect(html).toContain("Links that count");
+    expect(html).not.toContain("New accounts per day");
+    expect(html).not.toContain("Live links today");
     expect(html).toContain(">0/1</span>");
     expect(html).not.toContain("New links today");
     expect(html).not.toContain("NEW ");
@@ -569,7 +573,7 @@ describe("link builder screens", () => {
     expect(html).toContain("No session");
     expect(html).toContain('data-session="closed"');
     expect(html).toContain('data-pixel="trail"');
-    expect(html).toContain('aria-label="Settings"');
+    expect(html).toContain('aria-label="Change schedule"');
     expect(html).not.toContain('role="tab"');
     expect(html).not.toContain(">Overview<");
     expect(html).not.toContain(">Targets<");
@@ -615,8 +619,9 @@ describe("link builder screens", () => {
     expect(row).not.toContain("Verify");
     expect(html).not.toContain("I've solved it");
     expect(html).not.toContain("fragen-");
-    expect(html).toContain("New accounts per day");
-    expect(html).toContain("Live links today");
+    expect(html).toContain("Links that count");
+    expect(html).not.toContain("New accounts per day");
+    expect(html).not.toContain("Live links today");
   });
 
   it("shows the counted German problem search and keeps Verify off the working row", () => {
@@ -737,7 +742,7 @@ describe("link builder screens", () => {
     expect(html).not.toContain(">Continuing<");
     expect(html).toContain("No events yet");
     expect(html).not.toContain(".example");
-    expect(html).toContain("New accounts per day");
+    expect(html).toContain("Links that count");
     expect(html).not.toContain("New links today");
     expect(html).not.toContain("Why not");
     expect(html).not.toContain("Parked 0");
@@ -746,17 +751,19 @@ describe("link builder screens", () => {
 
   it("puts real blockers in the feed after the computer", () => {
     const html = renderToStaticMarkup(<LinkBuilderPreview screen="overview" />);
-    expect(html).toContain("New accounts per day");
-    expect(html).toContain("Live links today");
+    expect(html).toContain("Links that count");
+    expect(html).not.toContain("New accounts per day");
+    expect(html).not.toContain("Live links today");
     expect(html).not.toContain("New links today");
-    expect(html).toContain("Parked 1");
+    expect(html).toContain("Skipped 1 site. Needs a person.");
     expect(html).toContain("2 accounts waiting for email.");
-    expect(html).toContain("Spam blocked 1");
+    expect(html).toContain("Skipped 1 site. Marked as spam.");
     expect(html).not.toContain("Why not");
     expect(html).not.toContain("Proxy ok");
     expect(html).not.toContain("Unsupported captcha 0");
-    expect(html.indexOf('aria-label="Computer"')).toBeLessThan(html.indexOf("Parked 1"));
-    expect(html.indexOf("New accounts per day")).toBeLessThan(html.indexOf("40 tokens"));
+    const computer = html.indexOf('aria-label="Computer"');
+    expect(html.indexOf("Skipped 1 site. Needs a person.", computer)).toBeGreaterThan(computer);
+    expect(html.indexOf("Links that count")).toBeLessThan(html.indexOf("40 tokens"));
   });
 
   it("shows credit packages with prices before a project exists", () => {
@@ -851,6 +858,7 @@ function renderOverview(
   steps: LbRunStepView[],
   drafts: LbDraftView[] = [],
   screenUrl?: string | null,
+  tickets: LbOperatorTicketView[] = [],
 ) {
   return renderToStaticMarkup(
     <ProjectView
@@ -861,7 +869,7 @@ function renderOverview(
       steps={steps}
       threads={[]}
       drafts={drafts}
-      tickets={[]}
+      tickets={tickets}
       surface="dashboard"
       onSurface={noop}
       onStart={noop}
