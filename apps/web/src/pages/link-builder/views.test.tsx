@@ -567,10 +567,12 @@ describe("link builder screens", () => {
     expect(html).toContain('aria-label="Opened Google search"');
     expect(html).not.toContain("Checking Google for on-topic forums");
     expect(html.indexOf('aria-label="Opened Google search"')).toBeLessThan(
-      html.indexOf("No session"),
+      html.indexOf("Connecting the computer"),
     );
     expect(html).toContain("bui-pixel-on");
-    expect(html).toContain("No session");
+    expect(html).toContain("Connecting the computer");
+    expect(html).not.toContain("No session");
+    expect(html).not.toContain("Failed to connect to server");
     expect(html).toContain('data-session="closed"');
     expect(html).toContain('data-pixel="trail"');
     expect(html).toContain('aria-label="Change schedule"');
@@ -584,6 +586,16 @@ describe("link builder screens", () => {
     expect(html).not.toContain(">Captchas<");
     expect(html).not.toContain("I've solved it");
     expect(html).not.toContain("28px 28px");
+  });
+
+  it("says the computer is off when nothing is running", () => {
+    const html = renderOverview(
+      statusView({ activity: "paused", activityLabel: "paused", run: null }),
+      [],
+    );
+    expect(html).toContain("Computer is off. It turns on when a post is being made.");
+    expect(html).not.toContain("Failed to connect to server");
+    expect(html).not.toContain("Connecting the computer");
   });
 
   it("stays on research when Verify has no placement, and still shows a frame", () => {

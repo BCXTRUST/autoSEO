@@ -936,6 +936,7 @@ function ComputerPane({
       <div className="relative min-h-0 flex-1">
         {frame?.kind === "url" ? (
           <iframe
+            key={frame.url}
             title="Computer"
             src={watchingFrameSrc(frame.url)}
             className="absolute inset-0 h-full w-full border-0 bg-black"
@@ -1051,7 +1052,11 @@ function WorkingScreen({
         {screenError ? null : screenPending ? (
           <p className="text-[12px] text-[#6C6C70]">Starting computer</p>
         ) : closed ? (
-          <p className="text-[12px] text-[#6C6C70]">No session</p>
+          <p className="text-[12px] text-[#6C6C70]">
+            {working
+              ? "Connecting the computer"
+              : "Computer is off. It turns on when a post is being made."}
+          </p>
         ) : null}
       </BuiCard>
     </section>

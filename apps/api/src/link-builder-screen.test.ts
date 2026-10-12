@@ -52,10 +52,15 @@ function deps(prisma: PrismaClient, sandbox: Record<string, unknown> = {}): Proj
 
 describe("project computer screen", () => {
   it("reuses a fresh proxied stream and ignores raw provider urls", () => {
-    const expires = Date.now() + 30 * 60_000;
+    const expires = Date.now() + 60 * 60_000;
     const url = `https://app.autoseo.run/novnc/remote/view/${expires}.capability/vnc.html`;
     expect(reusableScreenUrl(url)).toBe(url);
     expect(reusableScreenUrl(url, expires - 60_000)).toBeNull();
+    expect(
+      reusableScreenUrl(
+        `https://app.autoseo.run/novnc/remote/view/${Date.now() + 30 * 60_000}.capability/vnc.html`,
+      ),
+    ).toBeNull();
     expect(reusableScreenUrl("https://desktop.test/vnc.html?password=secret")).toBeNull();
     expect(publicScreenError(new Error("bad e2b_livekey postgres://user:pass@db/railway"))).toBe(
       "bad e2b_redacted postgres://redacted",
@@ -67,7 +72,7 @@ describe("project computer screen", () => {
   });
 
   it("returns the stored team screen without opening another machine", async () => {
-    const expires = Date.now() + 30 * 60_000;
+    const expires = Date.now() + 60 * 60_000;
     const url = `https://app.autoseo.run/novnc/remote/view/${expires}.capability/vnc.html`;
     const connectScreen = vi.fn();
     const prisma = {
@@ -87,6 +92,36 @@ describe("project computer screen", () => {
     expect(result).toEqual({ url, error: null });
     expect(connectScreen).not.toHaveBeenCalled();
     expect(prisma.computer.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a stale screen instead of serving a dead stream", async () => {
+    const stale = `https://app.autoseo.run/novnc/remote/view/${Date.now() + 30 * 60_000}.capability/vnc.html`;
+    const connectScreen = vi.fn(async () => ({
+      url: "https://49982-user.e2b.app/vnc.html?autoconnect=true",
+    }));
+    const prisma = {
+      lbProject: { findFirst: vi.fn(async () => ({ id: "project-1" })) },
+      computer: {
+        findFirst: vi.fn(async () => computer({ screenUrl: stale })),
+        findMany: vi.fn(async () => [computer({ screenUrl: stale })]),
+        update: vi.fn(async () => computer()),
+      },
+      bot: { findFirst: vi.fn(async () => ({ id: "bot-1" })) },
+    } as unknown as PrismaClient;
+    const result = await openProjectComputerScreen(
+      deps(prisma, {
+        connectScreen,
+        execute: async function* () {
+          yield { type: "exit" as const, code: 0 };
+        },
+      }),
+      actor,
+      "project-1",
+    );
+    expect(connectScreen).toHaveBeenCalled();
+    expect(result.error).toBeNull();
+    expect(result.url).toContain("/novnc/remote/view/");
+    expect(result.url).not.toBe(stale);
   });
 
   it("does not start a computer just to show the dashboard", async () => {
@@ -118,7 +153,7 @@ describe("project computer screen", () => {
   });
 
   it("opens Google search for the stored topic and skips example hosts", async () => {
-    const expires = Date.now() + 30 * 60_000;
+    const expires = Date.now() + 60 * 60_000;
     const url = `https://app.autoseo.run/novnc/remote/view/${expires}.capability/vnc.html`;
     const scripts: string[] = [];
     const prisma = {
@@ -189,7 +224,7 @@ describe("project computer screen", () => {
   });
 
   it("leaves the persona browser alone while it is working", async () => {
-    const expires = Date.now() + 30 * 60_000;
+    const expires = Date.now() + 60 * 60_000;
     const url = `https://app.autoseo.run/novnc/remote/view/${expires}.capability/vnc.html`;
     const scripts: string[] = [];
     const prisma = {
@@ -229,7 +264,7 @@ describe("project computer screen", () => {
   });
 
   it("leaves a Google search that is already on the computer", async () => {
-    const expires = Date.now() + 30 * 60_000;
+    const expires = Date.now() + 60 * 60_000;
     const url = `https://app.autoseo.run/novnc/remote/view/${expires}.capability/vnc.html`;
     const scripts: string[] = [];
     const prisma = {
