@@ -90,6 +90,7 @@ import {
   acceptCookieWall,
   adminHoldOnVerify,
   type BoardDriver,
+  type BoardThread,
   boardDriverFor,
   type CaptchaChallenge,
   enrichCaptchaChallenge,
@@ -110,6 +111,17 @@ import {
   verifyPlacement,
 } from "@rakazo/linkbuilder-drivers";
 import { bumpModelRefusal, composeReply } from "./link-builder-draft.js";
+import {
+  boardLink,
+  chosenLink,
+  PAGE_LOOK_MODEL,
+  PAGE_LOOK_SYSTEM,
+  PAGE_LOOK_WAIT_MS,
+  type PageLink,
+  pageLookPrompt,
+  threadsFromLinks,
+  usablePageLinks,
+} from "./link-builder-page-move.js";
 import { ensureProxyLease } from "./link-builder-proxy.js";
 
 /** Bot id recorded on forum logins the link builder stores; logins are workspace-shared. */
@@ -2144,6 +2156,130 @@ async function threadsForReply(
   return { threads: listed, searched: false };
 }
 
+const PAGE_ANCHOR_SELECTORS = [
+  "a[href*='thread']",
+  "a[href*='viewtopic']",
+  "a[href*='showthread']",
+  "a[href*='board']",
+  "a[href*='viewforum']",
+  "a[href*='forum']",
+  "a",
+];
+
+async function noteAction(ctx: StepContext, lastAction: string): Promise<void> {
+  await ctx.services.prisma.lbRun
+    .updateMany({ where: { id: ctx.run.id }, data: { lastAction } })
+    .catch(() => undefined);
+}
+
+async function collectPageAnchors(
+  session: BrowserSession,
+): Promise<Array<{ text: string; href: string }>> {
+  if (!session.listAnchors) return [];
+  const found: Array<{ text: string; href: string }> = [];
+  for (const selector of PAGE_ANCHOR_SELECTORS) {
+    try {
+      found.push(...(await session.listAnchors(selector)));
+    } catch {
+      // The open runner may not know this read yet.
+    }
+  }
+  return found;
+}
+
+function topicWords(project: ProjectConfig): string[] {
+  const raw = [
+    project.name,
+    project.brandName,
+    ...project.topicLanes.flatMap((lane) => [lane.tag, lane.description, ...lane.exampleQuestions]),
+  ].join(" ");
+  return [
+    ...new Set(
+      raw
+        .toLowerCase()
+        .split(/[^a-z0-9äöüß]+/)
+        .filter((word) => word.length > 3),
+    ),
+  ];
+}
+
+async function askPageMove(ctx: StepContext, links: PageLink[]): Promise<PageLink | null> {
+  const model = ctx.services.textModel;
+  if (!model || links.length === 0) return null;
+  const request = {
+    lane: "classify" as const,
+    modelId: PAGE_LOOK_MODEL,
+    system: PAGE_LOOK_SYSTEM,
+    user: pageLookPrompt(links),
+    maxTokens: 180,
+    schema: {
+      safeParse(value: unknown) {
+        if (!value || typeof value !== "object") return { success: false as const };
+        const row = value as { action?: unknown; index?: unknown };
+        const action = row.action === "open" || row.action === "skip" ? row.action : null;
+        if (!action) return { success: false as const };
+        const index =
+          typeof row.index === "number" && Number.isInteger(row.index) ? row.index : undefined;
+        return { success: true as const, data: { action, index } };
+      },
+    },
+  };
+  try {
+    const result = await Promise.race([
+      model.complete(request as never, ctx.adapter),
+      new Promise<{ ok: false }>((resolve) => {
+        setTimeout(() => resolve({ ok: false }), PAGE_LOOK_WAIT_MS);
+      }),
+    ]);
+    if (!result.ok || !("value" in result) || !result.value) return null;
+    const value = result.value as { action?: string; index?: number };
+    return chosenLink(links, value.action ?? "", value.index);
+  } catch {
+    return null;
+  }
+}
+
+async function recoverOpenThreads(
+  ctx: StepContext,
+  entry: PoolEntry,
+  driver: BoardDriver,
+  host: HostRow,
+  skip: Set<string>,
+): Promise<BoardThread[]> {
+  await noteAction(ctx, `Looking for a thread on ${host.registrableDomain}`);
+  const pageUrl = await entry.session.url().catch(() => host.homepageUrl);
+  const links = usablePageLinks(
+    await collectPageAnchors(entry.session),
+    pageUrl,
+    host.registrableDomain,
+  );
+  const direct = threadsFromLinks(links).filter((thread) => !skip.has(thread.url));
+  if (direct.length > 0) return direct;
+  const picked = boardLink(links, topicWords(ctx.project)) ?? (await askPageMove(ctx, links));
+  if (!picked) return [];
+  await noteAction(ctx, `Reading a board on ${host.registrableDomain}`);
+  try {
+    await entry.session.goto(picked.url);
+  } catch {
+    return [];
+  }
+  const nextUrl = await entry.session.url().catch(() => picked.url);
+  const nextLinks = usablePageLinks(
+    await collectPageAnchors(entry.session),
+    nextUrl,
+    host.registrableDomain,
+  );
+  const fromLinks = threadsFromLinks(nextLinks).filter((thread) => !skip.has(thread.url));
+  if (fromLinks.length > 0) return fromLinks;
+  try {
+    const listed = await driver.listThreads(entry.session, host.homepageUrl);
+    return listed.filter((thread) => !skip.has(thread.url));
+  } catch (error) {
+    if (error instanceof UnmappedFormError) throw error;
+    return [];
+  }
+}
+
 async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   const host = requireHost(ctx);
   const entry = requireSession(ctx, host);
@@ -2211,7 +2347,19 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   });
   const skip = new Set(known.map((thread) => thread.url));
   const found = await threadsForReply(driver, entry.session, host.homepageUrl, ctx.project, skip);
-  const threads = found.threads;
+  let threads = found.threads;
+  if (threads.length === 0) {
+    threads = await recoverOpenThreads(ctx, entry, driver, host, skip);
+  }
+  if (threads.length === 0) {
+    return {
+      kind: "step",
+      lastAction: "No thread here, moving on",
+      hostId: host.id,
+      outcome: { rejected: [] },
+      apply: (tx) => moveHost(tx, host, "failed", { statusReason: "no_open_thread" }),
+    };
+  }
   const selectionBudget = found.searched ? 4 : 1;
   if (!ctx.services.textModel) throw new StepFailure("Draft model is not configured");
   const model = ctx.services.textModel;
@@ -2453,8 +2601,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   if (!chosen) {
     return {
       kind: "step",
-      lastAction:
-        threads.length === 0 ? "No open thread on this board" : "No thread passed selection",
+      lastAction: threads.length === 0 ? "No thread here, moving on" : "No thread passed selection",
       hostId: host.id,
       outcome: { rejected: rejections.map((rejection) => rejection.reason) },
       apply: async (tx) => {

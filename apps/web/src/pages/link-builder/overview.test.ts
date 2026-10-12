@@ -516,13 +516,13 @@ describe("overview pace", () => {
     });
     expect(overviewAction(items, false)).toBe("Posted the reply");
     expect(overviewAction(items, true, "https://www.nickles.de/consent.html")).toBe(
-      "Opening nickles.de consent",
+      "On nickles.de consent",
     );
     expect(overviewAction(items, false, "https://www.nickles.de/register")).toBe(
-      "Opening nickles.de registration",
+      "On nickles.de registration",
     );
     expect(overviewAction(items, false, "https://www.nickles.de/forum/ucp.php?mode=register")).toBe(
-      "Opening nickles.de registration",
+      "On nickles.de registration",
     );
     expect(
       overviewAction(
@@ -530,9 +530,34 @@ describe("overview pace", () => {
         false,
         "https://www.nickles.de/forum/office-word-excel-und-co/2026/office-2016-nicht-lizenziertes-produkt-539346749.html",
       ),
-    ).toBe("Opening nickles.de reply");
+    ).toBe("On nickles.de reply");
     expect(overviewAction(items, false, "https://app.autoseo.run/novnc/remote/vnc.html")).toBe(
       "Posted the reply",
     );
+  });
+
+  it("shows the real step when the page is already open", () => {
+    const items = overviewFeed({
+      steps: [
+        step(2, "No open thread on this board"),
+        step(1, "Opened office-fragen.de"),
+        step(0, "Working on office-fragen.de"),
+      ],
+      lastEvent: "No open thread on this board",
+      working: true,
+      blockers: [],
+    });
+    expect(overviewAction(items, true, "https://www.office-fragen.de/")).toBe(
+      "No open thread on this board",
+    );
+    expect(
+      overviewAction(
+        items,
+        true,
+        "https://www.office-fragen.de/",
+        "Looking for a thread on office-fragen.de",
+      ),
+    ).toBe("Looking for a thread on office-fragen.de");
+    expect(overviewAction(items, true, "https://www.office-fragen.de/")).not.toMatch(/^Opening /);
   });
 });

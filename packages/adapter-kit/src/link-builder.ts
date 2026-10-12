@@ -407,6 +407,8 @@ export interface TextModelRequest<T> {
   user: string;
   schema: z.ZodType<T>;
   maxTokens: number;
+  /** Overrides the lane model for one call. Callers must pass a fixed model id. */
+  modelId?: string;
 }
 
 export interface TextModelTokens {

@@ -549,7 +549,7 @@ export function livePageLabel(url: string | null | undefined): string | null {
   const path =
     `${decodeURIComponent(parsed.pathname)} ${decodeURIComponent(parsed.search)}`.toLowerCase();
   const kind = pageKind(path);
-  return kind ? `Opening ${host} ${kind}` : `Opening ${host}`;
+  return kind ? `On ${host} ${kind}` : `On ${host}`;
 }
 
 function pageKind(path: string): "consent" | "registration" | "reply" | null {
@@ -563,15 +563,45 @@ export function overviewAction(
   items: OverviewFeedItem[],
   working: boolean,
   liveUrl?: string | null,
+  currentAction?: string | null,
 ): string {
   const live = livePageLabel(liveUrl);
+  const host = liveHost(liveUrl);
+  const noted = currentAction?.trim() ?? "";
+  if (live && isOpenPageStep(noted, host)) return noted;
+  const latest = [...items].reverse().find((item) => item.status !== "blocked");
+  if (live && latest && isOpenPageStep(latest.label, host)) return latest.label;
   if (live) return live;
   if (working) {
     const current = [...items].reverse().find((item) => item.status === "working");
     return current?.label || "Working";
   }
-  const last = [...items].reverse().find((item) => item.status !== "blocked");
-  return last?.label ?? "";
+  return latest?.label ?? "";
+}
+
+/** A step about the page that is already open. A finished post must not hide that page. */
+function isOpenPageStep(label: string, host: string | null): boolean {
+  if (
+    /^(No open thread|No thread here|Looking for a thread|Reading |The page did not finish|Step failed)/.test(
+      label,
+    )
+  ) {
+    return true;
+  }
+  if (!host) return false;
+  return label.toLowerCase().includes(host.toLowerCase());
+}
+
+function liveHost(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    if (parsed.pathname.includes("/novnc/")) return null;
+    return parsed.hostname.replace(/^www\./, "") || null;
+  } catch {
+    return null;
+  }
 }
 
 /** A sentence that says Google was searched. Hidden while the search count is still zero. */
