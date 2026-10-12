@@ -503,14 +503,15 @@ function ProjectRoute({ projectId }: { projectId: string }) {
           limited = true;
           if (!screenUrlRef.current) setScreenPending(true);
         } else if (!screenUrlRef.current) {
-          setScreenPending(true);
+          setScreenPending(false);
+          setScreenError(null);
         }
       } catch (err) {
         limited = isLinkBuilderRateLimit(err);
-        if (!cancelled && !screenUrlRef.current) setScreenPending(true);
+        if (!cancelled && !screenUrlRef.current) setScreenPending(false);
       }
       if (cancelled) return;
-      const wait = limited ? linkBuilderPollBackoffMs(0) : screenUrlRef.current ? 45_000 : 8_000;
+      const wait = limited ? linkBuilderPollBackoffMs(0) : 20_000;
       timer = window.setTimeout(pull, wait);
     };
     void pull();

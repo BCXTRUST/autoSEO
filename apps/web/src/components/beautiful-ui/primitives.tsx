@@ -248,23 +248,24 @@ export function BuiButton({
   /** Accessible name when the visible label is not enough on its own. */
   label?: string;
 }) {
+  const accent = tone === "accent";
   return (
     <button
       type="button"
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className="rounded-full px-4 py-2 text-[13.5px] font-medium transition-colors duration-150 disabled:opacity-60"
-      style={
-        tone === "accent"
-          ? { background: "var(--bui-accent)", color: "#090a12" }
-          : {
-              background: "var(--bui-hover)",
-              color: "var(--bui-ink)",
-              boxShadow: "var(--bui-shadow-btn)",
-            }
-      }
+      className={`relative inline-flex items-center gap-1.5 border-2 border-[#3A382F] px-3 py-1.5 text-[13px] font-medium shadow-[3px_3px_0_#2A2820] disabled:opacity-50 ${
+        accent ? "bg-[#FFE14A] text-[#1A1608]" : "bg-[#1C1B16] text-[#E8E4D8]"
+      }`}
     >
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute -right-px -top-px h-2.5 w-2.5 ${
+          accent ? "bg-[#0E0D0A]" : "bg-[#FFE14A]"
+        }`}
+        style={{ clipPath: "polygon(100% 0, 0 0, 100% 100%)" }}
+      />
       {children}
     </button>
   );

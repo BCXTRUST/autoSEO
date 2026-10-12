@@ -5,13 +5,8 @@ import type {
   JobPublisher,
   SandboxProvider,
 } from "@rakazo/adapter-kit";
-import {
-  ComputerBusyError,
-  provisionComputer,
-  toComputerRef,
-  touchRunningComputer,
-} from "@rakazo/adapters";
-import { type Actor, SandboxKind } from "@rakazo/contracts";
+import { ComputerBusyError, provisionComputer, toComputerRef } from "@rakazo/adapters";
+import type { Actor } from "@rakazo/contracts";
 import {
   chromeKioskStampCommand,
   detachedBrowserCommand,
@@ -20,7 +15,7 @@ import {
   prepareKioskDesktopCommand,
   raiseBrowserWindowCommand,
 } from "@rakazo/core";
-import { ensureComputerRecord, type PrismaClient, type ThreadEvents } from "@rakazo/db";
+import type { PrismaClient, ThreadEvents } from "@rakazo/db";
 import {
   choosePersonaComputer,
   desktopShowsForumSearch,
@@ -163,17 +158,18 @@ async function openScreen(
   deps: ProjectScreenDeps,
   actor: Actor,
   project: ScreenProject,
-  boot: typeof provisionComputer,
+  _boot: typeof provisionComputer,
 ): Promise<{ url: string | null; error: string | null }> {
   try {
-    let computer = await teamComputer(deps, actor);
-    const cached = computer ? liveCachedUrl(computer) : null;
-    if (computer && cached) {
-      void keepComputerAwake(deps, computer).catch(() => undefined);
+    const computer = await teamComputer(deps, actor);
+    if (computer?.state !== "running" || !computer?.providerRef) {
+      return { url: null, error: null };
+    }
+    const cached = liveCachedUrl(computer);
+    if (cached) {
       void showForumSearch(deps, actor, project, computer);
       return { url: cached, error: null };
     }
-    computer = await bootTeamComputer(deps, actor, computer, boot);
     const url = await connectTeamScreen(deps, actor, computer);
     if (!url) return { url: null, error: "Failed to connect to server" };
     void showForumSearch(deps, actor, project, computer);
@@ -202,57 +198,6 @@ async function teamComputer(deps: ProjectScreenDeps, actor: Actor): Promise<Team
     orderBy: { updatedAt: "desc" },
   });
   return choosePersonaComputer(rows) ?? rows.find((row) => row.scope === "team") ?? rows[0] ?? null;
-}
-
-async function bootTeamComputer(
-  deps: ProjectScreenDeps,
-  actor: Actor,
-  existing: TeamComputer | null,
-  boot: typeof provisionComputer,
-): Promise<TeamComputer> {
-  const computer =
-    existing ??
-    (await ensureComputerRecord(deps.prisma, {
-      mode: "team",
-      workspaceId: actor.workspaceId,
-      userId: actor.userId,
-      kind: sandboxKind(deps.env.sandboxProvider),
-    }));
-  const bot = await deps.prisma.bot.findFirst({
-    where: { workspaceId: actor.workspaceId, computerId: computer.id, archivedAt: null },
-    orderBy: { createdAt: "asc" },
-    select: { id: true },
-  });
-  const runBoot = () =>
-    boot(
-      {
-        prisma: deps.prisma,
-        sandbox: deps.sandbox,
-        home: deps.home,
-        jobs: deps.jobs,
-        events: deps.events,
-        dataDir: deps.dataDir,
-      },
-      computer.id,
-      screenContext(actor, bot?.id, new AbortController().signal),
-    );
-  try {
-    await runBoot();
-  } catch (error) {
-    if (!existing?.providerRef || !deadSandbox(error)) throw error;
-    await deps.prisma.computer.updateMany({
-      where: { id: computer.id, providerRef: existing.providerRef },
-      data: { state: "stopped", providerRef: null },
-    });
-    await runBoot();
-  }
-  const ready = await deps.prisma.computer.findUnique({ where: { id: computer.id } });
-  if (!ready?.providerRef || (ready.state !== "running" && ready.state !== "booting")) {
-    const state = ready?.state ?? "stopped";
-    throw new Error(state === "error" ? "Could not open the computer" : `computer is ${state}`);
-  }
-  if (ready.state === "booting") throw new ComputerBusyError();
-  return ready;
 }
 
 async function connectTeamScreen(
@@ -286,9 +231,6 @@ async function connectTeamScreen(
     where: { id: computer.id },
     data: { screenUrl: published },
   });
-  await keepComputerAwake(deps, { ...computer, screenUrl: published, state: "running" }).catch(
-    () => undefined,
-  );
   return published;
 }
 
@@ -297,27 +239,6 @@ function publishableScreenUrl(url: string): string | null {
   if (/password=|api[_-]?key=|token=/i.test(url)) return null;
   if (url.startsWith("/novnc/") || url.startsWith("https://")) return url;
   return null;
-}
-
-async function keepComputerAwake(
-  deps: ProjectScreenDeps,
-  computer: TeamComputer,
-): Promise<boolean> {
-  if (!computer.providerRef || computer.state !== "running") return false;
-  await deps.prisma.computer.updateMany({
-    where: { id: computer.id, state: "running" },
-    data: { updatedAt: new Date() },
-  });
-  await touchRunningComputer(
-    { sandbox: deps.sandbox, jobs: deps.jobs },
-    {
-      id: computer.id,
-      homeKey: computer.homeKey,
-      providerRef: computer.providerRef,
-      kind: computer.kind,
-    },
-  );
-  return true;
 }
 
 function screenContext(
@@ -333,11 +254,6 @@ function screenContext(
     ...(botId ? { botId } : {}),
     signal,
   };
-}
-
-function sandboxKind(provider: string): string {
-  const parsed = SandboxKind.safeParse(provider);
-  return parsed.success ? parsed.data : "e2b";
 }
 
 function withViewOnly(url: string, viewOnly: boolean) {
@@ -363,6 +279,7 @@ async function showForumSearch(
   if (!computer.providerRef || (computer.state !== "running" && computer.state !== "booting")) {
     return;
   }
+  if (typeof deps.sandbox.execute !== "function") return;
   const url = forumSearchUrlFromProject(project);
   if (!url.startsWith("https://www.google.de/search?")) return;
   if (await personaBrowserOwnsDesktop(deps, actor, computer)) return;
@@ -517,11 +434,6 @@ async function runDesktop(
     if (event.type === "exit" && event.code !== 0) throw new Error("desktop command failed");
   }
   return stdout;
-}
-
-function deadSandbox(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : "";
-  return /terminated|not found|sandbox not found|killed/i.test(message);
 }
 
 function startDeadline(ms: number, message: string) {
