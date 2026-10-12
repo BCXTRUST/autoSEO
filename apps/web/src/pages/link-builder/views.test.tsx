@@ -470,7 +470,7 @@ describe("link builder screens", () => {
     expect(html).not.toContain("LIVE ");
     expect(html).toContain('aria-label="Computer"');
     expect(html).toContain('aria-label="Done"');
-    expect(html).toContain("top-4 right-4");
+    expect(html).toContain("top-3 right-3");
     expect(html).not.toContain("bottom-4 left-4");
     expect(html).not.toContain("1 link left today");
     expect(html).toContain('aria-label="Stage"');
@@ -485,11 +485,9 @@ describe("link builder screens", () => {
     expect(html).not.toContain("Checking Google for on-topic forums");
     expect(html).not.toContain("Looking for threads");
     expect(html).not.toContain("Continuing");
-    expect(html.indexOf('aria-label="Opening Vitamin D im Winter?"')).toBeLessThan(
-      html.indexOf("Opened Google search"),
-    );
-    expect(html.indexOf("Opened Google search")).toBeLessThan(
-      html.lastIndexOf("Opening Vitamin D im Winter?"),
+    const log = html.slice(html.indexOf('data-pixel="log"'));
+    expect(log.indexOf("Opening Vitamin D im Winter?")).toBeLessThan(
+      log.indexOf("Opened Google search"),
     );
     expect(html).not.toContain("Why not");
     expect(html).not.toContain("Proxy ok");
@@ -518,7 +516,7 @@ describe("link builder screens", () => {
     const chip = html.slice(corner, corner + 2500);
     expect(corner).toBeGreaterThan(-1);
     expect(chip).toContain("Opening nickles.de consent");
-    expect(chip).toContain("top-4 right-4");
+    expect(chip).toContain("top-3 right-3");
     expect(chip).not.toContain("Posted the reply");
     expect(chip).not.toContain("bottom-4 left-4");
     expect(html).not.toContain('aria-label="Filter tasks"');
@@ -749,7 +747,7 @@ describe("link builder screens", () => {
     expect(html).not.toContain("Live links today");
     expect(html).not.toContain("New links today");
     expect(html).toContain("Skipped 1 site. Needs a person.");
-    expect(html).toContain("2 accounts waiting for email.");
+    expect(html).not.toContain("2 accounts waiting for email.");
     expect(html).toContain("Skipped 1 site. Marked as spam.");
     expect(html).not.toContain("Why not");
     expect(html).not.toContain("Proxy ok");
@@ -772,6 +770,29 @@ describe("link builder screens", () => {
     expect(html).toContain(">0</span> skipped");
     expect(html).not.toContain("Filter");
     expect(html).not.toContain("waiting for an admin. Expected");
+  });
+
+  it("keeps named admin waits off the dashboard", () => {
+    const html = renderOverview(
+      statusView(),
+      [],
+      [],
+      null,
+      [],
+      [
+        { id: "h1", registrableDomain: "bulli-forum.com", status: "pending_admin" } as LbHostView,
+        {
+          id: "h2",
+          registrableDomain: "frauenselbsthilfe.de",
+          status: "pending_email",
+        } as LbHostView,
+        { id: "h3", registrableDomain: "macuser.de", status: "pending_admin" } as LbHostView,
+      ],
+    );
+    expect(html).not.toContain("waiting for the site admin");
+    expect(html).not.toContain("waiting for the confirmation email");
+    expect(html).not.toContain("We check again later");
+    expect(html).toContain(">3</span> registered");
   });
 
   it("shows credit packages with prices before a project exists", () => {
@@ -867,12 +888,13 @@ function renderOverview(
   drafts: LbDraftView[] = [],
   screenUrl?: string | null,
   tickets: LbOperatorTicketView[] = [],
+  hosts: LbHostView[] = [],
 ) {
   return renderToStaticMarkup(
     <ProjectView
       project={{ name: "Vitaminexpress" } as LbProjectDetail}
       status={status}
-      hosts={[]}
+      hosts={hosts}
       placements={[]}
       steps={steps}
       threads={[]}

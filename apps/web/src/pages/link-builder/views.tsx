@@ -27,7 +27,6 @@ import {
   LoadingState,
   Shimmer,
   SuccessPop,
-  TaskRow,
 } from "../../components/beautiful-ui/primitives";
 import {
   addWizardPage,
@@ -52,6 +51,7 @@ import {
   type doneCounts,
   homeLine,
   homeStatus,
+  latestFirst,
   type OverviewFeedItem,
   type OverviewIntent,
   overviewAction,
@@ -522,7 +522,6 @@ export function ProjectView({
         {watching ? (
           <DoneStrip
             done={summary.done}
-            notes={summary.notes}
             links={{
               value: status?.run?.liveToday ?? 0,
               max: status?.livePerDay ?? project.quotas?.livePerDay ?? 0,
@@ -723,14 +722,20 @@ function Dashboard({
     threadName: visibleThreads[0]?.title ?? null,
     searches,
     searchQuery: primaryProblemQueryFromProject(project),
-  }).filter((item) => !draftBodies.has(item.label.trim()) && showOnDashboard(item.label));
+  }).filter(
+    (item) =>
+      !draftBodies.has(item.label.trim()) &&
+      showOnDashboard(item.label) &&
+      !/waiting for the (site admin|confirmation email)/i.test(item.label),
+  );
+  const shown = latestFirst(items);
   const taskColumn = useRef<HTMLDivElement>(null);
-  const feedTail = `${items.length}:${items[items.length - 1]?.id ?? ""}`;
+  const feedHead = `${shown.length}:${shown[0]?.id ?? ""}`;
   useEffect(() => {
     const node = taskColumn.current;
     if (!node) return;
-    node.scrollTop = node.scrollHeight;
-  }, [feedTail]);
+    node.scrollTop = 0;
+  }, [feedHead]);
   const frame = overviewFrame({ steps, tickets, screenUrl });
   const action = overviewAction(
     items,
@@ -760,7 +765,7 @@ function Dashboard({
           data-task-column=""
           className="rk-scroll flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain"
         >
-          <ActivityFeed items={items} />
+          <ActivityFeed items={shown} />
         </div>
       </div>
     </section>
@@ -769,38 +774,39 @@ function Dashboard({
 
 function DoneStrip({
   done,
-  notes,
   links,
   onOpen,
 }: {
   done: ReturnType<typeof doneCounts>;
-  notes: { id: string; text: string }[];
   links: { value: number; max: number };
   onOpen: () => void;
 }) {
   const counts = [
-    ["registered", done.registered],
-    ["posted", done.posted],
-    ["skipped", done.skipped],
+    ["registered", done.registered, "#8FDBA2"],
+    ["posted", done.posted, "#8FDBA2"],
+    ["skipped", done.skipped, "#E6C07B"],
   ] as const;
   return (
-    <button type="button" aria-label="Done" className="max-w-[28rem] text-right" onClick={onOpen}>
-      <span className="block text-[13px] text-[#ECECEE]">
-        {counts.map(([label, value], index) => (
+    <button
+      type="button"
+      aria-label="Done"
+      className="border-2 border-[#3A382F] bg-[#14130F] px-3 py-2 text-right shadow-[4px_4px_0_#2A2820]"
+      onClick={onOpen}
+    >
+      <span className="block font-mono text-[13px] text-[#E8E4D8]">
+        {counts.map(([label, value, color], index) => (
           <span key={label}>
-            {index > 0 ? <span className="text-[#5E5E66]"> · </span> : null}
-            <span className="tabular-nums">{value}</span> {label}
+            {index > 0 ? <span className="text-[#6F6A5E]"> · </span> : null}
+            <span className="tabular-nums" style={{ color }}>
+              {value}
+            </span>{" "}
+            {label}
           </span>
         ))}
       </span>
-      {notes.map((note) => (
-        <span key={note.id} className="mt-0.5 block truncate text-[12.5px] text-[#A6A6AD]">
-          {note.text}
-        </span>
-      ))}
-      <span className="mt-0.5 block text-[12.5px] text-[#A6A6AD]">
+      <span className="mt-1 block font-mono text-[12px] tracking-[0.06em] text-[#A39E90]">
         Links that count{" "}
-        <span className="text-[15px] tabular-nums text-[#ECECEE]">{`${links.value}/${links.max}`}</span>
+        <span className="text-[15px] text-[#E8E4D8] tabular-nums">{`${links.value}/${links.max}`}</span>
       </span>
     </button>
   );
@@ -887,14 +893,10 @@ function ComputerPane({
       data-frame={frame?.kind ?? "pending"}
       data-stage={stage}
       data-session={session}
-      className="relative flex min-h-0 flex-col overflow-hidden rounded-[16px] bg-[#0c0c0e]"
-      style={{ boxShadow: "var(--bui-shadow-card)" }}
+      className="relative flex min-h-0 flex-col overflow-hidden border-2 border-[#3A382F] bg-[#0c0c0e] shadow-[4px_4px_0_#2A2820]"
     >
-      <div className="flex h-11 items-center gap-3 border-b border-[#2A2A31] px-3.5">
-        <span
-          className="h-2 w-2 shrink-0 rounded-full"
-          style={{ background: working ? "var(--bui-green)" : "#3a3a40" }}
-        />
+      <div className="flex h-11 items-center gap-3 border-b-2 border-[#3A382F] bg-[#1C1B16] px-3">
+        <span className="h-2 w-2 shrink-0 bg-[#8FDBA2]" style={{ opacity: working ? 1 : 0.35 }} />
         <ol aria-label="Stage" className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
           {WORK_STAGES.map((name, index) => {
             const current = name === stage;
@@ -903,12 +905,12 @@ function ComputerPane({
               <li
                 key={name}
                 aria-current={current ? "step" : undefined}
-                className={`shrink-0 whitespace-nowrap rounded-full px-2 py-1 text-[12px] leading-none sm:px-2.5 sm:text-[12.5px] ${
+                className={`shrink-0 whitespace-nowrap px-2 py-1 font-mono text-[11px] leading-none tracking-[0.04em] sm:px-2.5 ${
                   current
-                    ? "bg-[#232327] text-[#ECECEE]"
+                    ? "bg-[#2A2820] text-[#E8E4D8]"
                     : done
-                      ? "text-[#C8C8CD]"
-                      : "text-[#5E5E66]"
+                      ? "text-[#C8C4B8]"
+                      : "text-[#6F6A5E]"
                 }`}
               >
                 {current && working ? (
@@ -956,7 +958,7 @@ function ComputerPane({
         {frame && label ? (
           <div
             data-live-status="corner"
-            className="pointer-events-none absolute top-4 right-4 z-20 max-w-[min(100%-2rem,24rem)] rounded-full bg-[#0c0c0e]/92 px-3 py-2"
+            className="pointer-events-none absolute top-3 right-3 z-20 max-w-[min(100%-1.5rem,24rem)] border border-[#3A382F] bg-[#12110E] px-2 py-1.5 font-mono text-[12px]"
           >
             {working ? (
               <LoadingState label={label} />
@@ -1072,23 +1074,78 @@ function PixelTrail({ live }: { live: boolean }) {
 }
 
 function ActivityFeed({ items }: { items: OverviewFeedItem[] }) {
+  const rows = latestFirst(items);
   return (
-    <section className="min-h-0 shrink-0" aria-label="Activity" aria-live="polite">
-      <BuiCard className="overflow-hidden">
-        {items.length === 0 ? (
-          <p className="px-3 py-4 text-[13px] text-[#85858A]">No events yet</p>
+    <section aria-label="Activity" aria-live="polite" data-pixel="log">
+      <div className="overflow-hidden border-2 border-[#3A382F] bg-[#14130F] shadow-[4px_4px_0_#2A2820]">
+        <div className="flex h-8 items-center gap-1.5 border-b-2 border-[#3A382F] bg-[#1C1B16] px-2">
+          <span className="h-2 w-2 bg-[#E26D6D]" />
+          <span className="h-2 w-2 bg-[#E6C07B]" />
+          <span className="h-2 w-2 bg-[#8FDBA2]" />
+          <span className="ml-1 font-mono text-[11px] tracking-[0.16em] text-[#A39E90]">LOG</span>
+        </div>
+        {rows.length === 0 ? (
+          <p className="px-3 py-4 font-mono text-[12px] text-[#A39E90]">No events yet</p>
         ) : (
-          items.map((item) => (
-            <TaskRow
+          rows.map((item) => (
+            <div
               key={item.id}
-              status={item.status}
-              label={item.label}
-              meta={feedMeta(item.at)}
-            />
+              className="flex items-center gap-2.5 border-b border-[#2C2A24] px-2.5 py-2 last:border-b-0"
+              data-status={item.status}
+            >
+              <PixelMark status={item.status} />
+              <span className="min-w-0 flex-1 truncate text-[13px] text-[#E8E4D8]">
+                {item.label}
+              </span>
+              {feedMeta(item.at) ? (
+                <span className="shrink-0 font-mono text-[11px] text-[#8A8478] tabular-nums">
+                  {feedMeta(item.at)}
+                </span>
+              ) : null}
+            </div>
           ))
         )}
-      </BuiCard>
+      </div>
     </section>
+  );
+}
+
+function PixelMark({ status }: { status: "working" | "done" | "blocked" }) {
+  const color = status === "blocked" ? "#E26D6D" : status === "working" ? "#E6C07B" : "#8FDBA2";
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 8 8"
+      shapeRendering="crispEdges"
+      aria-hidden
+      data-pixel="mark"
+      data-mark={status}
+      className="shrink-0"
+    >
+      <rect width="8" height="8" fill={color} />
+      <rect x="1" y="1" width="6" height="6" fill="#14130F" />
+      {status === "blocked" ? (
+        <>
+          <rect x="2" y="2" width="1" height="1" fill={color} />
+          <rect x="5" y="2" width="1" height="1" fill={color} />
+          <rect x="3" y="3" width="2" height="1" fill={color} />
+          <rect x="3" y="4" width="2" height="1" fill={color} />
+          <rect x="2" y="5" width="1" height="1" fill={color} />
+          <rect x="5" y="5" width="1" height="1" fill={color} />
+        </>
+      ) : status === "working" ? (
+        <rect x="3" y="3" width="2" height="2" fill={color} />
+      ) : (
+        <>
+          <rect x="2" y="4" width="1" height="1" fill={color} />
+          <rect x="3" y="5" width="1" height="1" fill={color} />
+          <rect x="4" y="4" width="1" height="1" fill={color} />
+          <rect x="5" y="3" width="1" height="1" fill={color} />
+          <rect x="6" y="2" width="1" height="1" fill={color} />
+        </>
+      )}
+    </svg>
   );
 }
 
@@ -1766,6 +1823,8 @@ function CreditBudget({
 
 function Pill({ label }: { label: string }) {
   return (
-    <span className="rounded-full bg-[#232327] px-2 py-1 text-[12px] text-[#ECECEE]">{label}</span>
+    <span className="border border-[#3A382F] bg-[#1C1B16] px-2 py-1 font-mono text-[11px] tracking-[0.08em] text-[#E8E4D8]">
+      {label}
+    </span>
   );
 }

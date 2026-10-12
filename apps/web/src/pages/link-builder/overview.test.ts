@@ -6,6 +6,7 @@ import {
   dashboardSummary,
   homeLine,
   homeStatus,
+  latestFirst,
   overviewAction,
   overviewFeed,
   overviewFrame,
@@ -134,6 +135,27 @@ describe("overview feed", () => {
     ]);
     expect(items.map((item) => item.status)).toEqual(["done", "working"]);
     expect(overviewAction(items, true)).toBe("Opening Vitamin D im Winter?");
+  });
+
+  it("puts the newest check or X first", () => {
+    const early = step(0, "Opened diabetes-forum.de");
+    early.createdAt = "2026-10-12T06:00:02.000Z";
+    const failed = step(1, "Step failed, retrying");
+    failed.createdAt = "2026-10-12T06:00:39.000Z";
+    failed.error = "retry";
+    const opened = step(2, "Opened nickles.de");
+    opened.createdAt = "2026-10-12T06:02:40.000Z";
+    const items = overviewFeed({
+      steps: [early, failed, opened],
+      lastEvent: null,
+      working: false,
+      blockers: [],
+    });
+    expect(latestFirst(items).map((item) => item.label)).toEqual([
+      "Opened nickles.de",
+      "Step failed, retrying",
+      "Opened diabetes-forum.de",
+    ]);
   });
 
   it("drops fixture hosts and does not invent a research line before any step arrives", () => {
