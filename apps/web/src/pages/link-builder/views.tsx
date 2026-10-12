@@ -52,6 +52,7 @@ import {
   homeLine,
   homeStatus,
   latestFirst,
+  liveLinkRows,
   type OverviewFeedItem,
   type OverviewIntent,
   overviewAction,
@@ -523,6 +524,7 @@ export function ProjectView({
               value: status?.run?.liveToday ?? 0,
               max: status?.livePerDay ?? project.quotas?.livePerDay ?? 0,
             }}
+            live={liveLinkRows(placements, project.slug)}
             onOpen={() => onSurface("details")}
           />
         ) : null}
@@ -782,10 +784,12 @@ function Dashboard({
 function DoneStrip({
   done,
   links,
+  live,
   onOpen,
 }: {
   done: ReturnType<typeof doneCounts>;
   links: { value: number; max: number };
+  live: { id: string; href: string; label: string }[];
   onOpen: () => void;
 }) {
   const counts = [
@@ -793,30 +797,46 @@ function DoneStrip({
     ["posted", done.posted, "#8FDBA2"],
     ["skipped", done.skipped, "#E6C07B"],
   ] as const;
+  const shown = live.slice(0, 6);
   return (
-    <button
-      type="button"
-      aria-label="Done"
-      className="border-2 border-[#3A382F] bg-[#14130F] px-3 py-2 text-right shadow-[4px_4px_0_#2A2820]"
-      onClick={onOpen}
-    >
-      <span className="block font-mono text-[11px] tracking-[0.08em] text-[#A39E90]">All time</span>
-      <span className="mt-1 block font-mono text-[13px] text-[#E8E4D8]">
-        {counts.map(([label, value, color], index) => (
-          <span key={label}>
-            {index > 0 ? <span className="text-[#6F6A5E]"> · </span> : null}
-            <span className="tabular-nums" style={{ color }}>
-              {value}
-            </span>{" "}
-            {label}
-          </span>
-        ))}
-      </span>
-      <span className="mt-1 block font-mono text-[12px] tracking-[0.06em] text-[#A39E90]">
-        Today{" "}
-        <span className="text-[15px] text-[#E8E4D8] tabular-nums">{`${links.value}/${links.max}`}</span>
-      </span>
-    </button>
+    <div className="border-2 border-[#3A382F] bg-[#14130F] px-3 py-2 text-right shadow-[4px_4px_0_#2A2820]">
+      <button type="button" aria-label="Done" className="block w-full text-right" onClick={onOpen}>
+        <span className="block font-mono text-[11px] tracking-[0.08em] text-[#A39E90]">
+          All time
+        </span>
+        <span className="mt-1 block font-mono text-[13px] text-[#E8E4D8]">
+          {counts.map(([label, value, color], index) => (
+            <span key={label}>
+              {index > 0 ? <span className="text-[#6F6A5E]"> · </span> : null}
+              <span className="tabular-nums" style={{ color }}>
+                {value}
+              </span>{" "}
+              {label}
+            </span>
+          ))}
+        </span>
+        <span className="mt-1 block font-mono text-[12px] tracking-[0.06em] text-[#A39E90]">
+          Today{" "}
+          <span className="text-[15px] text-[#E8E4D8] tabular-nums">{`${links.value}/${links.max}`}</span>
+        </span>
+      </button>
+      <section aria-label="Live links" className="mt-2 border-t border-[#3A382F] pt-2 text-left">
+        <span className="block font-mono text-[11px] tracking-[0.08em] text-[#A39E90]">
+          Live links
+        </span>
+        {shown.length === 0 ? (
+          <span className="mt-1 block font-mono text-[15px] text-[#7EB6FF] tabular-nums">0</span>
+        ) : (
+          <ul className="mt-1 flex flex-col gap-1">
+            {shown.map((row) => (
+              <li key={row.id} className="truncate font-mono text-[12px]">
+                <ClearLink href={row.href}>{row.label}</ClearLink>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
   );
 }
 

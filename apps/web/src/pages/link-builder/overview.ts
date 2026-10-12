@@ -170,6 +170,48 @@ export function stuckHelp(ticket: { domain: string; reason: string }): {
   }
 }
 
+export interface LiveLinkRow {
+  id: string;
+  href: string;
+  label: string;
+}
+
+const LIVE_PLACEMENT = new Set(["live", "nofollow_live"]);
+
+/** Forum posts that are up. Dead, removed, and still-pending posts are not live links. */
+export function liveLinkRows(
+  placements: readonly {
+    id: string;
+    domain: string;
+    postUrl: string;
+    threadUrl: string;
+    status: string;
+    counted: boolean;
+  }[],
+  slug?: string | null,
+): LiveLinkRow[] {
+  const rows: LiveLinkRow[] = [];
+  for (const row of placements) {
+    if (!showHostToCustomer(row.domain, slug)) continue;
+    if (row.status === "dead" || row.status === "removed" || row.status === "pending") continue;
+    if (!row.counted && !LIVE_PLACEMENT.has(row.status)) continue;
+    const href = row.postUrl || row.threadUrl;
+    if (!/^https?:\/\//i.test(href)) continue;
+    rows.push({ id: row.id, href, label: liveLinkLabel(href, row.domain) });
+  }
+  return rows;
+}
+
+function liveLinkLabel(href: string, domain: string): string {
+  try {
+    const url = new URL(href);
+    const path = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "");
+    return `${url.host}${path}` || domain;
+  } catch {
+    return domain;
+  }
+}
+
 /** Skips and holds that are part of a healthy run. Not failures. */
 export function statusNotes(whyNot: LbWhyNot | null | undefined): string[] {
   if (!whyNot) return [];

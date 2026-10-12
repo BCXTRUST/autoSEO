@@ -7,6 +7,7 @@ import {
   homeLine,
   homeStatus,
   latestFirst,
+  liveLinkRows,
   overviewAction,
   overviewFeed,
   overviewFrame,
@@ -92,6 +93,51 @@ describe("overview feed", () => {
       whyNot: { ...zeroWhy, unsupportedCaptcha: 3, pendingEmail: 2, pendingAdmin: 2 },
     });
     expect(summary.done).toEqual({ registered: 4, posted: 0, skipped: 3 });
+    expect(
+      liveLinkRows(
+        [
+          {
+            id: "fixture",
+            domain: "brett-1ej2xe.example",
+            postUrl: "https://brett-1ej2xe.example/t/1",
+            threadUrl: "",
+            status: "live",
+            counted: true,
+          },
+          {
+            id: "live",
+            domain: "board.example.org",
+            postUrl: "https://board.example.org/thread-9.html",
+            threadUrl: "",
+            status: "live",
+            counted: true,
+          },
+          {
+            id: "pending",
+            domain: "office-fragen.de",
+            postUrl: "",
+            threadUrl: "https://www.office-fragen.de/thread-1.html",
+            status: "pending",
+            counted: false,
+          },
+          {
+            id: "dead",
+            domain: "gone.example.org",
+            postUrl: "https://gone.example.org/t/1",
+            threadUrl: "",
+            status: "dead",
+            counted: false,
+          },
+        ],
+        "vitaminexpress",
+      ),
+    ).toEqual([
+      {
+        id: "live",
+        href: "https://board.example.org/thread-9.html",
+        label: "board.example.org/thread-9.html",
+      },
+    ]);
     expect(summary.notes.map((note) => note.text).join(" ")).toContain("site admin");
     expect(summary.notes.map((note) => note.text).join(" ")).not.toContain("Expected");
     expect(cornerLabel("2 accounts waiting for an admin. Expected.", "Warmup")).toBe("Warmup");
