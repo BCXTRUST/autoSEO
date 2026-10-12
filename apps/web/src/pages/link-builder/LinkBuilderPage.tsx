@@ -508,17 +508,14 @@ function ProjectRoute({ projectId }: { projectId: string }) {
           setScreenUrl(next.url);
           setScreenError(null);
           setScreenPending(false);
-        } else if (next.error && !/too many requests/i.test(next.error)) {
+        } else if (next.error && /too many requests/i.test(next.error)) {
+          limited = true;
+          if (!screenUrlRef.current) setScreenPending(true);
+        } else {
           screenUrlRef.current = null;
           setScreenUrl(null);
           setScreenError(next.error);
           setScreenPending(false);
-        } else if (next.error) {
-          limited = true;
-          if (!screenUrlRef.current) setScreenPending(true);
-        } else if (!screenUrlRef.current) {
-          setScreenPending(false);
-          setScreenError(null);
         }
       } catch (err) {
         limited = isLinkBuilderRateLimit(err);

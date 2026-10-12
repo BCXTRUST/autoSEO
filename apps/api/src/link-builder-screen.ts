@@ -29,7 +29,9 @@ import {
 } from "@rakazo/linkbuilder-core";
 import { addScreenProxyCapability, shouldProxyComputerScreen } from "./screen-proxy.js";
 
-const SCREEN_REFRESH_SLACK_MS = 5 * 60_000;
+/** Must match SCREEN_PROXY_TTL_MS in screen-proxy.ts. A stored URL older than this is dead. */
+const SCREEN_CAPABILITY_TTL_MS = 60 * 60_000;
+const SCREEN_URL_MAX_AGE_MS = 15_000;
 /** How long this request waits. The sandbox call keeps running so an abort cannot kill it. */
 const SCREEN_REQUEST_MS = 90_000;
 
@@ -58,8 +60,8 @@ type TeamComputer = {
 };
 
 /**
- * A proxied noVNC URL that still has time left. Raw provider URLs stay server-side.
- * The stream itself keeps painting; this only decides when to mint a new capability.
+ * A proxied noVNC URL minted in the last few seconds. An older address can point
+ * at a stream that already died, and noVNC then shows "Failed to connect".
  */
 export function reusableScreenUrl(url: string | null | undefined, now = Date.now()): string | null {
   if (!url) return null;
@@ -73,7 +75,9 @@ export function reusableScreenUrl(url: string | null | undefined, now = Date.now
   const match = path.match(/\/(?:view|control)\/(\d+)\./);
   if (!match) return null;
   const expires = Number(match[1]);
-  if (!Number.isFinite(expires) || expires - now < SCREEN_REFRESH_SLACK_MS) return null;
+  const remaining = expires - now;
+  const age = SCREEN_CAPABILITY_TTL_MS - remaining;
+  if (!Number.isFinite(age) || remaining <= 0 || age > SCREEN_URL_MAX_AGE_MS) return null;
   return url;
 }
 
@@ -143,10 +147,8 @@ export async function openProjectComputerScreen(
     return await Promise.race([flight, deadline.promise]);
   } catch (error) {
     if (error instanceof ORPCError) throw error;
-    if (isStillStarting(error)) return { url: null, error: "Failed to connect to server" };
-    const message = publicScreenError(error);
-    console.error("link builder screen", error instanceof Error ? error.name : "Error", message);
-    return { url: null, error: message };
+    if (isStillStarting(error)) return { url: null, error: null };
+    return quietScreenFailure(error);
   } finally {
     deadline.cancel();
   }
@@ -171,16 +173,21 @@ async function openScreen(
       return { url: cached, error: null };
     }
     const url = await connectTeamScreen(deps, actor, computer);
-    if (!url) return { url: null, error: "Failed to connect to server" };
+    if (!url) return { url: null, error: null };
     void showForumSearch(deps, actor, project, computer);
     return { url, error: null };
   } catch (error) {
     if (error instanceof ORPCError) throw error;
     if (error instanceof ComputerBusyError) return { url: null, error: null };
-    const message = publicScreenError(error);
-    console.error("link builder screen", error instanceof Error ? error.name : "Error", message);
-    return { url: null, error: message };
+    return quietScreenFailure(error);
   }
+}
+
+function quietScreenFailure(error: unknown): { url: null; error: string | null } {
+  const message = publicScreenError(error);
+  console.error("link builder screen", error instanceof Error ? error.name : "Error", message);
+  if (message === "Failed to connect to server") return { url: null, error: null };
+  return { url: null, error: message };
 }
 
 function isStillStarting(error: unknown): boolean {
