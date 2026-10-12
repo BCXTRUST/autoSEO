@@ -701,8 +701,16 @@ export class LinkBuilderRealRunner {
       planKind === "done" ||
       planKind === "close" ||
       planKind === "select_host" ||
-      /skipp|gave up|captcha not supported|waiting for the verification/i.test(lastAction);
+      /skipp|gave up|captcha not supported|waiting for the (verification|site admin|confirmation email)/i.test(
+        lastAction,
+      );
     if (!idle) return;
+    await this.deps.prisma.lbRun
+      .updateMany({
+        where: { id: ctx.run.id, leaseOwner: this.workerId },
+        data: { leaseExpiresAt: new Date(0) },
+      })
+      .catch(() => undefined);
     await this.closeSession(ctx.project.id);
     await this.deps
       .releaseDesktop(ctx.project.id, ctx.adapter, stuck ? "kill" : "stop")

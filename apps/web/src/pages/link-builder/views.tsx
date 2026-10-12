@@ -121,14 +121,9 @@ export function DashboardView({
                 </button>
                 <Pill label={status} />
                 {help && onHelp ? (
-                  <button
-                    type="button"
-                    className="rounded-full bg-[#232327] px-2 py-1 text-left text-[12px] text-[#ECECEE]"
-                    aria-label={help.label}
-                    onClick={() => onHelp(card)}
-                  >
+                  <BuiButton label={help.label} onClick={() => onHelp(card)}>
                     {help.label}
-                  </button>
+                  </BuiButton>
                 ) : null}
               </div>
               <button
@@ -487,14 +482,9 @@ export function ProjectView({
         <div className="flex flex-wrap items-start gap-3">
           <Pill label={statusWord} />
           {help && onHelp && !stuck ? (
-            <button
-              type="button"
-              className="rounded-full bg-[#232327] px-2 py-1 text-[12px] text-[#ECECEE]"
-              aria-label={help.label}
-              onClick={onHelp}
-            >
+            <BuiButton label={help.label} onClick={onHelp}>
               {help.label}
-            </button>
+            </BuiButton>
           ) : null}
           <CreditBudget
             balance={status?.credits?.balance ?? null}
@@ -1073,6 +1063,46 @@ function PixelTrail({ live }: { live: boolean }) {
   );
 }
 
+const LINK_CLASS =
+  "text-[#7EB6FF] underline decoration-[#7EB6FF] decoration-2 underline-offset-[3px]";
+
+function httpUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function ClearLink({ href, children }: { href: string; children: React.ReactNode }) {
+  const safe = httpUrl(href);
+  if (!safe) return <span>{children}</span>;
+  return (
+    <a href={safe} target="_blank" rel="noreferrer" className={LINK_CLASS}>
+      {children}
+    </a>
+  );
+}
+
+function LinkedText({ text }: { text: string }) {
+  const parts = text.split(/((?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?)/i);
+  return parts.map((part, index) => {
+    if (!/^(?:https?:\/\/)?(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s]*)?$/i.test(part)) {
+      return <span key={`${index}-${part}`}>{part}</span>;
+    }
+    const href = /^https?:\/\//i.test(part) ? httpUrl(part) : httpUrl(`https://${part}`);
+    if (!href) return <span key={`${index}-${part}`}>{part}</span>;
+    return (
+      <ClearLink key={`${index}-${part}`} href={href}>
+        {part}
+      </ClearLink>
+    );
+  });
+}
+
 function ActivityFeed({ items }: { items: OverviewFeedItem[] }) {
   const rows = latestFirst(items);
   return (
@@ -1095,7 +1125,7 @@ function ActivityFeed({ items }: { items: OverviewFeedItem[] }) {
             >
               <PixelMark status={item.status} />
               <span className="min-w-0 flex-1 truncate text-[13px] text-[#E8E4D8]">
-                {item.label}
+                <LinkedText text={item.label} />
               </span>
               {feedMeta(item.at) ? (
                 <span className="shrink-0 font-mono text-[11px] text-[#8A8478] tabular-nums">
@@ -1183,7 +1213,9 @@ function ForumsPicked({ hosts, threads }: { hosts: LbHostView[]; threads: LbThre
             key={host.id}
             className="flex items-baseline justify-between gap-3 border-b border-[#2A2A31] px-3 py-2 text-[13px] last:border-b-0"
           >
-            <span className="text-[#ECECEE]">{host.registrableDomain}</span>
+            <span className="text-[#ECECEE]">
+              <ClearLink href={host.homepageUrl}>{host.registrableDomain}</ClearLink>
+            </span>
           </div>
         ))}
         {threads.map((thread) => (
@@ -1191,7 +1223,11 @@ function ForumsPicked({ hosts, threads }: { hosts: LbHostView[]; threads: LbThre
             key={thread.id}
             className="break-words border-b border-[#2A2A31] px-3 py-2 text-[13px] text-[#C8C8CD] last:border-b-0"
           >
-            {thread.title}
+            {httpUrl(thread.url) ? (
+              <ClearLink href={thread.url}>{thread.title || thread.domain}</ClearLink>
+            ) : (
+              thread.title
+            )}
           </div>
         ))}
       </BuiCard>
@@ -1210,8 +1246,14 @@ function LinksPlaced({ rows }: { rows: LbPlacementView[] }) {
             key={row.id}
             className="flex items-baseline justify-between gap-3 border-b border-[#2A2A31] px-3 py-2 text-[13px] last:border-b-0"
           >
-            <span className="text-[#ECECEE]">{row.domain}</span>
-            <span className="text-[12px] text-[#8A8A90]">{row.status}</span>
+            <span className="text-[#ECECEE]">
+              <ClearLink href={row.postUrl || row.threadUrl}>{row.domain}</ClearLink>
+            </span>
+            {httpUrl(row.targetUrl) ? (
+              <ClearLink href={row.targetUrl}>{row.anchorText || "Open link"}</ClearLink>
+            ) : (
+              <span className="text-[12px] text-[#8A8A90]">{row.status}</span>
+            )}
           </div>
         ))}
       </BuiCard>
@@ -1247,6 +1289,11 @@ function DraftNotes({
       {drafts.map((draft) => (
         <BuiCard key={draft.id} className="flex flex-col gap-2 p-3 text-[13px] text-[#C9C9CE]">
           <p className="break-words">{draft.body}</p>
+          {httpUrl(draft.targetUrl) ? (
+            <ClearLink href={draft.targetUrl ?? ""}>
+              {draft.anchorText || draft.targetUrl}
+            </ClearLink>
+          ) : null}
           {draftsOnly && draft.status === "drafted" && onDecide ? (
             <div className="flex gap-2">
               <BuiButton label="Approve draft" onClick={() => onDecide(draft.id, "approved")}>

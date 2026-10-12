@@ -319,7 +319,12 @@ describe("link builder screens", () => {
         hosts={
           [
             { id: "host-1", registrableDomain: "fragen-1ej2xe.example", status: "qualified" },
-            { id: "host-2", registrableDomain: "rueckenforum.de", status: "qualified" },
+            {
+              id: "host-2",
+              registrableDomain: "rueckenforum.de",
+              homepageUrl: "https://rueckenforum.de",
+              status: "qualified",
+            },
           ] as LbHostView[]
         }
         placements={
@@ -342,6 +347,8 @@ describe("link builder screens", () => {
     );
     expect(html).toContain('aria-label="Forums"');
     expect(html).toContain("rueckenforum.de");
+    expect(html).toContain('href="https://rueckenforum.de/"');
+    expect(html).toContain("underline");
     expect(html).not.toContain("qualified");
     expect(html).not.toContain("Discovered");
     expect(html).not.toContain("Warming");
@@ -680,7 +687,10 @@ describe("link builder screens", () => {
     const workingAt = html.indexOf('data-status="working"');
     const nextStatus = html.indexOf("data-status=", workingAt + 12);
     const row = html.slice(workingAt, nextStatus === -1 ? undefined : nextStatus);
-    expect(row).toContain("Searched Google.de for Magnesium Krämpfe Forum");
+    expect(row).toContain("Searched ");
+    expect(row).toContain('href="https://google.de/"');
+    expect(row).toContain("Google.de");
+    expect(row).toContain("for Magnesium Krämpfe Forum");
     expect(row).not.toContain("Verify");
     expect(html).not.toContain('data-status="done"');
   });
