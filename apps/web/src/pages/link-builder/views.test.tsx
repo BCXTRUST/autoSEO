@@ -524,14 +524,14 @@ describe("link builder screens", () => {
     const corner = html.indexOf('data-live-status="corner"');
     const chip = html.slice(corner, corner + 2500);
     expect(corner).toBeGreaterThan(-1);
-    expect(chip).toContain("Opening nickles.de consent");
+    expect(chip).toContain("On nickles.de consent");
     expect(chip).toContain("top-3 right-3");
     expect(chip).not.toContain("Posted the reply");
     expect(chip).not.toContain("bottom-4 left-4");
     expect(html).not.toContain('aria-label="Filter tasks"');
     const closed = renderOverview(status, [posted]);
     expect(closed).toContain("Posted the reply");
-    expect(closed).not.toContain("Opening nickles.de consent");
+    expect(closed).not.toContain("On nickles.de consent");
   });
 
   it("shows the stage rail and the current action when no screen exists", () => {

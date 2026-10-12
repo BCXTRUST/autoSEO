@@ -747,6 +747,7 @@ function Dashboard({
     items,
     working,
     frame?.kind === "url" ? (status?.run?.currentUrl ?? null) : null,
+    status?.run?.lastAction ?? null,
   );
   const stage = overviewStage({
     runStatus: working ? "running" : (status?.run?.status ?? null),

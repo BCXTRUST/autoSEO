@@ -94,7 +94,7 @@ export class OpenRouterTextModel implements TextModel {
   ): Promise<TextModelResult<T>> {
     const key = await this.apiKey(context);
     this.onSecret?.(key);
-    const modelId = this.models[request.lane];
+    const modelId = requestedModel(request.modelId, this.models[request.lane]);
     let response: Response;
     try {
       response = await this.fetchImpl(this.baseUrl, {
@@ -163,6 +163,11 @@ export function lanesFromEnv(
     fallback:
       override?.fallback || env.LINK_BUILDER_MODEL_FALLBACK || DEFAULT_TEXT_MODEL_LANES.fallback,
   };
+}
+
+function requestedModel(override: string | undefined, laneModel: string): string {
+  if (override && /^[A-Za-z0-9._:/-]{1,80}$/.test(override)) return override;
+  return laneModel;
 }
 
 function parseJsonContent(content: string): unknown {
