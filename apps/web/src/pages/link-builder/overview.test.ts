@@ -142,6 +142,7 @@ describe("overview feed", () => {
     expect(summary.notes.map((note) => note.text).join(" ")).not.toContain("Expected");
     expect(cornerLabel("2 accounts waiting for an admin. Expected.", "Warmup")).toBe("Warmup");
     expect(cornerLabel("Opening yamedo.de", "Warmup")).toBe("Opening yamedo.de");
+    expect(cornerLabel("Found [3.3] Fehler bei E-Mail Versand", "Warmup")).toBe("Warmup");
     expect(
       showOnDashboard(
         "die Muskelfunktion, und ein Mangel kann sich unter anderem durch Muskelkrämpfe bemerkbar machen. Schätzungen gehen davon aus.",
@@ -407,6 +408,18 @@ describe("overview feed", () => {
       "Found Vitamin D im Winter?",
     ]);
     expect(overviewAction(named, true)).toBe("Found Vitamin D im Winter?");
+    const mailError = overviewFeed({
+      steps: [step(0, "Looking for threads"), step(1, "Continuing")],
+      lastEvent: null,
+      working: true,
+      blockers: [],
+      forumName: "office-fragen.de",
+      threadName: "[3.3] Fehler bei E-Mail Versand",
+    });
+    expect(mailError.map((item) => item.label)).toContain("Mail did not send. Trying again.");
+    expect(mailError.map((item) => item.label).join(" ")).not.toContain("Fehler bei E-Mail");
+    expect(overviewAction(mailError, true)).not.toContain("Mail");
+    expect(cornerLabel(overviewAction(mailError, true), "Warmup")).not.toContain("Fehler");
     const invented = overviewFeed({
       steps: [step(0, "Checking Google for on-topic forums"), step(1, "Continuing")],
       lastEvent: "Found forum forum-a.example",

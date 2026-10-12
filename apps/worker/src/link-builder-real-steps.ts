@@ -60,7 +60,9 @@ import {
   isFixtureHostDomain,
   isHardEdgeBlock,
   isHostTerminal,
+  isMailSendFailure,
   isWarmupMet,
+  MAIL_SKIP_STATUS,
   marketForHost,
   PAGE_HELPER_EXTENSION_ID,
   PAGE_HELPER_VERSION,
@@ -93,6 +95,7 @@ import {
   type BoardThread,
   boardDriverFor,
   type CaptchaChallenge,
+  clickResendMail,
   enrichCaptchaChallenge,
   formErrorFixable,
   GenericFormDriver,
@@ -1274,6 +1277,13 @@ async function genericJourneyStep(
   }
 
   const reason = journey.parkReason ?? "unmapped";
+  if (reason === "mail_send_failed") {
+    return withSolve({
+      ...base,
+      lastAction: MAIL_SKIP_STATUS,
+      apply: (tx) => moveHost(tx, host, "failed", { statusReason: "mail_send_failed" }),
+    });
+  }
   if (
     reason === "missing_site_key" ||
     reason === "captcha_rejected" ||
@@ -2061,21 +2071,49 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
   const driver = requireDriver(host, entry);
   const { mailbox } = ctx.services;
   if (!ctx.project.mailboxId || !mailbox.listMessages) {
-    throw new StepFailure("Project mailbox cannot be read");
+    return {
+      kind: "step",
+      hostId: host.id,
+      lastAction: MAIL_SKIP_STATUS,
+      apply: (tx) => moveHost(tx, host, "failed", { statusReason: "mail_send_failed" }),
+    };
   }
   const account = ctx.account;
   if (!account) throw new StepFailure("Host has no account");
-  const mails = await mailbox.listMessages(
-    ctx.project.mailboxId,
-    { since: new Date(account.createdAt.getTime() - 5 * 60_000) },
-    ctx.adapter,
-  );
-  let link: string | null = null;
-  for (const mail of [...mails].reverse()) {
-    link = extractVerificationLink(mail, host.homepageUrl);
-    if (link) break;
+  const since = { since: new Date(account.createdAt.getTime() - 5 * 60_000) };
+  const readInbox = async () => {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        return await mailbox.listMessages?.(ctx.project.mailboxId ?? "", since, ctx.adapter);
+      } catch {
+        if (attempt === 1) return [];
+      }
+    }
+    return [];
+  };
+  const linkFrom = (mails: Awaited<ReturnType<typeof readInbox>>) => {
+    let found: string | null = null;
+    for (const mail of [...(mails ?? [])].reverse()) {
+      found = extractVerificationLink(mail, host.homepageUrl);
+      if (found) break;
+    }
+    return found;
+  };
+  let link = linkFrom(await readInbox());
+  if (!link) {
+    const resent = await clickResendMail(entry.session);
+    if (resent) await new Promise((resolve) => setTimeout(resolve, 1500));
+    link = linkFrom(await readInbox());
   }
-  if (!link) return { kind: "wait", reason: "verification_mail" };
+  if (!link) {
+    await entry.session.goto("about:blank").catch(() => undefined);
+    return {
+      kind: "step",
+      hostId: host.id,
+      lastAction: MAIL_SKIP_STATUS,
+      apply: (tx) => moveHost(tx, host, "failed", { statusReason: "mail_send_failed" }),
+    };
+  }
   await entry.session.goto(link);
   const activation = await driver.activationResult(entry.session);
   const artifactIds = await screenshot(ctx, entry, "activated");
@@ -2164,12 +2202,14 @@ async function threadsForReply(
         if (error instanceof UnmappedFormError) throw error;
         found = [];
       }
-      const fresh = found.filter((thread) => !skip.has(thread.url));
+      const fresh = found.filter(
+        (thread) => !skip.has(thread.url) && !isMailSendFailure(thread.title),
+      );
       if (fresh.length > 0) return { threads: fresh, searched: true };
     }
   }
   const listed = (await driver.listThreads(session, homepageUrl)).filter(
-    (thread) => !skip.has(thread.url),
+    (thread) => !skip.has(thread.url) && !isMailSendFailure(thread.title),
   );
   return { threads: listed, searched: false };
 }
@@ -2630,6 +2670,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   const upsertRejected = async (tx: Tx) => {
     for (const rejection of rejections) {
       if (chosen && rejection.url === chosen.thread.url && !chosen.refusal) continue;
+      if (isMailSendFailure(rejection.title)) continue;
       await tx.lbThreadCandidate.upsert({
         where: { hostId_url: { hostId: host.id, url: rejection.url } },
         create: {

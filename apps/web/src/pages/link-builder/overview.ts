@@ -4,9 +4,12 @@ import {
   foundForumLine,
   foundThreadLine,
   isCannedResearchLine,
+  isMailDeliveryStatus,
+  isMailSendFailure,
   isStaleResearchLine,
   isWithinWindow,
   localClock,
+  MAIL_RETRY_STATUS,
   mentionsExampleDomain,
   mentionsFixtureHost,
   parseClockTime,
@@ -340,6 +343,7 @@ export function cornerLabel(action: string, fallback: string): string {
   const text = action.trim();
   if (!text || text.length > 72) return fallback;
   if (/waiting for|skipped \d/i.test(text)) return fallback;
+  if (isMailDeliveryStatus(text)) return fallback;
   return text;
 }
 
@@ -416,7 +420,7 @@ export function overviewFeed(input: {
     });
   const items: OverviewFeedItem[] = [];
   for (const step of steps) {
-    const label = step.lastAction?.trim() || step.kind;
+    const label = mailStatusLabel(step.lastAction?.trim() || step.kind);
     const at = step.createdAt;
     const previous = items.at(-1);
     const duplicate =
@@ -430,7 +434,7 @@ export function overviewFeed(input: {
     });
   }
   const seen = new Set(items.map((item) => item.label));
-  const event = input.lastEvent?.trim() ?? "";
+  const event = mailStatusLabel(input.lastEvent?.trim() ?? "");
   const researchAlready = items.some((item) => /research/i.test(item.label));
   const hiddenEvent =
     isStaleResearchLine(event) ||
@@ -609,13 +613,17 @@ export function overviewAction(
 ): string {
   const live = livePageLabel(liveUrl);
   const host = liveHost(liveUrl);
-  const noted = currentAction?.trim() ?? "";
-  if (live && isOpenPageStep(noted, host)) return noted;
-  const latest = [...items].reverse().find((item) => item.status !== "blocked");
+  const noted = mailStatusLabel(currentAction?.trim() ?? "");
+  if (live && isOpenPageStep(noted, host) && !isMailDeliveryStatus(noted)) return noted;
+  const latest = [...items]
+    .reverse()
+    .find((item) => item.status !== "blocked" && !isMailDeliveryStatus(item.label));
   if (live && latest && isOpenPageStep(latest.label, host)) return latest.label;
   if (live) return live;
   if (working) {
-    const current = [...items].reverse().find((item) => item.status === "working");
+    const current = [...items]
+      .reverse()
+      .find((item) => item.status === "working" && !isMailDeliveryStatus(item.label));
     return current?.label || "Working";
   }
   return latest?.label ?? "";
@@ -686,7 +694,22 @@ function placeFoundLines(
     }
   }
   insertRanked(items, foundForumLine(forum));
-  insertRanked(items, foundThreadLine(threadName));
+  if (isMailSendFailure(threadName)) insertMailStatus(items);
+  else insertRanked(items, foundThreadLine(threadName));
+}
+
+function mailStatusLabel(label: string): string {
+  return isMailSendFailure(label) ? MAIL_RETRY_STATUS : label;
+}
+
+function insertMailStatus(items: OverviewFeedItem[]) {
+  if (items.some((item) => isMailDeliveryStatus(item.label))) return;
+  items.push({
+    id: `mail:${MAIL_RETRY_STATUS}`,
+    label: MAIL_RETRY_STATUS,
+    status: "done",
+    at: null,
+  });
 }
 
 function insertRanked(items: OverviewFeedItem[], line: string | null) {

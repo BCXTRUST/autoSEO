@@ -5,7 +5,11 @@ import type {
   InboundMail,
 } from "@rakazo/adapter-kit";
 import { isSecretRegistrationPrompt } from "@rakazo/adapter-kit";
-import { extractVerificationLink, simplifyForumUsername } from "@rakazo/linkbuilder-core";
+import {
+  extractVerificationLink,
+  isMailSendFailure,
+  simplifyForumUsername,
+} from "@rakazo/linkbuilder-core";
 import { placeCaptchaToken, solveImageCaptcha } from "./captcha.js";
 import type { BoardAccount, CaptchaChallenge, RegistrationResult } from "./driver.js";
 import type { RegistrationProfile } from "./generic.js";
@@ -13,6 +17,36 @@ import { GenericFormDriver } from "./generic.js";
 import { formErrorFixable, usernameFormatRejected } from "./messages.js";
 
 const SUBMIT_BUDGET = 3;
+
+const RESEND_CONTROL =
+  /(?:e-?mail|mail|aktivierung|activation|verification).{0,48}(?:erneut|nochmals|resend|again)|(?:erneut|nochmals|resend|send again).{0,48}(?:e-?mail|mail|aktivierung|activation|verification)/i;
+
+/** Clicks a resend control when the page offers one. Never clicks a generic send. */
+export async function clickResendMail(session: BrowserSession): Promise<boolean> {
+  const controls = (await session.clickables?.()) ?? [];
+  const control = controls.find((item) => RESEND_CONTROL.test(`${item.text} ${item.selector}`));
+  if (!control) return false;
+  await session.click(control.selector);
+  return true;
+}
+
+/** One inbox read, then one retry if the mailbox itself fails. */
+export async function pullVerificationLink(
+  mailbox: GenericJourneyMailbox,
+  inboxId: string,
+  context: AdapterContext,
+  origin: string,
+): Promise<string | null> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const mail = (await mailbox.listMessages(inboxId, {}, context)).at(-1);
+      return mail ? extractVerificationLink(mail, origin) : null;
+    } catch {
+      if (attempt === 1) return null;
+    }
+  }
+  return null;
+}
 
 export interface GenericJourneyMailbox {
   listMessages(
@@ -100,11 +134,7 @@ export async function runGenericRegistrationJourney(
     solved += placed.solved;
     latest = await driver.submitRegistration(session);
     registration.push(latest.kind);
-    if (
-      latest.kind === "form_error" &&
-      !simplified &&
-      usernameFormatRejected(latest.messages)
-    ) {
+    if (latest.kind === "form_error" && !simplified && usernameFormatRejected(latest.messages)) {
       const next = simplifyForumUsername(account.username);
       if (next !== account.username) {
         account.username = next;
@@ -141,9 +171,18 @@ export async function runGenericRegistrationJourney(
 
   let activation: GenericJourneyResult["activation"] = null;
   if (latest.kind === "pending_email") {
-    const mail = (await mailbox.listMessages(inboxId, {}, context)).at(-1);
-    const link = mail ? extractVerificationLink(mail, origin) : null;
+    const page = await session.pageText();
+    let link = await pullVerificationLink(mailbox, inboxId, context, origin);
     if (!link) {
+      const resent = await clickResendMail(session);
+      if (resent) link = await pullVerificationLink(mailbox, inboxId, context, origin);
+    }
+    if (!link) {
+      const after = await session.pageText();
+      if (isMailSendFailure(page) || isMailSendFailure(after)) {
+        await session.goto("about:blank").catch(() => undefined);
+        return noteName(parked("mail_send_failed", null, registration, detected, solved));
+      }
       return noteName(parked("verification_mail_missing", null, registration, detected, solved));
     }
     await session.goto(link);

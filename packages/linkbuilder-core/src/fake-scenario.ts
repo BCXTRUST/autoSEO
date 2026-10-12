@@ -7,6 +7,7 @@ import type {
   LbRunStatus,
   LbWhyNot,
 } from "@rakazo/contracts";
+import { isMailSendFailure } from "./mail-delivery.js";
 import { searchedGoogleLine } from "./problem-queries.js";
 import { type RunCounters, startRunCounters } from "./run-state.js";
 import { initialWorkState, transitionWork } from "./work-stage.js";
@@ -161,7 +162,8 @@ export function foundForumLine(name: string | null | undefined): string | null {
 
 export function foundThreadLine(name: string | null | undefined): string | null {
   const thread = researchResultName(name);
-  return thread ? `Found ${thread}` : null;
+  if (!thread || isMailSendFailure(thread)) return null;
+  return `Found ${thread}`;
 }
 
 export function isStaleResearchLine(label: string): boolean {
