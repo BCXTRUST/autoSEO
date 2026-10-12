@@ -505,6 +505,54 @@ describe("link builder screens", () => {
     expect(html).not.toContain("12 tokens");
   });
 
+  it("shows the live forum posts in the done card", () => {
+    const html = renderToStaticMarkup(
+      <ProjectView
+        project={{ name: "Vitaminexpress", slug: "vitaminexpress" } as LbProjectDetail}
+        status={statusView()}
+        hosts={[]}
+        placements={
+          [
+            {
+              id: "place-live",
+              domain: "board.example.org",
+              postUrl: "https://board.example.org/thread-9.html",
+              threadUrl: "https://board.example.org/forum-2.html",
+              status: "live",
+              counted: true,
+              rel: [],
+            },
+            {
+              id: "place-fixture",
+              domain: "brett-1ej2xe.example",
+              postUrl: "https://brett-1ej2xe.example/t/1",
+              threadUrl: "",
+              status: "live",
+              counted: true,
+              rel: [],
+            },
+          ] as LbPlacementView[]
+        }
+        steps={[]}
+        threads={[]}
+        drafts={[]}
+        tickets={[]}
+        surface="dashboard"
+        onSurface={noop}
+        onStart={noop}
+        onPause={noop}
+        onStop={noop}
+        loadArtifact={loadArtifact}
+        busy={false}
+      />,
+    );
+    expect(html).toContain('aria-label="Live links"');
+    expect(html).toContain("https://board.example.org/thread-9.html");
+    expect(html).toContain("board.example.org/thread-9.html");
+    expect(html).not.toContain("brett-1ej2xe.example");
+    expect(html).toContain(">0/1</span>");
+  });
+
   it("describes the open desktop page instead of a finished reply", () => {
     const posted = step(0, "place", []);
     posted.lastAction = "Posted the reply";
