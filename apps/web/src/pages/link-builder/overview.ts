@@ -123,7 +123,7 @@ export function homeLine(input: {
   return input.status;
 }
 
-const PERSON_REASONS = new Set(["missing_password", "admin_approval"]);
+const PERSON_REASONS = new Set(["missing_password"]);
 
 /** Open ticket a person can finish. Captcha and unknown pages stay off this screen. */
 export function personTicket<T extends { status: string; reason: string }>(
@@ -152,8 +152,8 @@ export function stuckHelp(ticket: { domain: string; reason: string }): {
       };
     case "admin_approval":
       return {
-        stuck: `Waiting for an admin at ${site}.`,
-        next: "Continue when the admin has approved it.",
+        stuck: `Waiting for the site admin to approve the registration at ${site}.`,
+        next: "We check again later. You do not need to approve it.",
       };
     case "unknown_page_state":
       return {
@@ -191,11 +191,122 @@ export function statusNotes(whyNot: LbWhyNot | null | undefined): string[] {
   if (whyNot.pendingAdmin > 0) {
     lines.push(
       whyNot.pendingAdmin === 1
-        ? "1 account waiting for an admin. Expected."
-        : `${whyNot.pendingAdmin} accounts waiting for an admin. Expected.`,
+        ? "1 registration waiting for the site admin. We check again later."
+        : `${whyNot.pendingAdmin} registrations waiting for the site admin. We check again later.`,
     );
   }
   return lines;
+}
+
+const REGISTERED_HOST = new Set(["pending_email", "pending_admin", "warming", "ready", "used"]);
+const SKIPPED_HOST = new Set(["unsupported_captcha", "denied", "spam_blocked"]);
+
+export interface DoneCounts {
+  registered: number;
+  posted: number;
+  skipped: number;
+}
+
+/** What already happened, as three counts. Fixture boards stay out. */
+export function doneCounts(
+  hosts: readonly { registrableDomain: string; status: string }[],
+  placements: readonly { domain: string; status: string }[],
+  slug?: string | null,
+): DoneCounts {
+  const visibleHosts = hosts.filter((host) => showHostToCustomer(host.registrableDomain, slug));
+  const visiblePosts = placements.filter(
+    (row) => showHostToCustomer(row.domain, slug) && row.status !== "dead",
+  );
+  return {
+    registered: visibleHosts.filter((host) => REGISTERED_HOST.has(host.status)).length,
+    posted: visiblePosts.length,
+    skipped: visibleHosts.filter((host) => SKIPPED_HOST.has(host.status)).length,
+  };
+}
+
+export interface WaitLine {
+  id: string;
+  text: string;
+}
+
+/** One line per site that is actually waiting. Names the site and what the admin must do. */
+export function waitLines(input: {
+  hosts: readonly { id: string; registrableDomain: string; status: string }[];
+  steps: readonly { id: string; lastAction: string | null }[];
+  slug?: string | null;
+}): WaitLine[] {
+  const lines: WaitLine[] = [];
+  const seen = new Set<string>();
+  const push = (id: string, text: string) => {
+    if (seen.has(text)) return;
+    seen.add(text);
+    lines.push({ id, text });
+  };
+  for (const host of input.hosts) {
+    if (!showHostToCustomer(host.registrableDomain, input.slug)) continue;
+    if (host.status === "pending_admin") {
+      push(
+        `admin:${host.id}`,
+        `${host.registrableDomain} — waiting for the site admin to approve the registration. We check again later.`,
+      );
+    }
+    if (host.status === "pending_email") {
+      push(
+        `email:${host.id}`,
+        `${host.registrableDomain} — waiting for the confirmation email. We check again later.`,
+      );
+    }
+  }
+  for (const step of [...input.steps].reverse()) {
+    const label = step.lastAction?.trim() ?? "";
+    if (!/^Waiting for the site admin to approve the post at /i.test(label)) continue;
+    push(`post:${step.id}`, label);
+  }
+  return lines;
+}
+
+/** Counts for the top of the dashboard. Host rows win; the status totals fill a gap. */
+export function dashboardSummary(input: {
+  hosts: readonly { id: string; registrableDomain: string; status: string }[];
+  placements: readonly { domain: string; status: string }[];
+  steps: readonly { id: string; lastAction: string | null }[];
+  slug?: string | null;
+  whyNot?: LbWhyNot | null;
+}): { done: DoneCounts; notes: WaitLine[] } {
+  const counted = doneCounts(input.hosts, input.placements, input.slug);
+  const why = input.whyNot;
+  const done: DoneCounts = {
+    registered: Math.max(counted.registered, (why?.pendingEmail ?? 0) + (why?.pendingAdmin ?? 0)),
+    posted: counted.posted,
+    skipped: Math.max(
+      counted.skipped,
+      (why?.unsupportedCaptcha ?? 0) + (why?.parked ?? 0) + (why?.spamBlocked ?? 0),
+    ),
+  };
+  const named = waitLines(input);
+  const notes =
+    named.length > 0
+      ? named.slice(0, 3)
+      : statusNotes(why)
+          .slice(0, 3)
+          .map((text, index) => ({ id: `note:${index}`, text }));
+  return { done, notes };
+}
+
+/** The screen chip stays a short action. A wait or a paragraph stays off the picture. */
+export function cornerLabel(action: string, fallback: string): string {
+  const text = action.trim();
+  if (!text || text.length > 72) return fallback;
+  if (/waiting for|skipped \d/i.test(text)) return fallback;
+  return text;
+}
+
+/** The check list stays short. Post text and essays stay on Details. */
+export function showOnDashboard(label: string): boolean {
+  const text = label.trim();
+  if (!text || text.length > 90 || text.includes("\n")) return false;
+  const sentences = text.split(/[.!?]/).filter((part) => part.trim().length > 0);
+  return !(sentences.length > 1 && text.length > 60);
 }
 
 function skippedSites(count: number, why: string): string {

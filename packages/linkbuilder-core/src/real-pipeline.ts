@@ -14,6 +14,7 @@ export const REAL_STEP_KINDS = [
   "register",
   "captcha",
   "email_verify",
+  "admin_check",
   "warmup",
   "warmup_post",
   "post",
@@ -28,6 +29,7 @@ export const BROWSER_STEPS: ReadonlySet<RealStepKind> = new Set([
   "register",
   "captcha",
   "email_verify",
+  "admin_check",
   "warmup_post",
   "post",
 ]);
@@ -52,6 +54,11 @@ export interface RealPlanInput {
   warmupPostsShort?: boolean;
   /** False until research has chosen this host. Omitted means research already finished. */
   researchComplete?: boolean;
+  /**
+   * A pending_admin host is due for another look. False means other sites go first.
+   * The worker sets this from the last admin check, not from the host row.
+   */
+  adminCheckDue?: boolean;
   /** Set with `warmupPosts` to refuse a link before warmup. */
   minPostsBeforeLink?: number;
   warmupPosts?: number;
@@ -62,8 +69,17 @@ export type RealPlan = { kind: RealStepKind } | { kind: "done" } | { kind: "wait
 
 function needsHost(host: RealPlanInput["host"]): boolean {
   if (!host) return true;
-  if (host.status === "parked_operator" || host.status === "pending_admin") return true;
+  if (host.status === "parked_operator") return true;
   return isHostTerminal(host.status) || host.status === "discovered" || host.status === "probed";
+}
+
+/** How long a site-admin approval can sit before we open the board again. */
+export const ADMIN_RECHECK_MS = 6 * 60 * 60 * 1000;
+
+/** True when no check has been recorded, or the last one is older than the recheck gap. */
+export function adminRecheckDue(lastCheckedAt: Date | null, now: Date): boolean {
+  if (!lastCheckedAt) return true;
+  return now.getTime() - lastCheckedAt.getTime() >= ADMIN_RECHECK_MS;
 }
 
 /** The next step for a run. Pure; the worker re-reads page and database state before acting. */
@@ -74,6 +90,12 @@ export function planRealStep(input: RealPlanInput): RealPlan {
   }
   if (input.liveMet) return { kind: "close" };
   const host = input.host;
+  if (host?.status === "pending_admin") {
+    if (!input.adminCheckDue) return { kind: "select_host" };
+    if (input.session.hostId !== host.id) return { kind: "open_session" };
+    if (!input.session.helperConnected) return { kind: "helper_connected" };
+    return { kind: "admin_check" };
+  }
   if (!host || needsHost(host)) return { kind: "select_host" };
 
   if (
@@ -139,4 +161,5 @@ export const WORKABLE_HOST_ORDER = [
   "pending_email",
   "registering",
   "qualified",
+  "pending_admin",
 ] as const;

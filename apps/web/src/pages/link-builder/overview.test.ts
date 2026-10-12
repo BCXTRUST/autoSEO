@@ -2,6 +2,8 @@ import type { LbRunStepView, LbWhyNot } from "@rakazo/contracts";
 import type { ScheduleWindow } from "@rakazo/linkbuilder-core";
 import { describe, expect, it } from "vitest";
 import {
+  cornerLabel,
+  dashboardSummary,
   homeLine,
   homeStatus,
   overviewAction,
@@ -12,6 +14,7 @@ import {
   overviewStage,
   overviewWorking,
   personTicket,
+  showOnDashboard,
   stuckHelp,
   whyNotFeedLines,
 } from "./overview.js";
@@ -77,6 +80,26 @@ describe("overview feed", () => {
       ]),
     ).toEqual({ status: "open", reason: "missing_password" });
     expect(personTicket([{ status: "open", reason: "captcha_unsolved" }])).toBeNull();
+    expect(personTicket([{ status: "open", reason: "admin_approval" }])).toBeNull();
+  });
+
+  it("puts done counts on top and keeps a post off the screen", () => {
+    const summary = dashboardSummary({
+      hosts: [],
+      placements: [],
+      steps: [],
+      whyNot: { ...zeroWhy, unsupportedCaptcha: 3, pendingEmail: 2, pendingAdmin: 2 },
+    });
+    expect(summary.done).toEqual({ registered: 4, posted: 0, skipped: 3 });
+    expect(summary.notes.map((note) => note.text).join(" ")).toContain("site admin");
+    expect(summary.notes.map((note) => note.text).join(" ")).not.toContain("Expected");
+    expect(cornerLabel("2 accounts waiting for an admin. Expected.", "Warmup")).toBe("Warmup");
+    expect(cornerLabel("Opening yamedo.de", "Warmup")).toBe("Opening yamedo.de");
+    expect(
+      showOnDashboard(
+        "die Muskelfunktion, und ein Mangel kann sich unter anderem durch Muskelkrämpfe bemerkbar machen. Schätzungen gehen davon aus.",
+      ),
+    ).toBe(false);
   });
 
   it("hides an all-zero why-not report and keeps real blockers", () => {

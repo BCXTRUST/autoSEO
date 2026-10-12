@@ -36,6 +36,7 @@ import {
 } from "@rakazo/contracts";
 import type { Prisma, PrismaClient } from "@rakazo/db";
 import {
+  adminRecheckDue,
   type HostnameResolver,
   isHostTerminal,
   isLiveMet,
@@ -283,7 +284,7 @@ export class LinkBuilderRealRunner {
       );
       return "failed";
     }
-    const plan = this.plan(ctx);
+    const plan = await this.plan(ctx);
     if (plan.kind === "done" || plan.kind === "wait") {
       await this.dropDesktop(ctx, plan.kind, "", false);
       return "waited";
@@ -486,7 +487,7 @@ export class LinkBuilderRealRunner {
     });
   }
 
-  private plan(ctx: StepContext): RealPlan {
+  private async plan(ctx: StepContext): Promise<RealPlan> {
     const quotas = ctx.project.quotas;
     const liveMet = isLiveMet(ctx.run.counters, quotas);
     const schedule = isWithinWindow(ctx.now, ctx.project.schedule, { liveMet });
@@ -533,7 +534,18 @@ export class LinkBuilderRealRunner {
       placement: ctx.placement
         ? { status: ctx.placement.status as never, counted: ctx.placement.counted }
         : null,
+      adminCheckDue:
+        host?.status === "pending_admin" ? await this.adminCheckDue(ctx, host.id) : false,
     });
+  }
+
+  private async adminCheckDue(ctx: StepContext, hostId: string): Promise<boolean> {
+    const last = await this.deps.prisma.lbRunStep.findFirst({
+      where: { hostId, kind: "admin_check" },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+    return adminRecheckDue(last?.createdAt ?? null, ctx.now);
   }
 
   /**

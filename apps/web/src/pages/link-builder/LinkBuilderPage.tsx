@@ -35,6 +35,7 @@ import {
   CreditPackagesView,
   DashboardView,
   OperatorView,
+  type ProjectSurface,
   ProjectView,
   WizardView,
 } from "./views.js";
@@ -397,7 +398,7 @@ function WizardEditor({ projectId }: { projectId?: string }) {
 
 function ProjectRoute({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
-  const [surface, setSurface] = useState<"dashboard" | "settings">("dashboard");
+  const [surface, setSurface] = useState<ProjectSurface>("dashboard");
   const [project, setProject] = useState<LbProjectDetail | null>(null);
   const [status, setStatus] = useState<LbProjectStatusView | null>(null);
   const [hosts, setHosts] = useState<LbHostView[]>([]);

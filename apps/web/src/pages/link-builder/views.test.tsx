@@ -332,7 +332,7 @@ describe("link builder screens", () => {
         threads={[]}
         drafts={[]}
         tickets={[]}
-        surface="dashboard"
+        surface="details"
         onSurface={noop}
         onStart={noop}
         onPause={noop}
@@ -352,10 +352,7 @@ describe("link builder screens", () => {
     expect(html).not.toContain("brett-");
     expect(html).not.toContain(">Hosts<");
     expect(html).not.toContain(">Placements<");
-    expect(html).toContain('data-task-column=""');
-    expect(html).toContain("overflow-y-auto");
-    expect(html).toContain('aria-label="Filter tasks"');
-    expect(html).toContain('placeholder="Filter"');
+    expect(html).toContain('aria-label="Details"');
   });
 
   it("matches a task filter on host, status, and task text", () => {
@@ -472,10 +469,10 @@ describe("link builder screens", () => {
     expect(html).not.toContain("NEW ");
     expect(html).not.toContain("LIVE ");
     expect(html).toContain('aria-label="Computer"');
-    expect(html).toContain('aria-label="Now"');
+    expect(html).toContain('aria-label="Done"');
     expect(html).toContain("top-4 right-4");
     expect(html).not.toContain("bottom-4 left-4");
-    expect(html).toContain("1 link left today");
+    expect(html).not.toContain("1 link left today");
     expect(html).toContain('aria-label="Stage"');
     expect(html).toContain("Register");
     expect(html).toContain("Warmup");
@@ -498,7 +495,7 @@ describe("link builder screens", () => {
     expect(html).not.toContain("Proxy ok");
     expect(html).not.toContain("Supply");
     expect(html).not.toContain("Live screen");
-    expect(html.indexOf('aria-label="Computer"')).toBeLessThan(html.indexOf("12 tokens"));
+    expect(html).not.toContain("12 tokens");
   });
 
   it("describes the open desktop page instead of a finished reply", () => {
@@ -518,17 +515,13 @@ describe("link builder screens", () => {
     const stream = "https://app.autoseo.run/novnc/remote/view/9.abc/vnc.html";
     const html = renderOverview(status, [posted], [], stream);
     const corner = html.indexOf('data-live-status="corner"');
-    const now = html.indexOf('aria-label="Now"');
-    const filter = html.indexOf('aria-label="Filter tasks"');
-    const chip = html.slice(corner, now);
-    const panel = html.slice(now, filter);
+    const chip = html.slice(corner, corner + 2500);
     expect(corner).toBeGreaterThan(-1);
     expect(chip).toContain("Opening nickles.de consent");
     expect(chip).toContain("top-4 right-4");
     expect(chip).not.toContain("Posted the reply");
     expect(chip).not.toContain("bottom-4 left-4");
-    expect(panel).toContain("Opening nickles.de consent");
-    expect(panel).not.toContain("Posted the reply");
+    expect(html).not.toContain('aria-label="Filter tasks"');
     const closed = renderOverview(status, [posted]);
     expect(closed).toContain("Posted the reply");
     expect(closed).not.toContain("Opening nickles.de consent");
@@ -763,7 +756,22 @@ describe("link builder screens", () => {
     expect(html).not.toContain("Unsupported captcha 0");
     const computer = html.indexOf('aria-label="Computer"');
     expect(html.indexOf("Skipped 1 site. Needs a person.", computer)).toBeGreaterThan(computer);
-    expect(html.indexOf("Links that count")).toBeLessThan(html.indexOf("40 tokens"));
+    expect(html).not.toContain("40 tokens");
+  });
+
+  it("keeps a long post off the dashboard and puts the counts on top", () => {
+    const post = step(0, "place", []);
+    post.lastAction =
+      "die Muskelfunktion, und ein Mangel kann sich unter anderem durch Muskelkrämpfe bemerkbar machen. Schätzungen gehen davon aus, dass bis zu 75 Prozent der Bevölkerung an einem Magnesiummangel leiden.";
+    const html = renderOverview(statusView({ activity: "running", activityLabel: "running" }), [
+      post,
+    ]);
+    expect(html).not.toContain("Muskelkrämpfe");
+    expect(html).toContain(">0</span> registered");
+    expect(html).toContain(">0</span> posted");
+    expect(html).toContain(">0</span> skipped");
+    expect(html).not.toContain("Filter");
+    expect(html).not.toContain("waiting for an admin. Expected");
   });
 
   it("shows credit packages with prices before a project exists", () => {
