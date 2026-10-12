@@ -68,7 +68,7 @@ import {
 } from "./overview.js";
 
 const inputClass =
-  "w-full rounded-xl border border-[#2A2A31] bg-[#141416] px-3 py-2 text-[14px] text-[#ECECEE] outline-none";
+  "w-full border-2 border-[#3A382F] bg-[#141416] px-3 py-2 text-[14px] text-[#ECECEE] outline-none";
 
 /** Host, status, and task text. Empty query keeps every row. */
 export function matchesTaskQuery(query: string, parts: Array<string | null | undefined>): boolean {
@@ -154,6 +154,7 @@ export function CreditPackagesView({
   reason,
   busy,
   onBuy,
+  onBack,
 }: {
   packages: Array<{
     id: string;
@@ -167,6 +168,7 @@ export function CreditPackagesView({
   reason: string;
   busy: boolean;
   onBuy: (packageId: string) => void;
+  onBack?: () => void;
 }) {
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-8">
@@ -178,7 +180,14 @@ export function CreditPackagesView({
           </li>
           <li className="text-[#85858A]">Project</li>
         </ol>
-        <h1 className="text-[22px] font-medium text-[#ECECEE]">Credits</h1>
+        <div className="flex items-center gap-3">
+          {onBack ? (
+            <BuiButton label="Back" onClick={onBack}>
+              Back
+            </BuiButton>
+          ) : null}
+          <h1 className="text-[22px] font-medium text-[#ECECEE]">Credits</h1>
+        </div>
       </header>
       <p className="text-[13px] text-[#ECECEE]">
         <span className="tabular-nums">{balance}</span>
@@ -279,7 +288,7 @@ export function WizardView({
                 aria-label={`Step ${index + 1} of ${WIZARD_STEPS.length}: ${label}${done ? ", done" : ""}`}
                 disabled={busy || index > step}
                 onClick={() => onGoTo(index)}
-                className={`flex w-full min-w-0 items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] leading-snug ${
+                className={`flex w-full min-w-0 items-start gap-2 px-2 py-1.5 text-left text-[13px] leading-snug ${
                   current
                     ? "bg-[#1C1C20] text-[#ECECEE] shadow-[inset_2px_0_0_#7785ff]"
                     : done
@@ -470,14 +479,12 @@ export function ProjectView({
         {watching ? (
           <h1 className="text-[22px] font-medium text-[#ECECEE]">{project.name}</h1>
         ) : (
-          <button
-            type="button"
-            aria-label="Dashboard"
-            className="text-left text-[22px] font-medium text-[#ECECEE]"
-            onClick={() => onSurface("dashboard")}
-          >
-            {project.name}
-          </button>
+          <div className="flex min-w-0 items-center gap-3">
+            <BuiButton label="Back" onClick={() => onSurface("dashboard")}>
+              Back
+            </BuiButton>
+            <h1 className="truncate text-[22px] font-medium text-[#ECECEE]">{project.name}</h1>
+          </div>
         )}
         <div className="flex flex-wrap items-start gap-3">
           <Pill label={statusWord} />
@@ -523,7 +530,7 @@ export function ProjectView({
       {stuck && needed ? (
         <section
           aria-label="Needs you"
-          className="rounded-2xl border border-[#2A2A31] bg-[#141416] p-4"
+          className="border-2 border-[#3A382F] bg-[#141416] p-4 shadow-[3px_3px_0_#2A2820]"
         >
           <p className="text-[15px] text-[#ECECEE]">{stuck.stuck}</p>
           <p className="mt-1 text-[13px] text-[#A6A6AD]">{stuck.next}</p>
@@ -597,6 +604,7 @@ export function OperatorView({
   onNote,
   onContinue,
   onSkip,
+  onBack,
   loadArtifact,
   now,
 }: {
@@ -607,6 +615,7 @@ export function OperatorView({
   onNote: (note: string) => void;
   onContinue: () => void;
   onSkip: () => void;
+  onBack?: () => void;
   loadArtifact?: ArtifactLoader;
   now?: number;
 }) {
@@ -614,7 +623,14 @@ export function OperatorView({
   const shot = !embed && loadArtifact ? ticket.screenshotArtifactId : null;
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 py-8">
-      <h1 className="text-[22px] font-medium text-[#ECECEE]">{ticket.domain}</h1>
+      <div className="flex items-center gap-3">
+        {onBack ? (
+          <BuiButton label="Back" onClick={onBack}>
+            Back
+          </BuiButton>
+        ) : null}
+        <h1 className="text-[22px] font-medium text-[#ECECEE]">{ticket.domain}</h1>
+      </div>
       {ticketCountdown(ticket.expiresAt, now) ? (
         <p className="text-[13px] text-[#A6A6AD]">{ticketCountdown(ticket.expiresAt, now)}</p>
       ) : null}
@@ -623,7 +639,7 @@ export function OperatorView({
       ) : (
         <div
           role="img"
-          className="grid min-h-[320px] place-items-center overflow-hidden rounded-[16px] border border-[#2A2A31] bg-[#101012]"
+          className="grid min-h-[320px] place-items-center overflow-hidden border-2 border-[#3A382F] bg-[#101012]"
           aria-label="Live screen"
         >
           {embed && ticket.screenUrl ? (
@@ -783,7 +799,8 @@ function DoneStrip({
       className="border-2 border-[#3A382F] bg-[#14130F] px-3 py-2 text-right shadow-[4px_4px_0_#2A2820]"
       onClick={onOpen}
     >
-      <span className="block font-mono text-[13px] text-[#E8E4D8]">
+      <span className="block font-mono text-[11px] tracking-[0.08em] text-[#A39E90]">All time</span>
+      <span className="mt-1 block font-mono text-[13px] text-[#E8E4D8]">
         {counts.map(([label, value, color], index) => (
           <span key={label}>
             {index > 0 ? <span className="text-[#6F6A5E]"> · </span> : null}
@@ -795,7 +812,7 @@ function DoneStrip({
         ))}
       </span>
       <span className="mt-1 block font-mono text-[12px] tracking-[0.06em] text-[#A39E90]">
-        Links that count{" "}
+        Today{" "}
         <span className="text-[15px] text-[#E8E4D8] tabular-nums">{`${links.value}/${links.max}`}</span>
       </span>
     </button>
@@ -1317,7 +1334,7 @@ export function ArtifactShot({
   artifactId,
   load,
   label,
-  className = "w-full rounded-[12px] border border-[#2A2A31]",
+  className = "w-full border-2 border-[#3A382F]",
   untilReady = "loader",
 }: {
   artifactId: string;
@@ -1784,7 +1801,7 @@ function TopicFields({
         type="button"
         aria-label="Add a page"
         disabled={atLimit}
-        className="h-10 rounded-xl border border-[#2A2A31] text-[18px] text-[#ECECEE] disabled:cursor-not-allowed disabled:text-[#4A4A50]"
+        className="h-10 border-2 border-[#3A382F] text-[18px] text-[#ECECEE] shadow-[3px_3px_0_#2A2820] disabled:cursor-not-allowed disabled:text-[#4A4A50]"
         onClick={() => onChange(addWizardPage(draft))}
       >
         +

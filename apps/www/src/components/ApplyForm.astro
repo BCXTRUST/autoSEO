@@ -41,12 +41,12 @@ const { idPrefix = "apply", defaultIntent = "apply" } = Astro.props;
         <option value="" selected disabled>Select</option>
         <option value="agency">Agency owner / lead</option>
         <option value="freelancer">Freelance operator</option>
-        <option value="in-house">In-house SEO / content</option>
+        <option value="in-house">In-house SEO</option>
         <option value="other">Other operator</option>
       </select>
     </label>
     <label>
-      <span>Monthly output you need (content + links)</span>
+      <span>Links you need in a month</span>
       <select id={`${idPrefix}-volume`} name="volume" required>
         <option value="" selected disabled>Select</option>
         <option value="under-5">Under 5</option>
@@ -59,10 +59,10 @@ const { idPrefix = "apply", defaultIntent = "apply" } = Astro.props;
       <span>What you want to replace</span>
       <select id={`${idPrefix}-setup`} name="currentSetup" required>
         <option value="" selected disabled>Select</option>
-        <option value="vendor">A content / link vendor or white-label partner</option>
+        <option value="vendor">A link vendor or white-label partner</option>
         <option value="hire">An in-house or freelance hire</option>
         <option value="myself">Myself doing the grind</option>
-        <option value="marketplace">Content mills or guest-post marketplaces</option>
+        <option value="marketplace">Guest-post marketplaces</option>
         <option value="mix">A mix of the above</option>
       </select>
     </label>

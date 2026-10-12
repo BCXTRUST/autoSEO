@@ -468,7 +468,9 @@ describe("link builder screens", () => {
       discovered,
       probed,
     ]);
-    expect(html).toContain("Links that count");
+    expect(html).toContain("All time");
+    expect(html).toContain("Today");
+    expect(html).not.toContain("Links that count");
     expect(html).not.toContain("New accounts per day");
     expect(html).not.toContain("Live links today");
     expect(html).toContain(">0/1</span>");
@@ -617,7 +619,9 @@ describe("link builder screens", () => {
     expect(row).not.toContain("Verify");
     expect(html).not.toContain("I've solved it");
     expect(html).not.toContain("fragen-");
-    expect(html).toContain("Links that count");
+    expect(html).toContain("All time");
+    expect(html).toContain("Today");
+    expect(html).not.toContain("Links that count");
     expect(html).not.toContain("New accounts per day");
     expect(html).not.toContain("Live links today");
   });
@@ -743,7 +747,9 @@ describe("link builder screens", () => {
     expect(html).not.toContain(">Continuing<");
     expect(html).toContain("No events yet");
     expect(html).not.toContain(".example");
-    expect(html).toContain("Links that count");
+    expect(html).toContain("All time");
+    expect(html).toContain("Today");
+    expect(html).not.toContain("Links that count");
     expect(html).not.toContain("New links today");
     expect(html).not.toContain("Why not");
     expect(html).not.toContain("Parked 0");
@@ -752,7 +758,9 @@ describe("link builder screens", () => {
 
   it("puts real blockers in the feed after the computer", () => {
     const html = renderToStaticMarkup(<LinkBuilderPreview screen="overview" />);
-    expect(html).toContain("Links that count");
+    expect(html).toContain("All time");
+    expect(html).toContain("Today");
+    expect(html).not.toContain("Links that count");
     expect(html).not.toContain("New accounts per day");
     expect(html).not.toContain("Live links today");
     expect(html).not.toContain("New links today");

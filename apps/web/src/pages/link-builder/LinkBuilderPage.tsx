@@ -198,11 +198,13 @@ function BillingBody({
   error,
   busy,
   onBuy,
+  onBack,
 }: {
   offer: LbBillingOffer | null;
   error: string | null;
   busy: boolean;
   onBuy: (packageId: string) => void;
+  onBack?: () => void;
 }) {
   if (!offer) {
     return (
@@ -223,6 +225,7 @@ function BillingBody({
         reason={error || offer.reason}
         busy={busy}
         onBuy={onBuy}
+        onBack={onBack}
       />
     </div>
   );
@@ -230,21 +233,31 @@ function BillingBody({
 
 function CreditsRoute() {
   const billing = useBillingOffer();
+  const navigate = useNavigate();
   return (
     <BillingBody
       offer={billing.offer}
       error={billing.error}
       busy={billing.busy}
       onBuy={(packageId) => void billing.buy(packageId)}
+      onBack={() => navigate("/link-builder")}
     />
   );
 }
 
 function NewProjectGate() {
   const billing = useBillingOffer();
+  const navigate = useNavigate();
+  const back = () => navigate("/link-builder");
   if (!billing.offer) {
     return (
-      <BillingBody offer={null} error={billing.error} busy={billing.busy} onBuy={() => undefined} />
+      <BillingBody
+        offer={null}
+        error={billing.error}
+        busy={billing.busy}
+        onBuy={() => undefined}
+        onBack={back}
+      />
     );
   }
   if (billing.offer.entitled) return <WizardEditor />;
@@ -254,6 +267,7 @@ function NewProjectGate() {
       error={billing.error}
       busy={billing.busy}
       onBuy={(packageId) => void billing.buy(packageId)}
+      onBack={back}
     />
   );
 }
@@ -775,6 +789,7 @@ function OperatorRoute({ projectId, ticketId }: { projectId: string; ticketId: s
       onNote={setNote}
       onContinue={() => void settle("continue")}
       onSkip={() => void settle("skip")}
+      onBack={() => navigate(`/link-builder/${projectId}`)}
       loadArtifact={loadArtifact}
     />
   );
