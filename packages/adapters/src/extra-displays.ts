@@ -134,6 +134,15 @@ export function extraDisplayLayout(index: number, primaryDisplay: string): Extra
 export const PRIMARY_WATCH_VIEW_PORT = 6090;
 export const PRIMARY_WATCH_VNC_PORT = 5910;
 
+/**
+ * A server that must keep running after this shell exits.
+ * Redirect the whole group. A bare `cmd &` keeps E2B's stdout pipe open, so the
+ * command never finishes and the screen open is reported as a dead computer.
+ */
+function detachServer(command: string, logFile: string): string {
+  return `( ${command} ) </dev/null >${logFile} 2>&1 &`;
+}
+
 function tcpListenReadyCommand(port: number): string {
   return `python3 -c 'import socket,sys;s=socket.socket();s.settimeout(0.2);s.connect(("127.0.0.1",int(sys.argv[1])))' ${port} >/dev/null 2>&1`;
 }
@@ -159,14 +168,22 @@ export function ensurePrimaryViewCommand(layout: ExtraDisplayLayout, viewPasswor
     `xdpyinfo -display ${layout.display} >/dev/null 2>&1 || { printf 'RAKAZO_SCREEN_ERROR=no_display\\n' >&2; exit 1; }`,
     `command -v x11vnc >/dev/null 2>&1 || { printf 'RAKAZO_SCREEN_ERROR=no_x11vnc\\n' >&2; exit 1; }`,
     `pkill -f '^x11vnc .* -rfbport ${viewVncPort}' || true`,
-    `pkill -f '^/usr/bin/python3 .*websockify.*${viewPort}' || true`,
-    `pkill -f '[n]ovnc_proxy.*--listen ${viewPort}' || true`,
+    `fuser -k ${viewPort}/tcp >/dev/null 2>&1 || true`,
     `x11vnc -storepasswd "$view_password" ${shellQuote(passwordAuthFile)} >/dev/null`,
-    `x11vnc -display ${layout.display} -forever -shared -viewonly -rfbauth ${shellQuote(passwordAuthFile)} -listen 127.0.0.1 -rfbport ${viewVncPort} -xkb -ncache 0 >${log}-x11vnc.log 2>&1 &`,
+    detachServer(
+      `x11vnc -display ${layout.display} -forever -shared -viewonly -rfbauth ${shellQuote(passwordAuthFile)} -listen 127.0.0.1 -rfbport ${viewVncPort} -xkb -ncache 0`,
+      `${log}-x11vnc.log`,
+    ),
     `if command -v websockify >/dev/null 2>&1; then`,
-    `  websockify --web=/usr/share/novnc 0.0.0.0:${viewPort} 127.0.0.1:${viewVncPort} >${log}-novnc.log 2>&1 &`,
+    detachServer(
+      `websockify --web=/usr/share/novnc 0.0.0.0:${viewPort} 127.0.0.1:${viewVncPort}`,
+      `${log}-novnc.log`,
+    ),
     `elif [ -d /opt/noVNC/utils ]; then`,
-    `  (cd /opt/noVNC/utils && nohup ./novnc_proxy --vnc localhost:${viewVncPort} --listen ${viewPort} --web /opt/noVNC >${log}-novnc.log 2>&1 &)`,
+    detachServer(
+      `cd /opt/noVNC/utils && exec ./novnc_proxy --vnc localhost:${viewVncPort} --listen ${viewPort} --web /opt/noVNC`,
+      `${log}-novnc.log`,
+    ),
     `else`,
     `  printf 'RAKAZO_SCREEN_ERROR=no_novnc\\n' >&2; exit 1`,
     `fi`,
@@ -217,11 +234,20 @@ export function ensureExtraDisplayCommand(
     `pkill -f '^/usr/bin/python3 .*websockify.*${layout.viewPort}' || true`,
     `pkill -f '[n]ovnc_proxy.*--listen ${layout.viewPort}' || true`,
     `x11vnc -storepasswd "$view_password" ${shellQuote(passwordAuthFile)} >/dev/null`,
-    `x11vnc -display ${layout.display} -forever -shared -viewonly -rfbauth ${shellQuote(passwordAuthFile)} -listen 127.0.0.1 -rfbport ${layout.viewVncPort} -xkb -ncache 0 >${log}-x11vnc.log 2>&1 &`,
+    detachServer(
+      `x11vnc -display ${layout.display} -forever -shared -viewonly -rfbauth ${shellQuote(passwordAuthFile)} -listen 127.0.0.1 -rfbport ${layout.viewVncPort} -xkb -ncache 0`,
+      `${log}-x11vnc.log`,
+    ),
     `if command -v websockify >/dev/null 2>&1; then`,
-    `  websockify --web=/usr/share/novnc 0.0.0.0:${layout.viewPort} 127.0.0.1:${layout.viewVncPort} >${log}-novnc.log 2>&1 &`,
+    detachServer(
+      `websockify --web=/usr/share/novnc 0.0.0.0:${layout.viewPort} 127.0.0.1:${layout.viewVncPort}`,
+      `${log}-novnc.log`,
+    ),
     `elif [ -d /opt/noVNC/utils ]; then`,
-    `  (cd /opt/noVNC/utils && nohup ./novnc_proxy --vnc localhost:${layout.viewVncPort} --listen ${layout.viewPort} --web /opt/noVNC >${log}-novnc.log 2>&1 &)`,
+    detachServer(
+      `cd /opt/noVNC/utils && exec ./novnc_proxy --vnc localhost:${layout.viewVncPort} --listen ${layout.viewPort} --web /opt/noVNC`,
+      `${log}-novnc.log`,
+    ),
     `else`,
     `  exit 1`,
     `fi`,
@@ -252,9 +278,15 @@ export function extraDisplayControlStartCommand(
     `x11vnc -storepasswd ${shellQuote(password)} ${passwordFile} >/dev/null`,
     `x11vnc -bg -display ${shellQuote(layout.display)} -forever -wait 50 -shared -rfbport ${layout.controlVncPort} -rfbauth ${passwordFile} 2>${log}-control-x11vnc.log`,
     "if command -v websockify >/dev/null 2>&1; then",
-    `  (nohup websockify --web=/usr/share/novnc 0.0.0.0:${layout.controlPort} 127.0.0.1:${layout.controlVncPort} >${log}-control-novnc.log 2>&1 &)`,
+    detachServer(
+      `websockify --web=/usr/share/novnc 0.0.0.0:${layout.controlPort} 127.0.0.1:${layout.controlVncPort}`,
+      `${log}-control-novnc.log`,
+    ),
     "elif [ -d /opt/noVNC/utils ]; then",
-    `  (cd /opt/noVNC/utils && nohup ./novnc_proxy --vnc localhost:${layout.controlVncPort} --listen ${layout.controlPort} --web /opt/noVNC >${log}-control-novnc.log 2>&1 &)`,
+    detachServer(
+      `cd /opt/noVNC/utils && exec ./novnc_proxy --vnc localhost:${layout.controlVncPort} --listen ${layout.controlPort} --web /opt/noVNC`,
+      `${log}-control-novnc.log`,
+    ),
     "else",
     "  exit 1",
     "fi",

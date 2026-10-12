@@ -74,6 +74,10 @@ describe("extra display ports", () => {
     expect(command).toContain("flock -w 20 8");
     expect(command).toContain("rfbport 5910");
     expect(command).toContain("--listen 6090");
+    expect(command).toContain("fuser -k 6090/tcp");
+    expect(command).toContain(
+      "( cd /opt/noVNC/utils && exec ./novnc_proxy --vnc localhost:5910 --listen 6090 --web /opt/noVNC ) </dev/null >/tmp/rakazo/screen-primary-novnc.log 2>&1 &",
+    );
     expect(command).not.toContain("rfbport 5900");
     expect(command).not.toContain("pkill -f 'novnc_proxy");
     expect(() => ensurePrimaryViewCommand(extraDisplayLayout(1, ":0"), "secret")).toThrow(

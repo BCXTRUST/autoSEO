@@ -12,6 +12,7 @@ import { type LbWhyNot, LbWhyNotSchema } from "@rakazo/contracts";
 import {
   type DraftContext,
   draftWithModel,
+  relevanceTopicFromProject,
   type ModelComplete,
   type PreparedDraft,
   type ReferenceFormat,
@@ -62,6 +63,10 @@ export async function composeReply(input: {
 }): Promise<ComposeResult> {
   const { model, project, thread } = input;
   const lane = project.topicLanes[0];
+  const topic = relevanceTopicFromProject({
+    topicLanes: project.topicLanes,
+    targets: project.targets,
+  });
   const market =
     project.markets.find(
       (item) => item.country === thread.hostCountry && item.language === thread.hostLanguage,
@@ -80,8 +85,8 @@ export async function composeReply(input: {
     allowedDomains: project.allowedDomains,
     title: thread.title,
     excerpt: thread.excerpt,
-    laneTag: lane?.tag ?? "topic",
-    laneDescription: lane?.description ?? "",
+    laneTag: topic.tag,
+    laneDescription: topic.description,
     citeSource: thread.citeSource,
     disclosureMode: project.disclosureMode,
     disclosureText: project.persona.disclosureText,

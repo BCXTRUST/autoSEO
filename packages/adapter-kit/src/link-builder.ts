@@ -99,16 +99,28 @@ export interface BrowserSession {
   /** Visible text of the first match, or null when nothing matches. */
   text(selector: string): Promise<string | null>;
   exists(selector: string): Promise<boolean>;
+  /** True when the first match is shown. Hidden consent controls are not a wall. */
+  isVisible?(selector: string): Promise<boolean>;
+  /** True when a checkbox or radio is selected. */
+  isChecked?(selector: string): Promise<boolean>;
   attribute(selector: string, name: string): Promise<string | null>;
   /**
    * Tight PNG of the first match, used for image captchas instead of a full screenshot.
-   * `paddingPx` expands the crop once when the tight image is too small or the wrong shape.
+   * `paddingPx` expands the crop when the tight image is too small. `insetPx` pulls the crop
+   * in from the element edge when the solver cannot read the picture.
    */
-  elementScreenshotPng(selector: string, options?: { paddingPx?: number }): Promise<Uint8Array>;
+  elementScreenshotPng(selector: string, options?: ElementScreenshotOptions): Promise<Uint8Array>;
   pageText(): Promise<string>;
+  /** Accessibility tree for one look. Browser agents choose the next control from this. */
+  ariaSnapshot?(): Promise<string>;
   /** Resolves true once the selector matches, false when the timeout elapses first. */
   waitFor(selector: string, options: { timeoutMs: number }): Promise<boolean>;
   screenshotPng(): Promise<Uint8Array>;
+  /**
+   * Screenshot the page, then click a visible accept control, including one inside a frame
+   * that page text does not include. Returns false when no accept control is visible.
+   */
+  clickConsent?(): Promise<boolean>;
   /** Ids of the extensions the browser loaded, read from their service workers. */
   loadedExtensions?(): Promise<string[]>;
   /** Id and manifest version of each loaded extension, when the browser can read them. */
@@ -123,9 +135,33 @@ export interface BrowserSession {
    * driver. Mapping uses this DOM description only; it never screenshots the page.
    */
   formFields?(selector: string): Promise<FormFieldInfo[]>;
+  /**
+   * Visible links and buttons, read once, so a driver can click Register before it looks
+   * at a form. Hidden controls are omitted.
+   */
+  clickables?(): Promise<ClickableControl[]>;
+  /** Visible text of every match, in order. One read. */
+  listText?(selector: string): Promise<string[]>;
+  /** Text and href of every matching anchor, in order. One read. */
+  listAnchors?(selector: string): Promise<Array<{ text: string; href: string }>>;
+  /** Moves a control onto another, for a sortable confirmation the page asks the reader to drag. */
+  drag?(sourceSelector: string, targetSelector: string): Promise<void>;
   /** Status and headers of the last document response, when the engine recorded one. */
   navigationMeta?(): Promise<{ status: number | null; headers: Record<string, string> }>;
   close(): Promise<void>;
+}
+
+/** A visible link, button, or menu item. `selector` addresses that control. */
+export interface ClickableControl {
+  selector: string;
+  tag: string;
+  role: string | null;
+  /** Submit, button, or empty when the control is a link. */
+  type: string | null;
+  text: string;
+  href: string | null;
+  /** True when the control sits in a header, nav, or menu bar. */
+  inHeader: boolean;
 }
 
 /** One control inside a form, as read from the DOM. `selector` addresses that control. */
@@ -139,6 +175,15 @@ export interface FormFieldInfo {
   label: string;
   role: string | null;
   required: boolean;
+  placeholder?: string | null;
+  /** Fieldset legend, when the control sits in one. */
+  group?: string | null;
+  /** True for hidden and `display:none` controls. Those stay empty. */
+  hidden?: boolean;
+  /** Current value, including a radio or checkbox value. */
+  value?: string | null;
+  /** Select options, in document order. */
+  options?: readonly { value: string; label: string }[];
 }
 
 export interface BrowserSessionProvider {
@@ -150,7 +195,7 @@ export interface BrowserSessionProvider {
  * Where the persona browser runs. `sandbox` drives it inside the computer sandbox; `local` runs it
  * in-process on the worker host and is only for tests and sandbox-less development.
  */
-export type BrowserSessionMode = "local" | "sandbox";
+export type BrowserSessionMode = "local" | "sandbox" | "kernel";
 
 export interface BrowserSessionFactory extends BrowserSessionProvider {
   readonly mode: BrowserSessionMode;
@@ -174,10 +219,34 @@ export const ImageToTextRequestSchema = z.object({
 });
 export type ImageToTextRequest = z.infer<typeof ImageToTextRequestSchema>;
 
+/** Captell accepts a boolean and the strings the parser treats as true. */
+export const CaptchaFlagSchema = z.union([
+  z.boolean(),
+  z.literal("true"),
+  z.literal("false"),
+  z.literal("1"),
+  z.literal("0"),
+]);
+
+export interface ElementScreenshotOptions {
+  paddingPx?: number;
+  insetPx?: number;
+}
+
 export const TokenRequestSchema = z.object({
   type: TokenCaptchaTypeSchema,
   websiteURL: z.url({ protocol: /^https?$/ }),
   websiteKey: z.string().min(1),
+  /** Invisible v2 is RecaptchaV2 with this flag, not a separate type. */
+  isInvisible: CaptchaFlagSchema.optional(),
+  isEnterprise: CaptchaFlagSchema.optional(),
+  pageAction: z.string().min(1).max(200).optional(),
+  minScore: z.number().min(0).max(1).optional(),
+  action: z.string().min(1).max(200).optional(),
+  cData: z.string().min(1).max(2_000).optional(),
+  chlPageData: z.string().min(1).max(8_000).optional(),
+  enterprisePayload: z.union([z.string().min(1), z.record(z.string(), z.unknown())]).optional(),
+  challenge: z.string().min(1).max(8_000).optional(),
 });
 export type TokenRequest = z.infer<typeof TokenRequestSchema>;
 
@@ -201,9 +270,13 @@ export type CaptchaQuestionRequest = z.infer<typeof CaptchaQuestionRequestSchema
 
 export const CaptchaQuestionResultSchema = z.union([
   z.object({ answer: z.string().min(1) }).strict(),
+  z.object({ instruction: z.string().min(1) }).strict(),
   z.object({ couldNotAnswer: z.literal(true) }).strict(),
 ]);
-export type CaptchaQuestionResult = { answer: string } | { couldNotAnswer: true };
+export type CaptchaQuestionResult =
+  | { answer: string }
+  | { instruction: string }
+  | { couldNotAnswer: true };
 
 export const CaptchaBalanceSchema = z.object({ credits: z.number().int() });
 export type CaptchaBalance = z.infer<typeof CaptchaBalanceSchema>;
@@ -245,6 +318,14 @@ export interface CaptchaSolver {
     request: CaptchaQuestionRequest,
     context: AdapterContext,
   ): Promise<CaptchaQuestionResult>;
+}
+
+const SECRET_REGISTRATION_PROMPT =
+  /password|passwort|kennwort|2fa|two[- ]factor|authenticator|\botp\b|one[- ]time|e-?mail code|verification code|bestätigungscode|confirmation code/i;
+
+/** Passwords, 2FA and email codes are never sent to a solver. */
+export function isSecretRegistrationPrompt(text: string): boolean {
+  return SECRET_REGISTRATION_PROMPT.test(text);
 }
 
 /** Validates a solve request before any adapter spends credits on it. */
@@ -326,6 +407,8 @@ export interface TextModelRequest<T> {
   user: string;
   schema: z.ZodType<T>;
   maxTokens: number;
+  /** Overrides the lane model for one call. Callers must pass a fixed model id. */
+  modelId?: string;
 }
 
 export interface TextModelTokens {

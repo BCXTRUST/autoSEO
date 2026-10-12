@@ -1,4 +1,4 @@
-import type { BrowserPersona, FormFieldInfo } from "@rakazo/adapter-kit";
+import type { BrowserPersona, ClickableControl, FormFieldInfo } from "@rakazo/adapter-kit";
 import { load } from "cheerio";
 import { noisePng } from "./png.js";
 
@@ -78,7 +78,12 @@ export class HtmlBrowserSession {
 
   async exists(selector: string): Promise<boolean> {
     this.assertOpen();
-    return this.$(selector).length > 0;
+    try {
+      return this.$(selector).length > 0;
+    } catch {
+      // Cheerio rejects Playwright text selectors such as :has-text. Treat them as absent.
+      return false;
+    }
   }
 
   async attribute(selector: string, name: string): Promise<string | null> {
@@ -109,12 +114,144 @@ export class HtmlBrowserSession {
   }
 
   async injectToken(fieldName: string, token: string): Promise<void> {
-    await this.fill(`[name='${fieldName}']`, token);
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(fieldName)) throw new Error("Unexpected captcha field");
+    const selector = `[name='${fieldName}']`;
+    if (!(await this.exists(selector))) {
+      const host = this.$(
+        "[data-xf-init='turnstile'], .cf-turnstile, .g-recaptcha, .h-captcha",
+      ).first();
+      const form = host.length ? host.closest("form") : this.$("form").first();
+      if (!form.length) throw new Error(`Could not place the captcha token in ${fieldName}`);
+      form.append(`<input type="hidden" name="${fieldName}">`);
+    }
+    await this.fill(selector, token);
+  }
+
+  async listText(selector: string): Promise<string[]> {
+    this.assertOpen();
+    return this.$(selector)
+      .map((_, node) => this.$(node).text().replace(/\s+/g, " ").trim())
+      .get()
+      .filter(Boolean);
+  }
+
+  async drag(sourceSelector: string, targetSelector: string): Promise<void> {
+    this.assertOpen();
+    const textIs = sourceSelector.match(/:text-is\("([^"]*)"\)$/);
+    const el = textIs
+      ? this.$(sourceSelector.slice(0, sourceSelector.length - textIs[0].length)).filter(
+          (_, node) => this.$(node).text().replace(/\s+/g, " ").trim() === textIs[1],
+        )
+      : this.$(sourceSelector);
+    const node = el.first();
+    if (!node.length) return;
+    this.$(targetSelector).first().append(node);
+    this.raw = this.$.html();
+  }
+
+  async listAnchors(selector: string): Promise<Array<{ text: string; href: string }>> {
+    this.assertOpen();
+    const anchors: Array<{ text: string; href: string }> = [];
+    this.$(selector).each((_, node) => {
+      if (anchors.length >= 20) return;
+      const el = this.$(node);
+      const href = el.attr("href");
+      const text = el.text().replace(/\s+/g, " ").trim();
+      if (!href || !text) return;
+      anchors.push({ text, href });
+    });
+    return anchors;
+  }
+
+  async clickables(): Promise<ClickableControl[]> {
+    this.assertOpen();
+    const controls: ClickableControl[] = [];
+    let generated = 0;
+    this.$("a, button, [role='link'], [role='button'], [role='menuitem']").each((_, node) => {
+      if (node.type !== "tag") return;
+      const el = this.$(node);
+      const text = (
+        el.text().replace(/\s+/g, " ").trim() ||
+        (el.attr("aria-label") ?? "").replace(/\s+/g, " ").trim() ||
+        (el.attr("title") ?? "").replace(/\s+/g, " ").trim()
+      );
+      if (!text || text.length > 80) return;
+      const style = el.attr("style") ?? "";
+      if (el.attr("hidden") !== undefined || /display\s*:\s*none/i.test(style)) return;
+      if (el.attr("aria-hidden") === "true") return;
+      const tag = node.name;
+      const type = (el.attr("type") ?? "").toLowerCase() || null;
+      const href = el.attr("href") ?? null;
+      const id = el.attr("id") ?? "";
+      let selector: string;
+      if (id && /^[A-Za-z][\w-]*$/.test(id)) selector = `#${id}`;
+      else if (href) selector = `${tag}[href="${href.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
+      else {
+        generated += 1;
+        el.attr("data-rakazo-click", String(generated));
+        selector = `[data-rakazo-click="${generated}"]`;
+      }
+      controls.push({
+        selector,
+        tag,
+        role: el.attr("role") ?? null,
+        type,
+        text,
+        href,
+        inHeader: el.closest("header, nav, [role='banner'], [role='navigation'], .navbar, .headerbar").length > 0,
+      });
+    });
+    return controls;
+  }
+
+  /** Prefer the register, terms, or reply form when a header search form comes first. */
+  private accountForm(): Selection {
+    let best = this.$("form").first();
+    let bestScore = 0;
+    this.$("form").each((_, node) => {
+      if (node.type !== "tag") return;
+      const form = this.$(node);
+      const action = (form.attr("action") ?? "").toLowerCase();
+      const has = (probe: string) => {
+        try {
+          return form.find(probe).length > 0;
+        } catch {
+          return false;
+        }
+      };
+      let score = 1;
+      if (
+        has("input[type='password']") &&
+        (has("input[type='email']") || has("input[name='email']"))
+      ) {
+        score = 100;
+      } else if (
+        has("input[name='agreed']") ||
+        has("input[name='not_agreed']") ||
+        has("#agreed") ||
+        form.attr("id") === "agreement"
+      ) {
+        score = 80;
+      } else if (action.includes("mode=register") || action.includes("register")) {
+        score = 70;
+      } else if (has("textarea")) {
+        score = 60;
+      } else if (has("input[type='password']")) {
+        score = 50;
+      } else if (has("input[type='email']")) {
+        score = 40;
+      }
+      if (score > bestScore) {
+        best = form;
+        bestScore = score;
+      }
+    });
+    return best;
   }
 
   async formFields(selector: string): Promise<FormFieldInfo[]> {
     this.assertOpen();
-    const root = this.$(selector).first();
+    const root = selector === "form" ? this.accountForm() : this.$(selector).first();
     if (!root.length) return [];
     const form = tagOf(root[0]!) === "form" ? root : root.find("form").first();
     const scope = form.length ? form : root;
@@ -132,26 +269,55 @@ export class HtmlBrowserSession {
         if (parent.length) label = parent.text().replace(/\s+/g, " ").trim();
       }
       if (!label && (tag === "button" || el.attr("type") === "submit")) {
-        label = el.text().replace(/\s+/g, " ").trim();
+        label = (el.text() || el.attr("value") || "").replace(/\s+/g, " ").trim();
       }
       if (!label) label = (el.attr("aria-label") ?? "").trim();
-      const control = id
-        ? /^[A-Za-z_][\w-]*$/.test(id)
-          ? `#${id}`
-          : `[id="${id.replace(/"/g, "")}"]`
-        : name
-          ? `[name="${name.replace(/"/g, "")}"]`
-          : `${tag}:nth-of-type(${index + 1})`;
+      let control: string;
+      if (id && /^[A-Za-z_][\w-]*$/.test(id)) control = `#${id}`;
+      else if (id) control = `[id="${id.replace(/"/g, "")}"]`;
+      else if (name) control = `[name="${name.replace(/"/g, "")}"]`;
+      else {
+        const stamp = String(index + 1);
+        el.attr("data-rakazo-field", stamp);
+        control = `[data-rakazo-field="${stamp}"]`;
+      }
+      const type =
+        el.attr("type") ?? (tag === "textarea" ? null : tag === "button" ? "submit" : null);
+      const legend = el.closest("fieldset").children("legend").first();
+      const options =
+        tag === "select"
+          ? el
+              .find("option")
+              .toArray()
+              .map((optionNode) => {
+                const option = this.$(optionNode);
+                return {
+                  value: option.attr("value") ?? option.text().trim(),
+                  label: option.text().replace(/\s+/g, " ").trim(),
+                };
+              })
+          : undefined;
       fields.push({
         selector: control,
         tag,
-        type: el.attr("type") ?? (tag === "textarea" ? null : tag === "button" ? "submit" : null),
+        type,
         name,
         id,
         autocomplete: el.attr("autocomplete") ?? null,
         label,
         role: el.attr("role") ?? (tag === "textarea" ? "textbox" : null),
         required: el.attr("required") !== undefined,
+        placeholder: el.attr("placeholder") ?? null,
+        group: legend.length ? legend.text().replace(/\s+/g, " ").trim() : null,
+        hidden:
+          type === "hidden" ||
+          el.attr("hidden") !== undefined ||
+          /display\s*:\s*none/i.test(el.attr("style") ?? "") ||
+          /bitte lasse dieses feld frei|leave this field (?:blank|empty)|do not fill/i.test(
+            el.closest(".formRow, .form-row").text(),
+          ),
+        value: el.attr("value") ?? null,
+        options,
       });
     });
     return fields;

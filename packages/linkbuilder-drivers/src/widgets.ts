@@ -5,8 +5,12 @@ import type { CaptchaChallenge } from "./driver.js";
 const WIDGETS: ReadonlyArray<{ selector: string; type: TokenCaptchaType; key: string }> = [
   { selector: ".g-recaptcha", type: "recaptcha_v2", key: "data-sitekey" },
   { selector: ".cf-turnstile", type: "turnstile", key: "data-sitekey" },
+  { selector: "[data-xf-init='turnstile']", type: "turnstile", key: "data-sitekey" },
   { selector: ".h-captcha", type: "hcaptcha", key: "data-sitekey" },
+  { selector: "[data-xf-init='h-captcha']", type: "hcaptcha", key: "data-sitekey" },
   { selector: "[data-ipsCaptcha-key]", type: "turnstile", key: "data-ipsCaptcha-key" },
+  { selector: ".funcaptcha", type: "funcaptcha", key: "data-pkey" },
+  { selector: ".geetest_captcha", type: "geetest", key: "data-gt" },
 ];
 
 const ENTERPRISE_SCRIPT = "script[src*='recaptcha/enterprise']";

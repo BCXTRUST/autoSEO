@@ -1,15 +1,15 @@
-# Rakazo
+# autoSEO
 
 [![GitHub stars](https://img.shields.io/github/stars/elie222/rakazo?labelColor=black&style=for-the-badge&color=2563EB)](https://github.com/elie222/rakazo/stargazers)
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?labelColor=black&style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/RWwKa2Sn7h)
 
-![Rakazo — AI teammates you actually own](./docs/readme-hero.png)
+![autoSEO — AI teammates you actually own](./docs/readme-hero.png)
 
-Rakazo is an open-source platform for running persistent AI teammates. It is available on the web,
+autoSEO is an open-source platform for running persistent AI teammates. It is available on the web,
 as an Electron desktop app, and through an Expo mobile app. Bring your own model and computer
 provider, or run the complete stack locally.
 
-Rakazo is in beta. Learn more at [rakazo.com](https://rakazo.com).
+autoSEO is in beta. Learn more at [rakazo.com](https://rakazo.com).
 
 ## Features
 
@@ -79,7 +79,7 @@ provider selection, backups, and upgrades, see the [self-hosting guide](./docs/s
 
 ## Desktop and mobile
 
-The Electron and Expo apps are clients of the same Rakazo API used by the web app.
+The Electron and Expo apps are clients of the same autoSEO API used by the web app.
 
 With the development stack running, launch Electron with:
 
@@ -87,12 +87,12 @@ With the development stack running, launch Electron with:
 pnpm --filter @rakazo/desktop dev
 ```
 
-On first run the desktop app asks whether to use the Rakazo stack on this computer
+On first run the desktop app asks whether to use the autoSEO stack on this computer
 (`http://127.0.0.1:5173`) or connect to an existing server. Public servers must use HTTPS; HTTP is
-accepted only for loopback and private LAN addresses (not link-local). The app verifies Rakazo's
+accepted only for loopback and private LAN addresses (not link-local). The app verifies autoSEO's
 health endpoint before saving, and later launches go straight to that instance.
 
-Use **Change Rakazo Server…** in the application menu to reconnect. Closing that window without
+Use **Change autoSEO Server…** in the application menu to reconnect. Closing that window without
 saving returns to the previous instance. For development automation, set `RAKAZO_WEB_URL` to point
 the shell somewhere else without changing the saved instance, or `RAKAZO_FORCE_SETUP=1` to run
 setup again.
@@ -101,7 +101,7 @@ Mobile build and release instructions live in [docs/mobile-release.md](./docs/mo
 
 ## Development
 
-Rakazo is a TypeScript monorepo built with React, Electron, Expo, Hono, Postgres, Prisma, Graphile
+autoSEO is a TypeScript monorepo built with React, Electron, Expo, Hono, Postgres, Prisma, Graphile
 Worker, and Pi.
 
 ```text
@@ -143,6 +143,41 @@ COMPUTER_E2E_MODEL=<vision-capable-openrouter-model-id> pnpm test:computer
 - [Mobile releases](./docs/mobile-release.md)
 - [Performance testing](./docs/performance.md)
 
+## Link Builder
+
+Link Builder is the weekday forum workflow inside this repo. A customer creates a project, fills the
+wizard, and clicks **Start building**. The worker then posts from a persona browser. The dashboard
+does not show a legal warning banner; the terms are in [PRODUCT.md](./PRODUCT.md).
+
+Customer setup, in wizard order:
+
+1. Project: brand name and allowed domains.
+2. Markets: country, locale, and timezone for each market.
+3. Persona: display name, language, and register.
+4. Captell token: paste it once. It is stored in the encrypted secret store and is not returned by the API.
+5. Proxy: an endpoint template. IPRoyal is the first preset, Oxylabs the second. Until a deployment sets a host, the placeholder is `proxy.example`.
+6. Mailbox: set `AGENTMAIL_API_KEY` to provision a real inbox. Without it, the address is `lb-<projectId>@inbox.example`.
+7. Disclosure: the default is `undisclosed_persona`.
+8. Start: clicking **Start building** records `responsibilityAck` for that project.
+9. Schedule: weekdays, inside the project's window.
+
+The persona browser runs in the computer sandbox (Docker locally, Daytona or E2B when that provider
+is selected). The sandbox image is expected to provide Node.js, Chromium at `/usr/bin/chromium`,
+`rakazo-lb-browser` on `PATH`, and a display the operator live screen can attach to. That image
+expectation has not been checked against a live Daytona or E2B sandbox.
+
+Kernel is optional. Set `LINK_BUILDER_BROWSER=kernel` and `LINK_BUILDER_KERNEL_SECRET_ID` to a
+secret id in the encrypted store. The adapter speaks HTTPS with an injected fetch and is not
+constructed otherwise. It does not upload extension zips; name extensions already stored in the
+Kernel project with `LINK_BUILDER_KERNEL_EXTENSION`. CI does not call Kernel.
+
+Plan limits in v1 come from a static `starter` stub (`projects` 3, `live_per_day` 10, `personas` 3).
+There is no Stripe SDK and no billing webhook. The link-builder API allows 120 requests per minute
+per workspace in each API process.
+
+Harold still runs these live canaries separately: Captell, two-board identity, the sandbox browser,
+AgentMail inbound, and an https webhook. This tree does not record their results.
+
 ## Contributing
 
 The Playwright workflow can also be started manually with **Sandbox provider** set to `e2b`, `daytona`, or `box`.
@@ -152,6 +187,6 @@ Contributions are welcome. Please read [CONTRIBUTING.md](./CONTRIBUTING.md) befo
 request. For security vulnerabilities, follow [SECURITY.md](./SECURITY.md) instead of filing a public
 issue.
 
-Rakazo is licensed under the [Apache License 2.0](./LICENSE).
+autoSEO is licensed under the [Apache License 2.0](./LICENSE).
 
-Questions and ideas are welcome in the [Rakazo Discord community](https://discord.gg/RWwKa2Sn7h).
+Questions and ideas are welcome in the [autoSEO Discord community](https://discord.gg/RWwKa2Sn7h).

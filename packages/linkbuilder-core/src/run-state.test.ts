@@ -38,6 +38,9 @@ const LEGAL: Array<[RunStatus, RunStatus]> = [
   ["overtime", "failed"],
   ["overtime", "cancelled"],
   ["failed", "queued"],
+  ["succeeded", "running"],
+  ["partial", "running"],
+  ["cancelled", "running"],
 ];
 
 describe("run state machine", () => {
@@ -58,13 +61,15 @@ describe("run state machine", () => {
     expect(RUN_STATUSES.filter(isRunTerminal)).toEqual([...TERMINAL_RUN_STATUSES]);
   });
 
-  it("only leaves a terminal status through a failed-day retry", () => {
+  it("reopens a closed day when Start is pressed, and retries a failed day through queued", () => {
     fc.assert(
       fc.property(
         fc.constantFrom(...TERMINAL_RUN_STATUSES),
         fc.constantFrom(...RUN_STATUSES),
         (from, to) => {
-          expect(canTransitionRun(from, to)).toBe(from === "failed" && to === "queued");
+          const start = from !== "failed" && to === "running";
+          const retry = from === "failed" && to === "queued";
+          expect(canTransitionRun(from, to)).toBe(start || retry);
         },
       ),
     );

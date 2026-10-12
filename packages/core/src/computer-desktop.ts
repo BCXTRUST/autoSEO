@@ -39,8 +39,7 @@ export function looksLikeDesktopBrowserApp(application: string): boolean {
 
 const BROWSER_HUNT_SHELL =
   /\b(?:which|whereis|type\s+-a|command\s+-v)\b[\s\S]{0,400}\b(?:firefox|chromium|google-chrome|chrome|brave-browser|msedge)\b/i;
-const BROWSER_LS_SHELL =
-  /\bls\b[\s\S]{0,200}(?:\/usr(?:\/(?:local\/)?bin)?|\/opt|\/snap)\b/i;
+const BROWSER_LS_SHELL = /\bls\b[\s\S]{0,200}(?:\/usr(?:\/(?:local\/)?bin)?|\/opt|\/snap)\b/i;
 
 export const BROWSER_HUNT_SHELL_ERROR =
   "The desktop already has a browser. Use computer_observe, then computer_act or open_path on the page you see. Do not search for browsers with shell.";
@@ -57,6 +56,181 @@ export function refuseBrowserHuntShell(command: string): string | undefined {
 
 function posixShellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+/** Marker for a browser process that must outlive the command that started it. */
+export const DETACHED_BROWSER_MARKER = "RAKAZO_DETACH_BROWSER";
+
+/**
+ * Written only by a launch that disables translate and uses a German UI.
+ * A desktop that is already on the problem query but missing this file is an
+ * older Chrome, and its translate bubble stays until that process is replaced.
+ */
+export const CHROME_KIOSK_STAMP = "/tmp/rakazo-chrome-kiosk-v3";
+
+export function chromeKioskStampCommand(): string {
+  return `test -f ${posixShellQuote(CHROME_KIOSK_STAMP)} && printf '%s\\n' ok || true`;
+}
+
+/**
+ * Drop the desktop shell and any Chrome that was started without kiosk flags.
+ * An already-running Chrome ignores `--kiosk` and `--no-first-run` on a second launch.
+ * `exec` inside the detached command replaces the shell so E2B can disconnect
+ * without reaping the browser.
+ */
+const DESKTOP_PANEL_PROCESSES =
+  "xfce4-panel xfdesktop pcmanfm lxpanel tint2 plank gnome-panel plasmashell xfce4-notifyd fbpanel lxqt-panel mate-panel";
+
+/** Hide the window-manager bar (Applications, clock) so noVNC is only the browser. */
+function hideDesktopChromeShell(): string {
+  return [
+    `killall -q ${DESKTOP_PANEL_PROCESSES} >/dev/null 2>&1 || true`,
+    'for home in "$HOME" /root /tmp/fluxbox-home /tmp/fluxbox-home-0 /home/user /home/ubuntu /home/rakazo; do',
+    '  [ -d "$home/.fluxbox" ] || continue',
+    '  init="$home/.fluxbox/init"',
+    '  touch "$init"',
+    '  grep -v "session.screen0.toolbar.visible" "$init" > "$init.rakazo" || true',
+    "  printf '%s\\n' 'session.screen0.toolbar.visible: false' >> \"$init.rakazo\"",
+    '  mv "$init.rakazo" "$init"',
+    "done",
+    "fluxbox-remote reconfigure >/dev/null 2>&1 || true",
+    "for class in fluxbox Fluxbox xfce4-panel Xfce4-panel pcmanfm Pcmanfm lxpanel tint2; do",
+    '  xdotool search --class "$class" windowunmap >/dev/null 2>&1 || true',
+    "done",
+  ].join("\n");
+}
+
+function dismissChromeDialogShell(): string {
+  return [
+    'for name in "Welcome to Google Chrome" "Can\'t update Chrome" "Can’t update Chrome" "Cannot update Chrome" "Couldn\'t update Chrome" "Reinstall Chrome" "Google Translate" "Translate this page" "Diese Seite übersetzen" "Seite übersetzen"; do',
+    "  dialog=$(xdotool search --onlyvisible --name \"$name\" 2>/dev/null | awk 'NR==1{print; exit}')",
+    '  if [ -n "$dialog" ]; then',
+    '    xdotool windowclose "$dialog" >/dev/null 2>&1 || true',
+    "  fi",
+    "done",
+  ].join("\n");
+}
+
+/** Chrome reads this even when --disable-translate is ignored. Escape is not used: it leaves fullscreen. */
+function installChromeTranslatePolicyShell(): string {
+  return [
+    `policy='{"TranslateEnabled":false}'`,
+    "for dir in /etc/opt/chrome/policies/managed /etc/chromium/policies/managed /etc/chromium-browser/policies/managed; do",
+    '  mkdir -p "$dir" 2>/dev/null || sudo -n mkdir -p "$dir" 2>/dev/null || continue',
+    `  printf '%s\\n' "$policy" > "$dir/rakazo-translate.json" 2>/dev/null || printf '%s\\n' "$policy" | sudo -n tee "$dir/rakazo-translate.json" >/dev/null 2>&1 || true`,
+    '  chmod a+r "$dir/rakazo-translate.json" 2>/dev/null || sudo -n chmod a+r "$dir/rakazo-translate.json" 2>/dev/null || true',
+    "done",
+  ].join("\n");
+}
+
+/** Keep the fluxbox bar and a late translate bubble off after the search page has painted. */
+function startDesktopWatchShell(): string {
+  return [
+    "cat > /tmp/rakazo-desktop-watch.sh << 'EOF'",
+    "while true; do",
+    `killall -q ${DESKTOP_PANEL_PROCESSES} 2>/dev/null || true`,
+    "xdotool search --class fluxbox windowunmap >/dev/null 2>&1 || true",
+    "xdotool search --name Toolbar windowunmap >/dev/null 2>&1 || true",
+    dismissChromeDialogShell(),
+    "sleep 1",
+    "done",
+    "EOF",
+    "chmod +x /tmp/rakazo-desktop-watch.sh",
+    "if ! pgrep -f '[r]akazo-desktop-watch' >/dev/null 2>&1; then",
+    "  setsid -f /tmp/rakazo-desktop-watch.sh </dev/null >/dev/null 2>&1 || true",
+    "fi",
+  ].join("\n");
+}
+
+export function prepareKioskDesktopCommand(display: string): string {
+  const quotedDisplay = posixShellQuote(display);
+  return [
+    `export DISPLAY=${quotedDisplay}`,
+    "export LANG=de_DE.UTF-8",
+    "export LANGUAGE=de_DE:de",
+    "killall -q chrome chromium chromium-browser google-chrome google-chrome-stable >/dev/null 2>&1 || true",
+    installChromeTranslatePolicyShell(),
+    hideDesktopChromeShell(),
+    "sleep 0.3",
+  ].join("\n");
+}
+
+export function detachedBrowserCommand(display: string, url: string): string {
+  const quotedUrl = posixShellQuote(url.trim());
+  const quotedDisplay = posixShellQuote(display);
+  const launch = [
+    `export DISPLAY=${quotedDisplay}`,
+    "export LANG=de_DE.UTF-8",
+    "export LANGUAGE=de_DE:de",
+    `url=${quotedUrl}`,
+    "dir=/tmp/rakazo-linkbuilder-chrome",
+    'rm -rf "$dir"',
+    'mkdir -p "$dir/Default"',
+    'touch "$dir/First Run"',
+    installChromeTranslatePolicyShell(),
+    `printf '%s\\n' '{"browser":{"check_default_browser":false,"has_seen_welcome_page":true},"translate":{"enabled":false},"translate_blocked_languages":["de","de-DE","en","en-US"],"intl":{"accept_languages":"de-DE,de","selected_languages":"de-DE,de"},"distribution":{"skip_first_run_ui":true,"suppress_first_run_default_browser_prompt":true,"make_chrome_default_for_user":false}}' > "$dir/Default/Preferences"`,
+    `printf '%s\\n' '{"intl":{"app_locale":"de","accept_languages":"de-DE,de"}}' > "$dir/Local State"`,
+    'flags="--user-data-dir=$dir --kiosk --start-fullscreen --no-first-run --disable-fre --no-default-browser-check --disable-search-engine-choice-screen --disable-translate --disable-infobars --noerrdialogs --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-component-update --disable-background-networking --lang=de --accept-lang=de-DE,de --disable-features=Translate,TranslateUI,InfiniteSessionRestore,ChromeWhatsNewUI,OutdatedBuildDetector --password-store=basic --disable-sync --disable-dev-shm-usage --no-sandbox --window-position=0,0 --window-size=1280,800"',
+    `printf '%s\\n' translate-off > ${posixShellQuote(CHROME_KIOSK_STAMP)}`,
+    startDesktopWatchShell(),
+    'if [ -x /usr/bin/google-chrome ]; then exec /usr/bin/google-chrome $flags "$url"; fi',
+    'if [ -x /usr/bin/google-chrome-stable ]; then exec /usr/bin/google-chrome-stable $flags "$url"; fi',
+    'if [ -x /usr/bin/chromium ]; then exec /usr/bin/chromium $flags "$url"; fi',
+    'if [ -x /usr/bin/chromium-browser ]; then exec /usr/bin/chromium-browser $flags "$url"; fi',
+    'if command -v google-chrome >/dev/null 2>&1; then exec google-chrome $flags "$url"; fi',
+    'if command -v chromium >/dev/null 2>&1; then exec chromium $flags "$url"; fi',
+    'if command -v firefox >/dev/null 2>&1; then exec firefox --kiosk "$url"; fi',
+    'exec xdg-open "$url"',
+  ];
+  return [`# ${DETACHED_BROWSER_MARKER}`, ...launch].join("\n");
+}
+
+/** Wait until a browser window exists, then make it the only thing on the screen. */
+export function raiseBrowserWindowCommand(display: string): string {
+  const quotedDisplay = posixShellQuote(display);
+  const classes = ["google-chrome", "Google-chrome", "Chromium", "chromium", "firefox", "Firefox"]
+    .map(posixShellQuote)
+    .join(" ");
+  return [
+    `export DISPLAY=${quotedDisplay}`,
+    hideDesktopChromeShell(),
+    dismissChromeDialogShell(),
+    "id=",
+    "for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do",
+    hideDesktopChromeShell(),
+    dismissChromeDialogShell(),
+    `  for class in ${classes}; do`,
+    "    id=$(xdotool search --onlyvisible --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
+    '    if [ -n "$id" ]; then break; fi',
+    "  done",
+    '  if [ -n "$id" ]; then',
+    '    name=$(xdotool getwindowname "$id" 2>/dev/null || true)',
+    '    case "$name" in',
+    '      *"Welcome to Google Chrome"*|*"update Chrome"*|*"Reinstall Chrome"*)',
+    '        xdotool windowclose "$id" >/dev/null 2>&1 || true',
+    "        id=",
+    "        sleep 0.3",
+    "        continue",
+    "        ;;",
+    "    esac",
+    "    read -r width height <<EOF",
+    "$(xdotool getdisplaygeometry 2>/dev/null || echo 1280 800)",
+    "EOF",
+    "    width=${width:-1280}",
+    "    height=${height:-800}",
+    '    xdotool windowmove "$id" 0 0 windowsize --sync "$id" "$width" "$height" windowactivate "$id" windowraise "$id" || true',
+    '    xdotool windowstate --add FULLSCREEN "$id" 2>/dev/null || true',
+    '    if command -v wmctrl >/dev/null 2>&1; then wmctrl -i -r "$id" -b add,fullscreen,above 2>/dev/null || true; fi',
+    "    for _dismiss in 1 2 3 4 5; do",
+    dismissChromeDialogShell().replace(/^/gm, "    "),
+    "      sleep 0.5",
+    "    done",
+    "    exit 0",
+    "  fi",
+    "  sleep 0.4",
+    "done",
+    "exit 1",
+  ].join("\n");
 }
 
 /** Open an http(s) URL in a real browser instead of xdg-open (which often raises Files). */

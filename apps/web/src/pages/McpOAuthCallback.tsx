@@ -54,7 +54,7 @@ export function McpOAuthCallbackPage() {
             onClick={() => navigate("/app")}
             className="mt-5 rounded-xl bg-[#7785FF] px-4 py-2 text-sm font-semibold text-[#090A12]"
           >
-            Return to Rakazo
+            Return to autoSEO
           </button>
         ) : (
           <p className="mt-2 text-sm text-[#85858B]">

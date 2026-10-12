@@ -15,6 +15,7 @@ import {
   releaseComputerExecutionLease,
   renewComputerExecutionLease,
   screenLeaseIdForRun,
+  staleComputerBoot,
 } from "./computer-lifecycle.js";
 
 const context = {
@@ -27,6 +28,71 @@ const context = {
 } satisfies AdapterContext;
 
 describe("computer provisioning", () => {
+  it("reclaims a computer left booting after the process died", async () => {
+    expect(staleComputerBoot({ state: "running", updatedAt: new Date(0) })).toBe(false);
+    expect(staleComputerBoot({ state: "booting", updatedAt: new Date() })).toBe(false);
+    expect(
+      staleComputerBoot({ state: "booting", updatedAt: new Date(Date.now() - 10 * 60_000) }),
+    ).toBe(true);
+    const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-stale-boot-"));
+    const stale = new Date(Date.now() - 10 * 60_000);
+    let state = "booting";
+    const updateMany = vi.fn(async ({ data }: { data: { state?: string } }) => {
+      if (data.state) state = data.state;
+      return { count: 1 };
+    });
+    const prisma = {
+      computer: {
+        findUniqueOrThrow: vi.fn(async () => ({
+          id: "computer-1",
+          homeKey: "bot-1",
+          providerRef: "sandbox-1",
+          kind: "e2b",
+          scope: "team",
+          state,
+          controlLeaseId: null,
+          updatedAt: state === "stopped" ? new Date() : stale,
+        })),
+        updateMany,
+      },
+    } as unknown as PrismaClient;
+    const sandbox = {
+      provision: vi.fn().mockResolvedValue({
+        id: "sandbox-1",
+        botId: "bot-1",
+        kind: "e2b",
+        providerRef: "sandbox-1",
+      }),
+      prepare: vi.fn().mockResolvedValue(undefined),
+      execute: async function* () {
+        yield { type: "exit" as const, code: 0 };
+      },
+    } as unknown as SandboxProvider;
+    try {
+      const ref = await provisionComputer(
+        {
+          prisma,
+          sandbox,
+          home: {} as AgentHomeStore,
+          jobs: {} as JobPublisher,
+          events: {} as ThreadEvents,
+          dataDir,
+        },
+        "computer-1",
+        context,
+      );
+      expect(ref.providerRef).toBe("sandbox-1");
+      expect(updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ state: "booting", updatedAt: stale }),
+          data: { state: "stopped" },
+        }),
+      );
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it("stops a provider when archive invalidates its boot claim", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-provision-race-"));
     const stop = vi.fn().mockResolvedValue(undefined);

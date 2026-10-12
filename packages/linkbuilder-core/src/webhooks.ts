@@ -31,10 +31,38 @@ function ipv6Private(host: string): boolean {
   );
 }
 
-export function webhookUrlAllowed(
+/** One answer from an injected resolver. Validation never fetches the webhook URL. */
+export interface ResolvedAddress {
+  address: string;
+}
+
+export type HostnameResolver = (hostname: string) => Promise<readonly ResolvedAddress[]>;
+
+export function isPrivateAddress(address: string): boolean {
+  const host =
+    address
+      .replace(/^\[|\]$/g, "")
+      .split("%")[0]
+      ?.toLowerCase() ?? "";
+  if (!host || PRIVATE_HOST.test(host)) return true;
+  if (host.includes(":")) return ipv6Private(host);
+  return ipv4Private(host);
+}
+
+function isIpLiteral(host: string): boolean {
+  if (host.includes(":")) return true;
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+}
+
+/**
+ * Syntactic check, plus a DNS check in production. The resolver is injected so tests stay
+ * offline. A hostname is refused when any answer is private, loopback, link-local, CGNAT,
+ * or a metadata name. The URL itself is not fetched.
+ */
+export async function webhookUrlAllowed(
   value: string,
-  options: { production: boolean },
-): { ok: true; url: URL } | { ok: false; reason: string } {
+  options: { production: boolean; resolve?: HostnameResolver },
+): Promise<{ ok: true; url: URL } | { ok: false; reason: string }> {
   let url: URL;
   try {
     url = new URL(value);
@@ -44,8 +72,22 @@ export function webhookUrlAllowed(
   if (url.protocol !== "https:") return { ok: false, reason: "https" };
   if (url.username || url.password) return { ok: false, reason: "userinfo" };
   const host = url.hostname.replace(/^\[|\]$/g, "");
-  const privateHost = PRIVATE_HOST.test(host) || ipv4Private(host) || ipv6Private(host);
-  if (options.production && privateHost) return { ok: false, reason: "private" };
+  if (isPrivateAddress(host)) {
+    if (options.production) return { ok: false, reason: "private" };
+    return { ok: true, url };
+  }
+  if (!options.production || isIpLiteral(host)) return { ok: true, url };
+  if (!options.resolve) return { ok: false, reason: "unresolved" };
+  let answers: readonly ResolvedAddress[];
+  try {
+    answers = await options.resolve(host);
+  } catch {
+    return { ok: false, reason: "unresolved" };
+  }
+  if (answers.length === 0) return { ok: false, reason: "unresolved" };
+  if (answers.some((answer) => isPrivateAddress(answer.address))) {
+    return { ok: false, reason: "private" };
+  }
   return { ok: true, url };
 }
 

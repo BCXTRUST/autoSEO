@@ -26,24 +26,36 @@ describe("probePages", () => {
     expect(settleProbe(facts, true).status).toBe("qualified");
   });
 
-  it.each(["funcaptcha", "geetest", "keycaptcha"] as const)(
-    "sends %s straight to unsupported_captcha",
-    (captcha) => {
-      const facts = probePages({
-        homepageUrl: "https://board.example/",
-        pages: [
-          {
-            url: "https://board.example/",
-            html: sampleForumHtml({ platform: "phpbb", captcha }),
-          },
-        ],
-      });
-      expect(settleProbe(facts, true)).toMatchObject({
-        status: "unsupported_captcha",
-        reason: "unsupported_captcha",
-      });
-    },
-  );
+  it.each(["funcaptcha", "geetest"] as const)("keeps %s for the HTTPS door", (captcha) => {
+    const facts = probePages({
+      homepageUrl: "https://board.example/",
+      pages: [
+        {
+          url: "https://board.example/",
+          html: sampleForumHtml({ platform: "phpbb", captcha }),
+        },
+      ],
+    });
+    expect(facts.captchaUnsupported).toBe(false);
+    expect(facts.captchaType).toBe(captcha);
+    expect(settleProbe(facts, true).status).toBe("qualified");
+  });
+
+  it.each(["keycaptcha"] as const)("sends %s straight to unsupported_captcha", (captcha) => {
+    const facts = probePages({
+      homepageUrl: "https://board.example/",
+      pages: [
+        {
+          url: "https://board.example/",
+          html: sampleForumHtml({ platform: "phpbb", captcha }),
+        },
+      ],
+    });
+    expect(settleProbe(facts, true)).toMatchObject({
+      status: "unsupported_captcha",
+      reason: "unsupported_captcha",
+    });
+  });
 
   it("denies a board whose rules forbid commercial links", () => {
     const facts = probePages({

@@ -56,6 +56,10 @@ export async function sleepComputerIfIdle(
     scheduleComputerSleep(deps.jobs, computerId);
     return;
   }
+  if (await linkBuilderStepOpen(deps.prisma, computer.workspaceId)) {
+    scheduleComputerSleep(deps.jobs, computerId);
+    return;
+  }
 
   const ctx = {
     operationId: "computer.sleep",
@@ -171,6 +175,17 @@ function loadComputer(prisma: PrismaClient, computerId: string) {
       controlBotId: true,
       updatedAt: true,
     },
+  });
+}
+
+/** A live link-builder step holds the desktop. Between sites the sandbox can sleep. */
+function linkBuilderStepOpen(prisma: PrismaClient, workspaceId: string) {
+  return prisma.lbRun.findFirst({
+    where: {
+      leaseExpiresAt: { gt: new Date() },
+      project: { workspaceId, status: "active", archivedAt: null },
+    },
+    select: { id: true },
   });
 }
 

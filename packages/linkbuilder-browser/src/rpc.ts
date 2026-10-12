@@ -1,4 +1,4 @@
-import type { BrowserSession, FormFieldInfo } from "@rakazo/adapter-kit";
+import type { BrowserSession, ClickableControl, FormFieldInfo } from "@rakazo/adapter-kit";
 import { redactSecrets } from "@rakazo/linkbuilder-core";
 import { z } from "zod";
 
@@ -24,12 +24,15 @@ export const BrowserRpcRequestSchema = z.discriminatedUnion("method", [
   z.object({ method: z.literal("click"), selector }).strict(),
   z.object({ method: z.literal("text"), selector }).strict(),
   z.object({ method: z.literal("exists"), selector }).strict(),
+  z.object({ method: z.literal("isVisible"), selector }).strict(),
+  z.object({ method: z.literal("isChecked"), selector }).strict(),
   z.object({ method: z.literal("attribute"), selector, name: z.string().min(1).max(200) }).strict(),
   z
     .object({
       method: z.literal("elementScreenshotPng"),
       selector,
       paddingPx: z.number().int().min(0).max(200).optional(),
+      insetPx: z.number().int().min(0).max(200).optional(),
     })
     .strict(),
   z
@@ -40,8 +43,19 @@ export const BrowserRpcRequestSchema = z.discriminatedUnion("method", [
     })
     .strict(),
   z.object({ method: z.literal("pageText") }).strict(),
+  z.object({ method: z.literal("ariaSnapshot") }).strict(),
   z.object({ method: z.literal("navigationMeta") }).strict(),
   z.object({ method: z.literal("formFields"), selector }).strict(),
+  z.object({ method: z.literal("clickables") }).strict(),
+  z.object({ method: z.literal("listText"), selector }).strict(),
+  z.object({ method: z.literal("listAnchors"), selector }).strict(),
+  z
+    .object({
+      method: z.literal("drag"),
+      sourceSelector: selector,
+      targetSelector: selector,
+    })
+    .strict(),
   z
     .object({
       method: z.literal("waitFor"),
@@ -50,6 +64,7 @@ export const BrowserRpcRequestSchema = z.discriminatedUnion("method", [
     })
     .strict(),
   z.object({ method: z.literal("screenshotPng") }).strict(),
+  z.object({ method: z.literal("clickConsent") }).strict(),
   z.object({ method: z.literal("loadedExtensions") }).strict(),
   z.object({ method: z.literal("extensionVersions") }).strict(),
   z.object({ method: z.literal("close") }).strict(),
@@ -106,11 +121,20 @@ export class BrowserRpcServer {
         return session.text(request.selector);
       case "exists":
         return session.exists(request.selector);
+      case "isVisible":
+        return session.isVisible
+          ? session.isVisible(request.selector)
+          : session.exists(request.selector);
+      case "isChecked":
+        return session.isChecked ? session.isChecked(request.selector) : false;
       case "attribute":
         return session.attribute(request.selector, request.name);
       case "elementScreenshotPng":
         return binary(
-          await session.elementScreenshotPng(request.selector, { paddingPx: request.paddingPx }),
+          await session.elementScreenshotPng(request.selector, {
+            paddingPx: request.paddingPx,
+            insetPx: request.insetPx,
+          }),
         );
       case "injectToken":
         this.secrets.add(request.token);
@@ -118,15 +142,28 @@ export class BrowserRpcServer {
         return session.injectToken(request.fieldName, request.token);
       case "pageText":
         return session.pageText();
+      case "ariaSnapshot":
+        return session.ariaSnapshot ? session.ariaSnapshot() : "";
       case "navigationMeta":
         return session.navigationMeta ? session.navigationMeta() : { status: null, headers: {} };
       case "formFields":
         if (!session.formFields) throw new Error("This browser cannot list form fields");
         return session.formFields(request.selector);
+      case "clickables":
+        return session.clickables ? session.clickables() : [];
+      case "listText":
+        return session.listText ? session.listText(request.selector) : [];
+      case "listAnchors":
+        return session.listAnchors ? session.listAnchors(request.selector) : [];
+      case "drag":
+        if (!session.drag) return null;
+        return session.drag(request.sourceSelector, request.targetSelector);
       case "waitFor":
         return session.waitFor(request.selector, { timeoutMs: request.timeoutMs });
       case "screenshotPng":
         return binary(await session.screenshotPng());
+      case "clickConsent":
+        return session.clickConsent ? session.clickConsent() : false;
       case "loadedExtensions":
         return session.loadedExtensions ? session.loadedExtensions() : [];
       case "extensionVersions":
@@ -190,6 +227,14 @@ export class RpcBrowserSession implements BrowserSession {
     return z.boolean().parse(await this.call({ method: "exists", selector }));
   }
 
+  async isVisible(selector: string): Promise<boolean> {
+    return z.boolean().parse(await this.call({ method: "isVisible", selector }));
+  }
+
+  async isChecked(selector: string): Promise<boolean> {
+    return z.boolean().parse(await this.call({ method: "isChecked", selector }));
+  }
+
   async attribute(selector: string, name: string): Promise<string | null> {
     return z
       .string()
@@ -197,11 +242,15 @@ export class RpcBrowserSession implements BrowserSession {
       .parse(await this.call({ method: "attribute", selector, name }));
   }
 
-  elementScreenshotPng(selector: string, options?: { paddingPx?: number }): Promise<Uint8Array> {
+  elementScreenshotPng(
+    selector: string,
+    options?: { paddingPx?: number; insetPx?: number },
+  ): Promise<Uint8Array> {
     return this.bytes({
       method: "elementScreenshotPng",
       selector,
       paddingPx: options?.paddingPx,
+      insetPx: options?.insetPx,
     });
   }
 
@@ -213,10 +262,44 @@ export class RpcBrowserSession implements BrowserSession {
     return z.string().parse(await this.call({ method: "pageText" }));
   }
 
+  async ariaSnapshot(): Promise<string> {
+    return z.string().parse(await this.call({ method: "ariaSnapshot" }));
+  }
+
   async navigationMeta(): Promise<{ status: number | null; headers: Record<string, string> }> {
     return z
       .object({ status: z.number().nullable(), headers: z.record(z.string(), z.string()) })
       .parse(await this.call({ method: "navigationMeta" }));
+  }
+
+  async listText(selector: string): Promise<string[]> {
+    return z.array(z.string()).parse(await this.call({ method: "listText", selector }));
+  }
+
+  async listAnchors(selector: string): Promise<Array<{ text: string; href: string }>> {
+    return z
+      .array(z.object({ text: z.string(), href: z.string() }).strict())
+      .parse(await this.call({ method: "listAnchors", selector }));
+  }
+
+  async drag(sourceSelector: string, targetSelector: string): Promise<void> {
+    await this.call({ method: "drag", sourceSelector, targetSelector });
+  }
+
+  async clickables(): Promise<ClickableControl[]> {
+    return z
+      .array(
+        z.object({
+          selector: z.string(),
+          tag: z.string(),
+          role: z.string().nullable(),
+          type: z.string().nullable(),
+          text: z.string(),
+          href: z.string().nullable(),
+          inHeader: z.boolean(),
+        }),
+      )
+      .parse(await this.call({ method: "clickables" }));
   }
 
   async formFields(selector: string): Promise<FormFieldInfo[]> {
@@ -232,6 +315,13 @@ export class RpcBrowserSession implements BrowserSession {
           label: z.string(),
           role: z.string().nullable(),
           required: z.boolean(),
+          placeholder: z.string().nullable().optional(),
+          group: z.string().nullable().optional(),
+          hidden: z.boolean().optional(),
+          value: z.string().nullable().optional(),
+          options: z
+            .array(z.object({ value: z.string(), label: z.string() }).strict())
+            .optional(),
         }),
       )
       .parse(await this.call({ method: "formFields", selector }));
@@ -245,6 +335,10 @@ export class RpcBrowserSession implements BrowserSession {
 
   screenshotPng(): Promise<Uint8Array> {
     return this.bytes({ method: "screenshotPng" });
+  }
+
+  async clickConsent(): Promise<boolean> {
+    return z.boolean().parse(await this.call({ method: "clickConsent" }));
   }
 
   async loadedExtensions(): Promise<string[]> {

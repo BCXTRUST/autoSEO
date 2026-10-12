@@ -211,6 +211,7 @@ function draftFile(ctx: DraftContext, lane: "draft" | "fallback", json: unknown)
     title: ctx.title,
     excerpt: ctx.excerpt,
     citeSource: ctx.citeSource,
+    maxChars: ctx.content.maxReplyChars,
   });
   return { lane, ...prompt, json };
 }
@@ -245,6 +246,7 @@ describe("recorded model harness", () => {
       title: ctx.title,
       excerpt: ctx.excerpt,
       citeSource: true,
+      maxChars: ctx.content.maxReplyChars,
     });
     expect(`${draft.system}\n${draft.user}`).not.toMatch(PROMPT_FORBIDDEN);
     const prepared = await draftWithModel(
@@ -340,6 +342,31 @@ describe("recorded model harness", () => {
       draftContext({ content: { mode: "queue", bannedClaims: [], maxReplyChars: 1200 } }),
     );
     expect(queued.action).toBe("queue");
+  });
+
+  it("posts a warm-up reply that is not limited to the fact sheet", async () => {
+    const ctx = draftContext({ citeSource: false });
+    const reply = {
+      ...goodReply,
+      linkSlot: "none" as const,
+      targetUrlIndex: null,
+      anchorText: null,
+      body: "Bei mir hat Dehnen nach der Arbeit geholfen.",
+    };
+    const prepared = await draftWithModel(
+      await harness([
+        relevanceFile(ctx),
+        draftFile(ctx, "draft", { modelId: "recorded-draft", value: reply }),
+        fitFile(ctx, reply.body, {
+          modelId: "recorded-classify",
+          value: { fitsThread: true, soundsLikeAd: false, factsOnly: false, issues: ["extra"] },
+        }),
+      ]),
+      ctx,
+    );
+    expect(prepared.action).toBe("post");
+    expect(prepared.linkSlot).toBe("none");
+    expect(prepared.body).toContain("Dehnen");
   });
 
   it("rejects a banned claim, Swiss sharp s, a long anchor and a foreign target", () => {

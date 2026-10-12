@@ -32,7 +32,7 @@ export function relevancePrompt(input: {
     .join("\n");
   return {
     system:
-      "You compare a forum thread with a topic. Score relevance from 0 to 1. openQuestion is true when the author is still asking for an answer. Reply with JSON only.",
+      'You compare a forum thread with a topic. Score relevance from 0 to 1. openQuestion is true when the author is still asking for an answer. Reply with JSON only: {"relevance": number, "openQuestion": boolean, "reasons": string[]}.',
     user: [
       `Topic: ${input.laneTag}`,
       input.laneDescription,
@@ -58,6 +58,7 @@ export function draftPrompt(input: {
   excerpt: string;
   /** Warm-up replies must not cite a source. */
   citeSource: boolean;
+  maxChars: number;
 }): PromptPair {
   const address =
     input.language.split("-")[0] === "de"
@@ -77,7 +78,7 @@ export function draftPrompt(input: {
   const facts = input.facts.map((fact) => `- ${fact}`).join("\n");
   const cite = input.citeSource
     ? "You may mark one source with [REF]. Set linkSlot to inline when [REF] is in the body, signature when the source belongs under the post, or none when you did not use a source. Set targetUrlIndex to that source's index, or null. anchorText is a short phrase of at most 60 characters, or null."
-    : "Do not cite a source. Do not use [REF]. Set linkSlot to none, targetUrlIndex to null and anchorText to null.";
+    : "Do not cite a source. Do not use [REF]. Do not mention a shop, a brand, or something to buy. Set linkSlot to none, targetUrlIndex to null and anchorText to null.";
   return {
     system: SYSTEM,
     user: [
@@ -92,7 +93,9 @@ export function draftPrompt(input: {
       "Sources you may cite:",
       sources || "(none)",
       cite,
-      "Also return confidence from 0 to 1.",
+      `Write at most ${input.maxChars} characters.`,
+      "Do not state a number or a percentage unless it is in the facts or the thread.",
+      'Reply with JSON only, with these keys: "body" (the forum reply), "linkSlot" ("none", "inline", or "signature"), "targetUrlIndex" (a number or null), "anchorText" (a short string or null), "confidence" (a number from 0 to 1).',
       `Thread title: ${input.title}`,
       `Thread: ${input.excerpt}`,
     ]

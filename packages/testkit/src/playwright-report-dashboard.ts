@@ -169,7 +169,7 @@ export function renderPlaywrightDashboard(history: PlaywrightRun[]): string {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
-  <title>Playwright · Rakazo</title>
+  <title>Playwright · autoSEO</title>
   <style>
     ${SHARED_PAGE_STYLES}
     body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, #312e81 0, #09090b 34rem); }
@@ -210,7 +210,7 @@ export function renderPlaywrightDashboard(history: PlaywrightRun[]): string {
   <main>
     <header>
       <div>
-        <p class="eyebrow">Rakazo · browser checks</p>
+        <p class="eyebrow">autoSEO · browser checks</p>
         <h1>Playwright</h1>
         <p class="subtitle">Persistent visual evidence and results from the emulated end-to-end suite.</p>
       </div>
@@ -403,7 +403,7 @@ export function renderScreenshotGallery(input: {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
-  <title>Run screenshots · Rakazo</title>
+  <title>Run screenshots · autoSEO</title>
   <style>
     ${SHARED_PAGE_STYLES}
     body { margin: 0; min-height: 100vh; background: radial-gradient(circle at top, #312e81 0, #09090b 36rem); }
@@ -454,7 +454,7 @@ export function renderScreenshotGallery(input: {
   <main>
     <header>
       <div>
-        <p class="eyebrow">Rakazo · visual review</p>
+        <p class="eyebrow">autoSEO · visual review</p>
         <h1>${input.pullRequestNumber ? `PR #${input.pullRequestNumber} screenshots` : "Run screenshots"}</h1>
         <p class="subtitle">Review intentional checkpoints separately from automatic failure captures.</p>
       </div>

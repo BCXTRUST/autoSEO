@@ -28,11 +28,27 @@ export interface PhpbbFixtureOptions {
   captchaImage?: "noise" | "tiny";
   /** Which challenge the register form shows. Image letters is the default. */
   challenge?: "image" | "widget" | "question";
+  /** Widget vendor when `challenge` is `widget`. reCAPTCHA v2 is the default. */
+  widget?: "recaptcha" | "hcaptcha" | "turnstile";
   /** Knowledge question shown when `challenge` is `question`. */
   question?: string;
+  /** Accepted answer for the knowledge question, compared case-insensitively. */
+  questionAnswer?: string;
+  /**
+   * Where an email activation link leaves the browser.
+   * `message` is the stock notice, `login` is the login form, `session` logs the member in.
+   */
+  activationLanding?: "message" | "login" | "session";
+  /** Custom theme: birthday, security question, and newsletter radio are required. */
+  extraRequired?: boolean;
   /** How posted links are rendered. */
   rel?: FixtureRel;
   activation?: "email" | "none" | "admin";
+  /**
+   * `form` prints the admin sentence on the register form. `result` hides it until the
+   * account is created, which is what phpBB does when activation is "by an administrator".
+   */
+  adminNotice?: "form" | "result";
   /** Registration submits that return the spam-protection sentence before a real result. */
   spamRejects?: number;
   cookieWall?: boolean;
@@ -76,6 +92,8 @@ export interface PhpbbFixture {
   captchaImagesServed(): number;
   registrationSubmits(): number;
   replySubmits(): number;
+  /** Marks an admin-activation account as allowed to log in. */
+  approve(username: string): boolean;
   close(): Promise<void>;
 }
 
@@ -168,7 +186,11 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
   const captchaAnswer = options.captchaAnswer ?? "K7XQ2";
   const captchaImage = options.captchaImage ?? "noise";
   const challenge = options.challenge ?? "image";
+  const widget = options.widget ?? "recaptcha";
   const question = options.question ?? "Wie heißt die Hauptstadt von Deutschland?";
+  const questionAnswer = (options.questionAnswer ?? "berlin").toLowerCase();
+  const activationLanding = options.activationLanding ?? "message";
+  const extraRequired = options.extraRequired ?? false;
   const rel = options.rel ?? "ugc";
   const activation = options.activation ?? "email";
   const requests: RecordedRequest[] = [];
@@ -215,8 +237,9 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
     content: string,
     status = 200,
     headers: Record<string, string> = {},
+    forceUser?: FixtureUser,
   ) => {
-    const user = userFor(request);
+    const user = forceUser ?? userFor(request);
     const navUser = user
       ? `<a href="./ucp.php?mode=logout&amp;sid=x">Logout [ ${escapeHtml(user.username)} ]</a>`
       : `<a href="./ucp.php?mode=login">Login</a> &middot; <a href="./ucp.php?mode=register">Register</a>`;
@@ -232,7 +255,18 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
     heading: string,
     text: string,
     link = "",
-  ) => page(response, request, heading, render("message", { heading, text, link }));
+    headers: Record<string, string> = {},
+    forceUser?: FixtureUser,
+  ) =>
+    page(
+      response,
+      request,
+      heading,
+      render("message", { heading, text, link }),
+      200,
+      headers,
+      forceUser,
+    );
 
   const newCaptcha = () => {
     const id = randomBytes(8).toString("hex");
@@ -240,9 +274,22 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
     return id;
   };
 
+  const widgetTokenName =
+    widget === "hcaptcha"
+      ? "h-captcha-response"
+      : widget === "turnstile"
+        ? "cf-turnstile-response"
+        : "g-recaptcha-response";
+
   const captchaBlock = (confirmId: string) => {
     if (challenge === "widget") {
-      return `<div class="panel"><h3>Security check</h3><div class="g-recaptcha" data-sitekey="fixture-site-key"><textarea name="g-recaptcha-response"></textarea></div></div>`;
+      const box =
+        widget === "hcaptcha"
+          ? `<div class="h-captcha" data-sitekey="fixture-site-key"><textarea name="${widgetTokenName}"></textarea></div>`
+          : widget === "turnstile"
+            ? `<div class="cf-turnstile" data-sitekey="fixture-site-key"><textarea name="${widgetTokenName}"></textarea></div>`
+            : `<div class="g-recaptcha" data-sitekey="fixture-site-key"><textarea name="${widgetTokenName}"></textarea></div>`;
+      return `<div class="panel"><h3>Security check</h3>${box}</div>`;
     }
     if (challenge === "question") {
       return `<div class="panel"><h3>Confirmation of registration</h3><dl><dt><label for="qa_answer">${escapeHtml(question)}</label></dt><dd><input type="text" name="qa_answer" id="qa_answer" class="inputbox" /></dd></dl></div>`;
@@ -267,10 +314,18 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
         email: values.email ?? "",
         confirmId,
         error: values.error ? `<p class="error">${escapeHtml(values.error)}</p>` : "",
+        notice:
+          activation === "admin" && options.adminNotice !== "result"
+            ? `<p class="notice" id="activation-notice">An administrator must activate your account before you can log in.</p>`
+            : "",
         captchaBlock: captchaBlock(confirmId),
+        extraFields: extraRequired ? extraFieldsBlock() : "",
       }),
     );
   };
+
+  const extraFieldsBlock = () =>
+    `<fieldset class="custom-fields"><legend>Profile</legend><dl><dt><label for="bdayday">Birthday</label></dt><dd><select id="bdayday" name="bdayday" required><option value="">Day</option><option value="15">15</option></select> <select id="bdaymonth" name="bdaymonth" required><option value="">Month</option><option value="6">6</option></select> <select id="bdayyear" name="bdayyear" required><option value="">Year</option><option value="1990">1990</option></select></dd></dl><dl><dt><label for="sec_answer">Security question</label></dt><dd>Name of your first club.</dd><dd><input type="text" name="sec_answer" id="sec_answer" required /></dd></dl><fieldset><legend>Newsletter</legend><label for="newsletter_yes"><input type="radio" id="newsletter_yes" name="newsletter" value="1" required /> Yes</label> <label for="newsletter_no"><input type="radio" id="newsletter_no" name="newsletter" value="0" /> No</label></fieldset></fieldset>`;
 
   const renderPosts = (topicId: number) =>
     topics
@@ -370,12 +425,12 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
         const retry = (error: string) =>
           registerForm(response, request, { username, email, error });
         if (challenge === "widget") {
-          if (!form.get("g-recaptcha-response")) {
+          if (!form.get(widgetTokenName)) {
             return retry("You did not pass the security check.");
           }
         } else if (challenge === "question") {
           const answer = (form.get("qa_answer") ?? "").trim().toLowerCase();
-          if (answer !== "berlin") return retry("The solution you provided was incorrect.");
+          if (answer !== questionAnswer) return retry("The solution you provided was incorrect.");
         } else {
           const expected = captchas.get(form.get("confirm_id") ?? "");
           captchas.delete(form.get("confirm_id") ?? "");
@@ -392,6 +447,28 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
         if (!password) return retry("Entering a password is required.");
         if (password !== form.get("password_confirm"))
           return retry("The password confirmation does not match.");
+        if (extraRequired) {
+          const day = Number(form.get("bdayday"));
+          const month = Number(form.get("bdaymonth"));
+          const year = Number(form.get("bdayyear"));
+          if (
+            !day ||
+            day < 1 ||
+            day > 31 ||
+            !month ||
+            month < 1 ||
+            month > 12 ||
+            year < 1900 ||
+            year > 2015
+          ) {
+            return retry("Please enter your birthday.");
+          }
+          if (!(form.get("sec_answer") ?? "").trim())
+            return retry("Please answer the security question.");
+          const newsletter = form.get("newsletter");
+          if (newsletter !== "0" && newsletter !== "1")
+            return retry("Please choose a newsletter option.");
+        }
         const user: FixtureUser = {
           id: nextUserId++,
           username,
@@ -403,11 +480,23 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
         };
         users.set(username.toLowerCase(), user);
         if (activation === "admin") {
+          const germanResult = options.adminNotice === "result";
+          await options.deliverMail({
+            to: email,
+            from: `noreply@${new URL(origin).hostname}`,
+            subject: `Account approval on “${boardName}”`,
+            textBody: germanResult
+              ? `Hallo ${username},\n\nDein Benutzerkonto wurde erstellt. Es muss jedoch erst durch einen Administrator freigeschaltet werden.\n`
+              : `Hello ${username},\n\nYour account has been created. An administrator must activate your account before you can log in.\n`,
+          });
           return message(
             response,
             request,
             "Information",
-            "Your account has been created. The administrator will activate your account before you can log in.",
+            germanResult
+              ? "Dein Benutzerkonto wurde erstellt. Es muss jedoch erst durch einen Administrator freigeschaltet werden. Die Administratoren wurden per E-Mail informiert."
+              : "Your account has been created. An administrator will activate your account before you can log in.",
+            germanResult ? `<form id="search"><input name="keywords" /></form>` : "",
           );
         }
         if (activation === "none") {
@@ -446,6 +535,27 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
           );
         }
         user.active = true;
+        if (activationLanding === "session") {
+          const sid = randomBytes(12).toString("hex");
+          sessions.set(sid, user.username.toLowerCase());
+          return message(
+            response,
+            request,
+            "Information",
+            "Your account has now been activated. You are now logged in.",
+            "",
+            { "set-cookie": `${SESSION_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Lax` },
+            user,
+          );
+        }
+        if (activationLanding === "login") {
+          return page(
+            response,
+            request,
+            "Login",
+            `${render("message", { heading: "Information", text: "Your account has now been activated. You can now login with your username and password.", link: "" })}${render("login", {})}`,
+          );
+        }
         return message(
           response,
           request,
@@ -588,6 +698,12 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
     captchaImagesServed: () => captchaServed,
     registrationSubmits: () => registrationSubmits,
     replySubmits: () => replySubmits,
+    approve(username: string) {
+      const user = users.get(username.toLowerCase());
+      if (!user) return false;
+      user.active = true;
+      return true;
+    },
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());

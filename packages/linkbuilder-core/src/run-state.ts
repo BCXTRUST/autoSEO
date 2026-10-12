@@ -16,11 +16,12 @@ const ALLOWED: Record<RunStatus, readonly RunStatus[]> = {
   running: ["paused", "overtime", "succeeded", "partial", "failed", "cancelled"],
   paused: ["running", "overtime", "partial", "failed", "cancelled"],
   overtime: ["paused", "succeeded", "partial", "failed", "cancelled"],
-  succeeded: [],
-  partial: [],
+  // Start reopens a closed day so the bot can begin at research again.
+  succeeded: ["running"],
+  partial: ["running"],
   // A failed day may be retried before the window closes; the (projectId, date) key stays.
   failed: ["queued"],
-  cancelled: [],
+  cancelled: ["running"],
 };
 
 export function canTransitionRun(from: RunStatus, to: RunStatus): boolean {

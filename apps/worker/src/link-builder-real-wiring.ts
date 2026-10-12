@@ -3,6 +3,7 @@ import type {
   AdapterContext,
   BrowserSessionFactory,
   CaptchaSolver,
+  ComputerRef,
   ProxyEndpoint,
   ProxyProvider,
   SandboxProvider,
@@ -15,6 +16,7 @@ import {
   type EncryptedSecretStore,
   EndpointTemplateProxyProvider,
   iproyalPreset,
+  KernelBrowserSessionFactory,
   oxylabsPreset,
   RecordedSearchProvider,
   recordedSerpDir,
@@ -27,6 +29,7 @@ import {
   type ProxyResolver,
   SandboxBrowserSessionFactory,
 } from "@rakazo/linkbuilder-browser";
+import { choosePersonaComputer } from "@rakazo/linkbuilder-core";
 import { sealProxyUsername } from "./link-builder-proxy.js";
 
 function dirs(value: string | undefined): string[] {
@@ -41,6 +44,76 @@ function dirs(value: string | undefined): string[] {
  * runs it on this host instead; the local factory refuses that in production without
  * `LINK_BUILDER_ALLOW_LOCAL_BROWSER=true`.
  */
+/**
+ * A running computer is used as-is. A suspended or stopped one is resumed through the sandbox
+ * so a paused project can continue after the desktop sleeps.
+ */
+export async function resolvePersonaComputer(input: {
+  prisma: PrismaClient;
+  sandbox: SandboxProvider;
+  projectId: string;
+  context: AdapterContext;
+  dataDir: string;
+}): Promise<ComputerRef> {
+  const project = await input.prisma.lbProject.findUnique({
+    where: { id: input.projectId },
+    select: { workspaceId: true },
+  });
+  if (!project) throw new Error("Link builder project not found");
+  const computers = await input.prisma.computer.findMany({
+    where: { workspaceId: project.workspaceId },
+    orderBy: { updatedAt: "desc" },
+  });
+  const computer = choosePersonaComputer(computers);
+  if (!computer) throw new Error("The workspace has no computer for the persona browser");
+  if (computer.state === "running" || computer.state === "booting") return toComputerRef(computer);
+  const ref = await input.sandbox.provision(
+    {
+      botId: computer.homeKey,
+      homePath: join(input.dataDir, "computer-home", computer.homeKey),
+      providerRef: computer.providerRef ?? undefined,
+      providerKind: computer.kind as ComputerRef["kind"],
+    },
+    input.context,
+  );
+  await input.prisma.computer.update({
+    where: { id: computer.id },
+    data: { state: "running", providerRef: ref.providerRef, kind: ref.kind },
+  });
+  return ref;
+}
+
+/** Pause the persona desktop, or destroy it when a step is stuck. */
+export async function releasePersonaComputer(input: {
+  prisma: PrismaClient;
+  sandbox: SandboxProvider;
+  projectId: string;
+  context: AdapterContext;
+  mode: "stop" | "kill";
+}): Promise<void> {
+  const project = await input.prisma.lbProject.findUnique({
+    where: { id: input.projectId },
+    select: { workspaceId: true },
+  });
+  if (!project) return;
+  const computers = await input.prisma.computer.findMany({
+    where: { workspaceId: project.workspaceId },
+    orderBy: { updatedAt: "desc" },
+  });
+  const computer = choosePersonaComputer(computers);
+  if (!computer?.providerRef || computer.state === "stopped") return;
+  const ref = toComputerRef(computer);
+  if (input.mode === "kill") await input.sandbox.destroy(ref, input.context);
+  else await input.sandbox.stop(ref, input.context);
+  await input.prisma.computer.update({
+    where: { id: computer.id },
+    data: {
+      state: input.mode === "kill" ? "stopped" : "suspended",
+      ...(input.mode === "kill" ? { providerRef: null } : {}),
+    },
+  });
+}
+
 /** Recorded fixtures, or DataForSEO when `LINK_BUILDER_SEARCH=dataforseo` and a `lb_search` secret exists. */
 export function searchProviderFromEnv(input: {
   env: NodeJS.ProcessEnv;
@@ -72,9 +145,37 @@ export function browserFactoryFromEnv(input: {
   dataDir: string;
   sandbox: SandboxProvider;
   prisma: PrismaClient;
+  secrets?: EncryptedSecretStore;
   proxyResolver?: ProxyResolver;
 }): BrowserSessionFactory {
   const { env, prisma } = input;
+  if (env.LINK_BUILDER_BROWSER === "kernel") {
+    const secretId = env.LINK_BUILDER_KERNEL_SECRET_ID?.trim();
+    if (!secretId || !input.secrets) {
+      throw new Error("Kernel browser needs LINK_BUILDER_KERNEL_SECRET_ID");
+    }
+    const secrets = input.secrets;
+    return new KernelBrowserSessionFactory(
+      {
+        apiKey: { secretId },
+        ...(env.LINK_BUILDER_KERNEL_BASE_URL ? { baseUrl: env.LINK_BUILDER_KERNEL_BASE_URL } : {}),
+        extensionNames: dirs(env.LINK_BUILDER_KERNEL_EXTENSION),
+      },
+      {
+        onSecret: (secret) => secrets.redact(secret),
+        loadSecret: async (ref, context) => {
+          const row = await prisma.secret.findFirst({
+            where: { id: ref.secretId, workspaceId: context.workspaceId },
+            select: { ciphertext: true },
+          });
+          if (!row) throw new Error("missing kernel credential");
+          const plain = secrets.load(row.ciphertext);
+          secrets.redact(plain);
+          return plain;
+        },
+      },
+    );
+  }
   if (env.LINK_BUILDER_BROWSER === "local") {
     return new LocalBrowserSessionFactory({
       profileRoot: join(input.dataDir, ".browser-profiles"),
@@ -86,19 +187,17 @@ export function browserFactoryFromEnv(input: {
   return new SandboxBrowserSessionFactory({
     sandbox: input.sandbox,
     helperDirs: dirs(env.LINK_BUILDER_SANDBOX_HELPER_DIR),
+    // E2B's desktop user is `user`. The Docker computer image uses `/home/rakazo`.
+    ...(env.SANDBOX_PROVIDER === "e2b" ? { profileRoot: "/home/user/.browser-profiles" } : {}),
     proxyResolver: input.proxyResolver,
-    async resolveComputer(persona) {
-      const project = await prisma.lbProject.findUnique({
-        where: { id: persona.projectId },
-        select: { workspaceId: true },
+    resolveComputer(persona, context) {
+      return resolvePersonaComputer({
+        prisma,
+        sandbox: input.sandbox,
+        projectId: persona.projectId,
+        context,
+        dataDir: input.dataDir,
       });
-      if (!project) throw new Error("Link builder project not found");
-      const computer = await prisma.computer.findFirst({
-        where: { workspaceId: project.workspaceId, scope: "team", providerRef: { not: null } },
-        orderBy: { updatedAt: "desc" },
-      });
-      if (!computer) throw new Error("The workspace has no team computer for the persona browser");
-      return toComputerRef(computer);
     },
   });
 }
@@ -115,7 +214,18 @@ export async function captchaSolverForProject(input: {
   redact?: (secret: string) => void;
   fetch?: typeof fetch;
   baseUrl?: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<CaptchaSolver | null> {
+  const deployment = input.env?.CAPTELL_API_KEY?.trim();
+  if (deployment) {
+    return new CaptellHttpSolver({
+      fetch: input.fetch,
+      baseUrl: input.baseUrl ?? input.env?.CAPTELL_BASE_URL,
+      onToken: input.redact,
+      maxRetries: 4,
+      token: async () => deployment,
+    });
+  }
   const project = await input.prisma.lbProject.findFirst({
     where: { id: input.projectId, workspaceId: input.workspaceId },
     select: { captchaSecretId: true },
@@ -213,7 +323,7 @@ export function proxyResolverFor(input: {
     }
     const userinfo = username && password ? `${username}:${password}@${endpoint.server}` : "";
     for (const value of [password, userinfo]) {
-      if (value) input.revealed.push(value);
+      if (value && !input.revealed.includes(value)) input.revealed.push(value);
     }
     return {
       server: `${protocol}://${endpoint.server}`,

@@ -81,6 +81,23 @@ const processIo: RunnerIo = {
   stderr: (line) => process.stderr.write(`${line}\n`),
 };
 
+export function describeCall(
+  request: unknown,
+  response: { ok: boolean; error?: string },
+  ms: number,
+): string {
+  const call = (request ?? {}) as { method?: unknown; selector?: unknown; url?: unknown };
+  const method = typeof call.method === "string" ? call.method : "invalid";
+  const target =
+    typeof call.selector === "string"
+      ? call.selector
+      : typeof call.url === "string"
+        ? call.url
+        : "";
+  const outcome = response.ok ? "ok" : `error ${response.error ?? ""}`;
+  return `${new Date().toISOString()} ${method} ${target} ${ms}ms ${outcome}`.replace(/\s+/g, " ");
+}
+
 async function serve(statePath: string, env: NodeJS.ProcessEnv, io: RunnerIo): Promise<number> {
   const launch = RunnerLaunchSchema.parse(decodeEnvJson(env[LAUNCH_ENV]));
   const session = await launchPlaywrightSession(launch, env).catch((error: unknown) => {
@@ -109,7 +126,11 @@ async function serve(statePath: string, env: NodeJS.ProcessEnv, io: RunnerIo): P
     async (request) => {
       armIdle();
       if (isClose(request)) closing = true;
-      return rpc.handle(request);
+      const started = Date.now();
+      const response = await rpc.handle(request);
+      // Method, selector and timing only; text and tokens never reach the log.
+      io.stderr(describeCall(request, response, Date.now() - started));
+      return response;
     },
     (request) => {
       if (isClose(request)) finish(0);

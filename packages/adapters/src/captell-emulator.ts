@@ -22,6 +22,7 @@ export interface CaptellEmulatorRequest {
   method: string;
   url: string;
   authorization: string | null;
+  contentType: string | null;
   body: unknown;
 }
 
@@ -60,7 +61,7 @@ export const captellCues = {
     return { op: "solve", body: { error: "Unsupported type" } };
   },
   couldNotAnswer(): CaptellCue {
-    return { op: "answer", body: { error: "Could not answer" } };
+    return { op: "answer", status: 422, body: { status: "error", message: "Could not answer" } };
   },
   refused(): CaptellCue {
     return { op: "solve", status: 403, body: { error: "Request refused" } };
@@ -148,7 +149,13 @@ async function readRequest(
       body = raw;
     }
   }
-  return { method, url, authorization: headers.get("authorization"), body };
+  return {
+    method,
+    url,
+    authorization: headers.get("authorization"),
+    contentType: headers.get("content-type"),
+    body,
+  };
 }
 
 function jsonResponse(body: unknown, status: number): Response {

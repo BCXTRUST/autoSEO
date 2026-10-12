@@ -37,8 +37,8 @@ export const TEST_PACING: PacingPolicy = {
   maxActionsPerMinute: PACING_LIMITS.maxActionsPerMinute,
 };
 
-/** One registration attempt that actually submits, per host, per local day. */
-export const MAX_REGISTRATIONS_PER_HOST_PER_DAY = 1;
+/** A failed submit can be tried again the same day. Three retries after the first attempt. */
+export const MAX_REGISTRATIONS_PER_HOST_PER_DAY = 4;
 
 /** Idle gap after leaving one host before the next host is opened. */
 export const HOST_IDLE_GAP: DelayRange = { minMs: 8_000, maxMs: 25_000 };

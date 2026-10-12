@@ -10,6 +10,8 @@ import {
   LbQuotasSchema,
   LbScheduleSchema,
   LbTargetSchema,
+  LbDraftReplySchema,
+  LbThreadRelevanceSchema,
   LbWhyNotSchema,
   lbPrimaryLanguage,
 } from "./index.js";
@@ -23,6 +25,21 @@ const minimal = {
   quotas: { newPerDay: 3, livePerDay: 1 },
   schedule: { timezone: "Europe/Berlin" },
 };
+
+describe("link builder model replies", () => {
+  it("accepts a relevance score without reasons and a reply that names the body text", () => {
+    expect(LbThreadRelevanceSchema.parse({ relevance: 0.75, openQuestion: true })).toEqual({
+      relevance: 0.75,
+      openQuestion: true,
+      reasons: [],
+    });
+    expect(
+      LbDraftReplySchema.parse({
+        answer: "Magnesiumcitrat hat bei Krämpfen geholfen.",
+      }),
+    ).toMatchObject({ body: "Magnesiumcitrat hat bei Krämpfen geholfen.", linkSlot: "none" });
+  });
+});
 
 describe("link builder project config", () => {
   it("applies the plan defaults, including undisclosed persona mode", () => {
@@ -42,7 +59,7 @@ describe("link builder project config", () => {
     });
     expect(config.quotas.maxLivePerHost).toBe(1);
     expect(config.linkRatio).toEqual({ links: 1, posts: 3 });
-    expect(config.warmup).toEqual({ minPostsBeforeLink: 2, minAccountAgeHours: 24 });
+    expect(config.warmup).toEqual({ minPostsBeforeLink: 3, minAccountAgeHours: 24 });
     expect(config.spamRetry).toEqual({ maxRetries: 1, sentences: [...LB_DEFAULT_SPAM_SENTENCES] });
     expect(config.operator.parkedHostTtlHours).toBe(48);
     expect(config.captchaLowBalanceCredits).toBe(500);
@@ -105,13 +122,12 @@ describe("link builder project config", () => {
     expect(LbLanguageSchema.safeParse("en-GB").success).toBe(true);
   });
 
-  it("requires mailbox, captcha seat and topic lanes before start", () => {
+  it("requires a mailbox and topic lanes before start", () => {
     expect(LbProjectStartableSchema.safeParse(minimal).success).toBe(false);
     expect(
       LbProjectStartableSchema.safeParse({
         ...minimal,
         mailboxId: "inbox-1",
-        captchaSecretId: "secret-1",
         topicLanes: [{ id: "lane-1", tag: "Rücken", description: "Rückenschmerzen" }],
       }).success,
     ).toBe(true);

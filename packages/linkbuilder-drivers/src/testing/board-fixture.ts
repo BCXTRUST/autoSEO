@@ -19,6 +19,11 @@ export interface MarkupFixtureOptions {
   linkRuleMinPosts?: number;
   enforceLinkRule?: boolean;
   activation?: "email" | "none" | "admin";
+  /**
+   * Where an email activation link leaves the browser.
+   * `message` is the stock notice, `login` is the login form, `session` logs the member in.
+   */
+  activationLanding?: "message" | "login" | "session";
   deliverMail(mail: FixtureMail): void | Promise<void>;
 }
 
@@ -198,6 +203,7 @@ export async function startMarkupFixture(
   const captchaAnswer = options.captchaAnswer ?? "K7XQ2";
   const rel = options.rel ?? "nofollow";
   const activation = options.activation ?? "email";
+  const activationLanding = options.activationLanding ?? "message";
   const linkRuleMinPosts = options.linkRuleMinPosts ?? 3;
   const linkRule = `New members cannot post links until they have made ${linkRuleMinPosts} posts.`;
   const read = templateCache(new URL(`../../fixtures/${config.platform}/`, import.meta.url));
@@ -242,8 +248,9 @@ export async function startMarkupFixture(
     content: string,
     status = 200,
     headers: Record<string, string> = {},
+    forceUser?: User,
   ) => {
-    const user = userFor(request);
+    const user = forceUser ?? userFor(request);
     const navUser = user
       ? `<a class="logout" href="${config.routes.index}">Logout [ ${escapeHtml(user.username)} ]</a>`
       : `<a href="${config.routes.login}">Login</a> <a href="${config.routes.register}">Register</a>`;
@@ -452,12 +459,34 @@ export async function startMarkupFixture(
           return message(response, request, "Information", "The activation key does not match.");
         }
         user.active = true;
-        return message(
-          response,
-          request,
-          "Information",
-          "Your account has now been activated. You can now login with your username and password.",
-        );
+        const activated =
+          "Your account has now been activated. You can now login with your username and password.";
+        if (activationLanding === "session") {
+          const sid = randomBytes(12).toString("hex");
+          sessions.set(sid, user.username.toLowerCase());
+          return page(
+            response,
+            request,
+            "Information",
+            render(read, "message", {
+              heading: "Information",
+              text: "Your account has now been activated. You are now logged in.",
+              link: "",
+            }),
+            200,
+            { "set-cookie": `fx_sid=${sid}; Path=/; HttpOnly; SameSite=Lax` },
+            user,
+          );
+        }
+        if (activationLanding === "login") {
+          return page(
+            response,
+            request,
+            "Login",
+            `${render(read, "message", { heading: "Information", text: activated, link: "" })}${render(read, "login", { ...fieldAttrs })}`,
+          );
+        }
+        return message(response, request, "Information", activated);
       }
       if (route === "login") {
         if (request.method !== "POST") {

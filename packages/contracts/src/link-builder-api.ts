@@ -87,6 +87,8 @@ export const LbProjectPatchSchema = z.object({
   denyHosts: z.array(LbRegistrableDomainSchema).max(500).optional(),
   preferHosts: z.array(LbRegistrableDomainSchema).max(500).optional(),
   warmup: LbWarmupSchema.optional(),
+  /** Short run change: "continue", "do 3 more registrations today", "increase the weekly limit to 10". */
+  instruction: z.string().trim().min(1).max(200).optional(),
   spamRetry: LbSpamRetrySchema.optional(),
   content: LbContentSchema.optional(),
   operator: LbOperatorSettingsSchema.optional(),
@@ -119,6 +121,8 @@ const LbRunCountersSchema = z.object({
   uniqueHosts: z.number().int(),
   lastAction: z.string().nullable(),
   lastError: z.string().nullable(),
+  /** Page open on the team computer. The dashboard prefers this while the desktop is open. */
+  currentUrl: z.string().nullable().optional(),
 });
 
 export const LbProjectDetailSchema = z.object({
@@ -174,6 +178,16 @@ export const LbProjectCardSchema = z.object({
   runStatus: LbRunStatusSchema.nullable(),
   lastEvent: z.string().nullable(),
   operatorQueue: z.number().int(),
+  /** One UI action that works without the desktop. Absent when the user cannot help. */
+  operatorHelp: z
+    .object({
+      ticketId: Id,
+      domain: z.string(),
+      label: z.string(),
+      action: z.enum(["skip", "continue"]),
+    })
+    .nullable()
+    .optional(),
 });
 export type LbProjectCard = z.infer<typeof LbProjectCardSchema>;
 
@@ -185,6 +199,15 @@ export const LbProjectStatusViewSchema = z.object({
   run: LbRunCountersSchema.nullable(),
   whyNot: LbWhyNotSchema.nullable(),
   operatorQueue: z.number().int(),
+  operatorHelp: z
+    .object({
+      ticketId: Id,
+      domain: z.string(),
+      label: z.string(),
+      action: z.enum(["skip", "continue"]),
+    })
+    .nullable()
+    .optional(),
   scheduleActive: z.boolean(),
   scheduleReason: z.string(),
   newPerDay: z.number().int(),
@@ -192,6 +215,13 @@ export const LbProjectStatusViewSchema = z.object({
   liveWeekCap: z.number().int().nullable(),
   lastEvent: z.string().nullable(),
   costs: z.object({ day: LbCostSummarySchema, week: LbCostSummarySchema }),
+  stage: z.enum(["research", "register", "warmup", "place", "verify"]).optional(),
+  credits: z
+    .object({
+      balance: z.number().int().min(0),
+      payment: z.literal("stub"),
+    })
+    .optional(),
 });
 export type LbProjectStatusView = z.infer<typeof LbProjectStatusViewSchema>;
 
@@ -346,7 +376,44 @@ const ticketAction = z.object({
   note: z.string().trim().max(500).optional(),
 });
 
+export const LbCreditPackageSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  credits: z.number().int().positive(),
+  priceCents: z.number().int().positive(),
+  currency: z.literal("eur"),
+  recommended: z.boolean(),
+});
+
+export const LbBillingOfferSchema = z.object({
+  packages: z.array(LbCreditPackageSchema),
+  entitled: z.boolean(),
+  checkoutConnected: z.boolean(),
+  balance: z.number().int().min(0),
+  reason: z.string(),
+});
+export type LbBillingOffer = z.infer<typeof LbBillingOfferSchema>;
+
+export const LbCheckoutResultSchema = z.object({
+  charged: z.boolean(),
+  entitled: z.boolean(),
+  balance: z.number().int().min(0),
+  reason: z.string(),
+  checkoutUrl: z.string().nullable(),
+});
+export type LbCheckoutResult = z.infer<typeof LbCheckoutResultSchema>;
+
 export const linkBuilderContract = {
+  pages: {
+    suggest: oc
+      .input(
+        z.object({
+          url: z.string().trim().min(1).max(500),
+          allowedDomains: z.array(LbRegistrableDomainSchema).min(1).max(20),
+        }),
+      )
+      .output(z.object({ keyword: z.string().max(80), rule: z.string().max(300) })),
+  },
   projects: {
     list: oc.output(z.array(LbProjectCardSchema)),
     get: oc.input(projectId).output(LbProjectDetailSchema),
@@ -357,7 +424,29 @@ export const linkBuilderContract = {
     pause: oc.input(projectId).output(LbProjectDetailSchema),
     stop: oc.input(projectId).output(LbProjectDetailSchema),
     status: oc.input(projectId).output(LbProjectStatusViewSchema),
+    /** Live team-computer stream for the dashboard. Proxied like the agent computer. */
+    screen: oc.input(projectId).output(
+      z.object({
+        url: z.string().nullable(),
+        error: z.string().nullable(),
+      }),
+    ),
     seedDemo: oc.output(LbProjectDetailSchema),
+  },
+  billing: {
+    offer: oc.output(LbBillingOfferSchema),
+    checkout: oc
+      .input(z.object({ packageId: z.string().trim().min(1).max(40) }))
+      .output(LbCheckoutResultSchema),
+  },
+  credits: {
+    buy: oc.input(projectId).output(
+      z.object({
+        balance: z.number().int().min(0),
+        charged: z.boolean(),
+        reason: z.string(),
+      }),
+    ),
   },
   hosts: {
     list: oc.input(projectId).output(z.array(LbHostViewSchema)),

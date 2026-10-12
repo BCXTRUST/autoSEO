@@ -30,6 +30,7 @@ export default function LinkBuilderTicket() {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
     if (!projectId) return;
@@ -37,7 +38,8 @@ export default function LinkBuilderTicket() {
       projectId,
       status: "open",
     });
-    setTickets(next);
+    setTickets(next.filter((ticket) => ticket.reason !== "captcha_unsolved"));
+    setLoaded(true);
     if (params.statusOnly === "1") {
       const status = await rpc<{ activityLabel: string; run: { status: string } | null }>(
         "linkBuilder/projects/status",
@@ -84,12 +86,15 @@ export default function LinkBuilderTicket() {
     }
   }
 
-  if (!ticket && !statusLine) {
+  if (!loaded && !ticket && !statusLine) {
     return (
       <View style={styles.center}>
         <ActivityIndicator color="#ECECEE" />
       </View>
     );
+  }
+  if (!ticket) {
+    return <View style={styles.screen} />;
   }
 
   return (

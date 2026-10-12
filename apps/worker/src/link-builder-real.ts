@@ -14,7 +14,7 @@ import {
   type SearchProvider,
   type TextModel,
 } from "@rakazo/adapter-kit";
-import type { EncryptedSecretStore } from "@rakazo/adapters";
+import { type EncryptedSecretStore, STARTER_PLAN } from "@rakazo/adapters";
 import {
   LB_DEFAULT_SPAM_SENTENCES,
   LbContentSchema,
@@ -36,6 +36,8 @@ import {
 } from "@rakazo/contracts";
 import type { Prisma, PrismaClient } from "@rakazo/db";
 import {
+  adminRecheckDue,
+  type HostnameResolver,
   isHostTerminal,
   isLiveMet,
   isRunActive,
@@ -45,6 +47,7 @@ import {
   localDateKey,
   marketKey,
   PAGE_HELPER_BUTTON_SELECTOR,
+  type PlanCaps,
   planRealStep,
   type RealPlan,
   redactSecrets,
@@ -113,10 +116,20 @@ export interface LinkBuilderRealDeps {
   webhookFetch?: typeof fetch;
   /** When true, webhook URLs may not target private or loopback addresses. */
   productionWebhooks?: boolean;
+  /** Injected DNS lookup for production webhook URLs. Tests pass a fixture. */
+  resolveHostname?: HostnameResolver;
+  /** Plan ceiling. Absent means the starter stub. */
+  planCaps?: PlanCaps;
   /** Passwords the proxy resolver has loaded. Shared with step redaction. */
   revealedSecrets?: string[];
   /** False when the Camoufox executable is not installed. The host then goes dead on a second edge block. */
   camoufoxAvailable?: boolean;
+  /** Pause or destroy the persona desktop when a browser step is finished or stuck. */
+  releaseDesktop?: (
+    projectId: string,
+    context: AdapterContext,
+    mode: "stop" | "kill",
+  ) => Promise<void>;
   probeFetch?: typeof fetch;
   allowPrivateProbe?: boolean;
 }
@@ -146,7 +159,7 @@ const unconfiguredCaptcha: CaptchaSolver = {
 const DEFAULT_LEASE_MS = 5 * 60_000;
 const DEFAULT_VERIFY_DELAY_MS = 60_000;
 const DEFAULT_REVERIFY_MS = 24 * 3_600_000;
-const MAX_CONSECUTIVE_ERRORS = 3;
+const MAX_CONSECUTIVE_ERRORS = 4;
 
 export type TickOutcome = "stepped" | "waited" | "skipped" | "failed";
 
@@ -181,6 +194,7 @@ export class LinkBuilderRealRunner {
       nowMs: () => (deps.now ? deps.now().getTime() : Date.now()),
       sleep: deps.sleep,
       textModel: deps.textModel,
+      planCaps: deps.planCaps ?? STARTER_PLAN.caps,
     };
   }
 
@@ -198,6 +212,7 @@ export class LinkBuilderRealRunner {
       notifications: this.deps.notifications,
       webhookFetch: this.deps.webhookFetch,
       productionWebhooks: this.deps.productionWebhooks,
+      resolveHostname: this.deps.resolveHostname,
       verifyFetch: this.deps.verifyFetch,
       allowPrivateVerify: this.deps.allowPrivateVerify,
       artifacts: this.deps.artifacts,
@@ -269,13 +284,21 @@ export class LinkBuilderRealRunner {
       );
       return "failed";
     }
-    const plan = this.plan(ctx);
-    if (plan.kind === "done" || plan.kind === "wait") return "waited";
+    const plan = await this.plan(ctx);
+    if (plan.kind === "done" || plan.kind === "wait") {
+      await this.dropDesktop(ctx, plan.kind, "", false);
+      return "waited";
+    }
     const startedAt = new Date();
     let result: StepResult;
     let error: string | null = null;
     try {
-      result = await REAL_STEP_HANDLERS[plan.kind](ctx);
+      result = await Promise.race([
+        REAL_STEP_HANDLERS[plan.kind](ctx),
+        new Promise<StepResult>((_, reject) => {
+          setTimeout(() => reject(new Error("Browser action timed out")), 3 * 60_000);
+        }),
+      ]);
     } catch (caught) {
       error = redactSecrets(caught instanceof Error ? caught.message : "Step failed", ctx.secrets);
       result = await this.failure(ctx, error);
@@ -284,6 +307,12 @@ export class LinkBuilderRealRunner {
     const committed = await this.commit(ctx, fence, plan.kind, result, error, startedAt);
     if (!committed) return "skipped";
     await result.afterCommit?.();
+    await this.dropDesktop(
+      ctx,
+      plan.kind,
+      result.kind === "step" ? result.lastAction : "",
+      error !== null && /timed out|timeout|not running anymore/i.test(error),
+    );
     await this.deps.realtime
       ?.publish(
         linkBuilderTopic(ctx.project.id),
@@ -409,6 +438,7 @@ export class LinkBuilderRealRunner {
       if (!solver) return "missing";
       ctx.services = { ...ctx.services, captcha: solver };
     }
+    if (process.env.CAPTELL_API_KEY?.trim()) return "ok";
     let credits: number;
     try {
       credits = (await ctx.services.captcha.balance(ctx.adapter)).credits;
@@ -457,7 +487,7 @@ export class LinkBuilderRealRunner {
     });
   }
 
-  private plan(ctx: StepContext): RealPlan {
+  private async plan(ctx: StepContext): Promise<RealPlan> {
     const quotas = ctx.project.quotas;
     const liveMet = isLiveMet(ctx.run.counters, quotas);
     const schedule = isWithinWindow(ctx.now, ctx.project.schedule, { liveMet });
@@ -496,10 +526,26 @@ export class LinkBuilderRealRunner {
         ? ctx.account.postCount <
           postsRequiredBeforeLink(ctx.project.warmup.minPostsBeforeLink, ctx.host?.platform ?? "")
         : false,
+      minPostsBeforeLink: postsRequiredBeforeLink(
+        ctx.project.warmup.minPostsBeforeLink,
+        ctx.host?.platform ?? "",
+      ),
+      warmupPosts: ctx.account?.postCount ?? 0,
       placement: ctx.placement
         ? { status: ctx.placement.status as never, counted: ctx.placement.counted }
         : null,
+      adminCheckDue:
+        host?.status === "pending_admin" ? await this.adminCheckDue(ctx, host.id) : false,
     });
+  }
+
+  private async adminCheckDue(ctx: StepContext, hostId: string): Promise<boolean> {
+    const last = await this.deps.prisma.lbRunStep.findFirst({
+      where: { hostId, kind: "admin_check" },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+    return adminRecheckDue(last?.createdAt ?? null, ctx.now);
   }
 
   /**
@@ -515,14 +561,27 @@ export class LinkBuilderRealRunner {
       take: MAX_CONSECUTIVE_ERRORS - 1,
       select: { error: true, hostId: true },
     });
+    const postFailures = host
+      ? await this.deps.prisma.lbRunStep.count({
+          where: {
+            hostId: host.id,
+            kind: { in: ["warmup_post", "post"] },
+            error: { not: null },
+          },
+        })
+      : 0;
+    const repeated =
+      recent.length === MAX_CONSECUTIVE_ERRORS - 1 &&
+      recent.every((step) => step.error && step.hostId === host?.id);
+    const infra = /no computer|did not become ready|runner not running/i.test(message);
     const giveUp =
       host !== null &&
+      !infra &&
       !isHostTerminal(host.status as LbHostStatus) &&
-      recent.length === MAX_CONSECUTIVE_ERRORS - 1 &&
-      recent.every((step) => step.error && step.hostId === host.id);
+      (repeated || postFailures + 1 >= MAX_CONSECUTIVE_ERRORS);
     return {
       kind: "step",
-      lastAction: giveUp ? "Gave up on this board" : "Step failed, retrying",
+      lastAction: giveUp ? "Skipped this site" : "Step failed, retrying",
       hostId: host?.id ?? null,
       outcome: { error: message },
       apply: giveUp
@@ -629,6 +688,35 @@ export class LinkBuilderRealRunner {
     return entry;
   }
 
+  private async dropDesktop(
+    ctx: StepContext,
+    planKind: string,
+    lastAction: string,
+    stuck: boolean,
+  ): Promise<void> {
+    if (!this.deps.releaseDesktop) return;
+    const idle =
+      stuck ||
+      planKind === "wait" ||
+      planKind === "done" ||
+      planKind === "close" ||
+      planKind === "select_host" ||
+      /skipp|gave up|captcha not supported|waiting for the (verification|site admin|confirmation email)/i.test(
+        lastAction,
+      );
+    if (!idle) return;
+    await this.deps.prisma.lbRun
+      .updateMany({
+        where: { id: ctx.run.id, leaseOwner: this.workerId },
+        data: { leaseExpiresAt: new Date(0) },
+      })
+      .catch(() => undefined);
+    await this.closeSession(ctx.project.id);
+    await this.deps
+      .releaseDesktop(ctx.project.id, ctx.adapter, stuck ? "kill" : "stop")
+      .catch(() => undefined);
+  }
+
   private async closeSession(projectId: string): Promise<void> {
     const entry = this.pool.get(projectId);
     this.pool.delete(projectId);
@@ -699,6 +787,7 @@ function projectConfig(row: {
   workspaceId: string;
   createdByUserId: string;
   status: string;
+  name: string;
   brandName: string;
   allowedDomains: string[];
   persona: unknown;
@@ -736,6 +825,7 @@ function projectConfig(row: {
     id: row.id,
     workspaceId: row.workspaceId,
     ownerUserId: row.createdByUserId,
+    name: row.name,
     brandName: row.brandName,
     allowedDomains: row.allowedDomains,
     persona: persona.data,

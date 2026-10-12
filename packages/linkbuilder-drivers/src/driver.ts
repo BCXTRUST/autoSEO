@@ -113,6 +113,15 @@ export interface BoardDriver {
     account: Pick<BoardAccount, "username" | "password">,
   ): Promise<boolean>;
   listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]>;
+  /**
+   * Board search for the human problem. Omitted drivers fall back to the index.
+   * Results use a stable topic URL so a later search with a new session id is the same thread.
+   */
+  searchThreads?(
+    session: BrowserSession,
+    homepageUrl: string,
+    query: string,
+  ): Promise<BoardThread[]>;
   /** Opens the reply editor for a thread; false when the thread is locked or replies are off. */
   openReply(session: BrowserSession, thread: BoardThread): Promise<boolean>;
   fillReply(session: BrowserSession, body: string): Promise<void>;

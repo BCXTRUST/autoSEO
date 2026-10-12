@@ -14,6 +14,8 @@ identical answers.
 | `funnel` | Today's link attempts and registrations, and the end-of-window why-not report. |
 | `market` | Which markets to work under `marketPolicy`, and the per-country proxy sticky key. |
 | `policy` | Target URL, anchor, claim, link-ratio and single-link checks; reference insertion. |
+| `plan` | Plan caps (`projects`, `live_per_day`, `personas`) before a start or a counted placement. |
+| `webhooks` | HMAC signatures, and which outbound URLs are allowed. |
 
 Illegal transitions throw `IllegalTransition`; invalid counts throw `RangeError`.
 

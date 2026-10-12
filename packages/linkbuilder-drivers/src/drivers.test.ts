@@ -16,13 +16,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   captchaCropAcceptable,
   detectKnowledgeQuestion,
+  instructionClickSelector,
+  isLoginPath,
+  isSecretRegistrationPrompt,
   looksLikeKnowledgeQuestion,
+  pngDimensions,
   runPageHelper,
   solveImageCaptcha,
 } from "./captcha.js";
-import { acceptCookieWall } from "./cookie-wall.js";
+import { acceptCookieWall, consentAcceptText, COOKIE_ACCEPT_SELECTORS } from "./cookie-wall.js";
 import { boardDriverFor } from "./index.js";
-import { PhpbbDriver, phpbbPermalink } from "./phpbb.js";
+import { PhpbbDriver, phpbbPermalink, phpbbTopicUrl } from "./phpbb.js";
 import { type FixtureMail, renderBbcode, startPhpbbFixture } from "./testing/phpbb-fixture.js";
 import { noisePng, TINY_PNG } from "./testing/png.js";
 import { normalizeTargetUrl, VerifyRefused, verifyPlacement } from "./verify.js";
@@ -40,6 +44,145 @@ const driver = new PhpbbDriver();
 const target = "https://www.vereinsplaner.example/mitglieder?utm_source=forum";
 
 describe("phpBB driver helpers", () => {
+  it("includes the German board cookie accept control", () => {
+    expect(COOKIE_ACCEPT_SELECTORS).toContain("a[onclick*='ca_accept']");
+    expect(COOKIE_ACCEPT_SELECTORS).toContain("button:has-text('Akzeptieren und weiter')");
+    expect(consentAcceptText("Akzeptieren und weiter")).toBe(true);
+    expect(consentAcceptText("Werbefrei für 3.99€ im Monat")).toBe(false);
+  });
+
+  it("clicks a consent control that page text does not include", async () => {
+    let clicked = false;
+    const session = {
+      async exists() {
+        return false;
+      },
+      async clickConsent() {
+        clicked = true;
+        return true;
+      },
+    } as unknown as BrowserSession;
+    expect(await acceptCookieWall(session)).toBe("accepted");
+    expect(clicked).toBe(true);
+  });
+
+  it("reads a German activation-key notice as waiting for email", async () => {
+    const notice =
+      "Dein Benutzerkonto wurde erstellt. Du musst es jedoch erst freischalten. Dazu wurde ein Aktivierungs-Schlüssel an die von dir angegebene Adresse geschickt.";
+    const session = new FakeBrowserSession(
+      "activation",
+      { projectId: "p", profileKey: "k", locale: "de-DE", timezoneId: "Europe/Berlin" },
+      {
+        "https://board.example/registered": {
+          text: notice,
+          elements: { "div#message": { text: notice } },
+        },
+      },
+    );
+    await session.goto("https://board.example/registered");
+    expect(await driver.readRegistrationResult(session)).toEqual({ kind: "pending_email" });
+  });
+
+  it("checks the privacy agreement on the registration form", async () => {
+    const privacy = "form#register input[type='checkbox'][name='agreed']";
+    const session = new FakeBrowserSession(
+      "privacy",
+      { projectId: "p", profileKey: "k", locale: "de-DE", timezoneId: "Europe/Berlin" },
+      {
+        "https://board.example/register": {
+          text: "",
+          elements: {
+            "#username": {},
+            "#email": {},
+            "#new_password": {},
+            "#password_confirm": {},
+            [privacy]: { checked: false },
+          },
+        },
+      },
+    );
+    await session.goto("https://board.example/register");
+    await driver.fillRegistration(session, {
+      username: "mira",
+      email: "mira@inbox.example",
+      password: "secret-password",
+    });
+    expect(
+      session.actions.some((action) => action.kind === "click" && action.selector === privacy),
+    ).toBe(true);
+    expect(session.actions.some((action) => action.kind === "fill" && action.value === "secret-password")).toBe(
+      false,
+    );
+    const again = new FakeBrowserSession(
+      "privacy-checked",
+      { projectId: "p", profileKey: "k", locale: "de-DE", timezoneId: "Europe/Berlin" },
+      {
+        "https://board.example/register": {
+          text: "",
+          elements: {
+            "#username": {},
+            "#email": {},
+            "#new_password": {},
+            "#password_confirm": {},
+            [privacy]: { checked: true },
+          },
+        },
+      },
+    );
+    await again.goto("https://board.example/register");
+    await driver.fillRegistration(again, {
+      username: "mira",
+      email: "mira@inbox.example",
+      password: "secret-password",
+    });
+    expect(again.actions.some((action) => action.kind === "click")).toBe(false);
+
+    const yes = "form#register input[type='radio'][name='privacy'][value='1']";
+    const radios = new FakeBrowserSession(
+      "privacy-radio",
+      { projectId: "p", profileKey: "k", locale: "de-DE", timezoneId: "Europe/Berlin" },
+      {
+        "https://board.example/register": {
+          text: "",
+          elements: {
+            "#username": {},
+            "#email": {},
+            "#new_password": {},
+            "#password_confirm": {},
+            [yes]: { checked: false },
+          },
+        },
+      },
+    );
+    await radios.goto("https://board.example/register");
+    await driver.fillRegistration(radios, {
+      username: "mira",
+      email: "mira@inbox.example",
+      password: "secret-password",
+    });
+    expect(radios.actions.some((action) => action.kind === "click" && action.selector === yes)).toBe(
+      true,
+    );
+  });
+
+  it("leaves a dismissed cookie bar alone", async () => {
+    const session = new FakeBrowserSession(
+      "cookies",
+      { projectId: "p", profileKey: "k", locale: "de-DE", timezoneId: "Europe/Berlin" },
+      {
+        "https://board.example/": {
+          text: "",
+          elements: {
+            "a[onclick*='ca_accept']": { text: "Ich stimme zu", hidden: true },
+          },
+        },
+      },
+    );
+    await session.goto("https://board.example/");
+    expect(await acceptCookieWall(session)).toBe("none");
+    expect(session.actions.some((action) => action.kind === "click")).toBe(false);
+  });
+
   it("is registered for phpBB", () => {
     expect(boardDriverFor("phpbb")).toBeInstanceOf(PhpbbDriver);
     expect(
@@ -48,6 +191,90 @@ describe("phpBB driver helpers", () => {
         "http://b.example/viewtopic.php?t=1",
       ),
     ).toBe(true);
+  });
+
+  it("searches the board for the problem and keeps a stable topic URL", async () => {
+    const topic = "ul.topics li.row:nth-of-type(1) a.topictitle";
+    const replies = "ul.topics li.row:nth-of-type(1) dd.posts";
+    const search =
+      "https://board.example/phpbb/search.php?keywords=Magnesium%20Kr%C3%A4mpfe&sr=topics&sk=t&sd=d";
+    const session = new FakeBrowserSession(
+      "search",
+      { projectId: "p", profileKey: "k", locale: "de-DE", timezoneId: "Europe/Berlin" },
+      {
+        [search]: {
+          text: "",
+          elements: {
+            [topic]: {
+              text: "Krämpfe in den Füßen",
+              attributes: {
+                href: "./viewtopic.php?t=148343&sid=abc&hilit=Magnesium",
+              },
+            },
+            [replies]: { text: "4" },
+          },
+        },
+      },
+    );
+    const threads = await driver.searchThreads(
+      session,
+      "https://board.example/phpbb/",
+      "Magnesium Krämpfe",
+    );
+    expect(threads).toEqual([
+      {
+        url: "https://board.example/phpbb/viewtopic.php?t=148343",
+        title: "Krämpfe in den Füßen",
+        replyCount: 4,
+      },
+    ]);
+    expect(session.actions).toContainEqual({ kind: "goto", url: search });
+    expect(
+      phpbbTopicUrl(
+        "https://board.example/phpbb/viewtopic.php?t=9&sid=zzz",
+        "https://board.example/phpbb/",
+      ),
+    ).toBe("https://board.example/phpbb/viewtopic.php?t=9");
+    expect(await driver.searchThreads(session, "https://board.example/phpbb/", "  ")).toEqual([]);
+  });
+
+  it("confirms the reply rules before typing", async () => {
+    const box = "form#postform input[type='checkbox']";
+    const message = "form#postform textarea#message";
+    const session = new FakeBrowserSession(
+      "rules",
+      { projectId: "p", profileKey: "k", locale: "de-DE", timezoneId: "Europe/Berlin" },
+      {
+        "https://board.example/reply": {
+          text: "",
+          elements: {
+            [box]: { checked: false },
+            [message]: {},
+          },
+        },
+      },
+    );
+    await session.goto("https://board.example/reply");
+    await driver.fillReply(session, "Kurze Pausen helfen bei Krämpfen.");
+    expect(session.actions.some((action) => action.kind === "click" && action.selector === box)).toBe(
+      true,
+    );
+    expect(session.valueOf(message)).toBe("Kurze Pausen helfen bei Krämpfen.");
+  });
+
+  it("does not treat a login wall as an open reply", async () => {
+    const url = "https://board.example/phpbb/viewtopic.php?t=5";
+    const session = new FakeBrowserSession(
+      "login-wall",
+      { projectId: "p", profileKey: "k", locale: "de-DE", timezoneId: "Europe/Berlin" },
+      {
+        [url]: {
+          text: "Du musst dich anmelden, um in diesem Forum auf Beiträge zu antworten.",
+          elements: { "form#login": { text: "Anmelden" } },
+        },
+      },
+    );
+    expect(await driver.openReply(session, { url, title: "Fußkrämpfe" })).toBe(false);
   });
 
   it("builds canonical permalinks", () => {
@@ -176,6 +403,49 @@ describe("captcha crop and widgets", () => {
     expect(captchaCropAcceptable(noisePng(40, 40, 1))).toBe(false);
   });
 
+  it("crops closer twice when the picture cannot be read", async () => {
+    const wide = noisePng(160, 48, 1);
+    const closer = noisePng(140, 40, 2);
+    const closest = noisePng(120, 32, 3);
+    const session = new FakeBrowserSession("s", persona, {
+      "https://board.example/register": {
+        elements: {
+          "#captcha": { png: wide, closerPngs: [closer, closest] },
+          "#answer": { text: "" },
+        },
+      },
+    });
+    await session.goto("https://board.example/register");
+    const solver = new FakeCaptchaSolver({
+      outcomes: [new CaptchaSolverError("not_read"), new CaptchaSolverError("not_read"), "K7XQ2"],
+    });
+    const solution = await solveImageCaptcha(
+      session,
+      { imageSelector: "#captcha", answerSelector: "#answer" },
+      solver,
+      context,
+    );
+    expect(solution).toMatchObject({ ok: true, answer: "K7XQ2" });
+    expect(solver.requests).toHaveLength(3);
+    expect(session.screenshots.map((shot) => shot.insetPx)).toEqual([undefined, 8, 16]);
+    const images = solver.requests.map((request) =>
+      request.type === "ImageToText" ? request.imagePng : new Uint8Array(),
+    );
+    expect(images[0]).toEqual(wide);
+    expect(images[1]).toEqual(closer);
+    expect(images[2]).toEqual(closest);
+  });
+
+  it("does not type an instruction or send a password question", () => {
+    expect(isSecretRegistrationPrompt("Enter the email code")).toBe(true);
+    expect(isSecretRegistrationPrompt("Wie heißt die Hauptstadt?")).toBe(false);
+    expect(instructionClickSelector("Click Weiter on this form.")).toContain("Weiter");
+    expect(instructionClickSelector("Click Login")).toBeNull();
+    expect(instructionClickSelector("Type Berlin")).toBeNull();
+    expect(isLoginPath("https://board.example/login")).toBe(true);
+    expect(isLoginPath("https://board.example/register")).toBe(false);
+  });
+
   it("recognises knowledge questions and widget site keys", async () => {
     expect(looksLikeKnowledgeQuestion("Wie heißt die Hauptstadt von Deutschland?")).toBe(true);
     expect(looksLikeKnowledgeQuestion("What is 7 + 4?")).toBe(true);
@@ -210,6 +480,32 @@ describe("captcha crop and widgets", () => {
       kind: "widget",
       type: "hcaptcha",
       siteKey: "h-key",
+    });
+    const xenforo = new FakeBrowserSession("s", persona, {
+      "https://board.example/xf": {
+        elements: {
+          "[data-xf-init='turnstile']": { attributes: { "data-sitekey": "xf-turnstile-key" } },
+        },
+      },
+    });
+    await xenforo.goto("https://board.example/xf");
+    expect(await detectWidget(xenforo)).toEqual({
+      kind: "widget",
+      type: "turnstile",
+      siteKey: "xf-turnstile-key",
+    });
+    const xenforoCaptcha = new FakeBrowserSession("s", persona, {
+      "https://board.example/xf-h": {
+        elements: {
+          "[data-xf-init='h-captcha']": { attributes: { "data-sitekey": "xf-hcaptcha-key" } },
+        },
+      },
+    });
+    await xenforoCaptcha.goto("https://board.example/xf-h");
+    expect(await detectWidget(xenforoCaptcha)).toEqual({
+      kind: "widget",
+      type: "hcaptcha",
+      siteKey: "xf-hcaptcha-key",
     });
     await session.goto("https://board.example/frame");
     expect(await detectWidget(session)).toEqual({
@@ -411,7 +707,7 @@ describe.skipIf(!gate.available)(
       }
     });
 
-    it("re-crops once when the image cannot be read, then types the answer", async () => {
+    it("crops closer when the image cannot be read, then types the answer", async () => {
       const board = await startPhpbbFixture({ cookieWall: false, deliverMail: () => undefined });
       try {
         await session.goto(board.origin);
@@ -430,7 +726,12 @@ describe.skipIf(!gate.available)(
         expect(first?.type).toBe("ImageToText");
         expect(second?.type).toBe("ImageToText");
         if (first?.type === "ImageToText" && second?.type === "ImageToText") {
-          expect(second.imagePng.byteLength).toBeGreaterThan(first.imagePng.byteLength);
+          const before = pngDimensions(first.imagePng);
+          const after = pngDimensions(second.imagePng);
+          expect(before).not.toBeNull();
+          expect(after).not.toBeNull();
+          expect(after!.width).toBeLessThan(before!.width);
+          expect(after!.height).toBeLessThan(before!.height);
         }
       } finally {
         await board.close();

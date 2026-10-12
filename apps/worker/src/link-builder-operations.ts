@@ -7,7 +7,7 @@ import type {
   SearchProvider,
 } from "@rakazo/adapter-kit";
 import { CaptchaSolverError } from "@rakazo/adapter-kit";
-import type { EncryptedSecretStore } from "@rakazo/adapters";
+import { type EncryptedSecretStore, STARTER_PLAN } from "@rakazo/adapters";
 import {
   type LbHostStatus,
   LbOperatorSettingsSchema,
@@ -23,9 +23,13 @@ import {
   buildWhyNot,
   closingRunStatus,
   countedAfterReverify,
+  countedWithinPlan,
+  type HostnameResolver,
   isRunTerminal,
   linkBuilderTopic,
   localDateKey,
+  operatorHelpFor,
+  type PlanCaps,
   pauseDedupeKey,
   recordCountedLive,
   releaseCountedLive,
@@ -51,6 +55,9 @@ export interface DueWorkDeps {
   notifications?: NotificationProvider;
   webhookFetch?: typeof fetch;
   productionWebhooks?: boolean;
+  resolveHostname?: HostnameResolver;
+  /** Plan ceiling for counted LIVE links. Absent means the starter stub. */
+  planCaps?: PlanCaps;
   verifyFetch?: typeof fetch;
   allowPrivateVerify?: boolean;
   artifacts?: ArtifactStore;
@@ -65,12 +72,14 @@ export interface DueWorkDeps {
 
 export async function runDueWork(deps: DueWorkDeps): Promise<void> {
   const productionWebhooks = deps.productionWebhooks ?? process.env.NODE_ENV === "production";
+  const resolveHostname = productionWebhooks ? deps.resolveHostname : undefined;
   const alerts = createAlertSink({
     prisma: deps.prisma,
     secrets: deps.secrets,
     notifications: deps.notifications,
     now: deps.now,
     productionWebhooks,
+    resolveHostname,
   });
   await expireTickets(deps);
   await openAndCloseRuns(deps, alerts);
@@ -109,10 +118,51 @@ export async function runDueWork(deps: DueWorkDeps): Promise<void> {
     now: deps.now,
     fetchImpl: deps.webhookFetch,
     productionWebhooks,
+    resolveHostname,
   });
 }
 
+/** Closes tickets the user cannot act on. A parked host is skipped. */
+async function retireUnusableTickets(deps: DueWorkDeps): Promise<void> {
+  const open = await deps.prisma.lbOperatorTicket.findMany({
+    where: { status: "open" },
+    include: { host: true },
+  });
+  for (const ticket of open) {
+    if (
+      operatorHelpFor({
+        id: ticket.id,
+        status: ticket.status,
+        reason: ticket.reason,
+        domain: ticket.host.registrableDomain,
+        hostStatus: ticket.host.status,
+      })
+    ) {
+      continue;
+    }
+    await deps.prisma.$transaction(async (tx) => {
+      const closed = await tx.lbOperatorTicket.updateMany({
+        where: { id: ticket.id, status: "open" },
+        data: { status: "skipped", resolvedAt: deps.now },
+      });
+      if (closed.count !== 1 || ticket.host.status !== "parked_operator") return;
+      const parkedFrom = LbParkableHostStatusSchema.safeParse(ticket.host.parkedFrom).data ?? null;
+      const next = transitionHost({ status: "parked_operator", parkedFrom }, "operator_skipped");
+      await tx.lbHost.updateMany({
+        where: { id: ticket.hostId, status: "parked_operator" },
+        data: {
+          status: next.status,
+          parkedFrom: next.parkedFrom,
+          statusReason: ticket.reason,
+        },
+      });
+    });
+    await publish(deps, ticket.projectId);
+  }
+}
+
 async function expireTickets(deps: DueWorkDeps): Promise<void> {
+  await retireUnusableTickets(deps);
   const open = await deps.prisma.lbOperatorTicket.findMany({
     where: { status: "open" },
     include: { host: true, project: true },
@@ -276,12 +326,24 @@ async function verifyDuePlacements(
     const others = await deps.prisma.lbPlacement.count({
       where: { hostId: placement.hostId, counted: true, id: { not: placement.id } },
     });
-    const counted = countedAfterReverify({
+    let counted = countedAfterReverify({
       wasCounted: placement.counted,
       status,
       countNofollow: placement.project.countNofollow,
       anotherCountedOnHost: others > 0,
     });
+    if (!placement.counted && counted) {
+      const date = localDateKey(placement.createdAt, timezone);
+      const day = await deps.prisma.lbRun.findFirst({
+        where: { projectId: placement.projectId, date },
+        select: { liveToday: true },
+      });
+      counted = countedWithinPlan({
+        wantCounted: true,
+        countedToday: day?.liveToday ?? 0,
+        livePerDay: (deps.planCaps ?? STARTER_PLAN.caps).live_per_day,
+      });
+    }
     const snapshotArtifactId = await storeSnapshot(deps, placement, checked.html);
     const completed = placement.verifyCount + 1;
     await deps.prisma.$transaction(async (tx) => {
@@ -331,6 +393,7 @@ async function checkBalances(
   deps: DueWorkDeps,
   alerts: ReturnType<typeof createAlertSink>,
 ): Promise<void> {
+  if (process.env.CAPTELL_API_KEY?.trim()) return;
   const projects = await deps.prisma.lbProject.findMany({
     where: { status: "active", archivedAt: null },
   });
@@ -469,15 +532,23 @@ async function announceOpenTickets(
 ): Promise<void> {
   const tickets = await deps.prisma.lbOperatorTicket.findMany({
     where: { status: "open" },
-    select: { id: true, projectId: true, workspaceId: true, hostId: true },
+    include: { host: { select: { registrableDomain: true, status: true } } },
   });
   for (const ticket of tickets) {
+    const help = operatorHelpFor({
+      id: ticket.id,
+      status: ticket.status,
+      reason: ticket.reason,
+      domain: ticket.host.registrableDomain,
+      hostStatus: ticket.host.status,
+    });
+    if (!help) continue;
     await alerts.emit({
       kind: "captcha.needs_operator",
       workspaceId: ticket.workspaceId,
       projectId: ticket.projectId,
       dedupeKey: `captcha.needs_operator:${ticket.id}`,
-      message: "Captcha needs an operator",
+      message: help.label,
       payload: { ticketId: ticket.id, hostId: ticket.hostId },
     });
   }

@@ -5,6 +5,7 @@ import {
   FORUM_USERNAME_MAX,
   generateForumPassword,
   generateForumUsername,
+  simplifyForumUsername,
   type RandomBytes,
 } from "./credentials.js";
 
@@ -47,6 +48,7 @@ describe("forum credentials", () => {
   it("derives an ASCII username from the persona name", () => {
     const random = seeded(7);
     expect(generateForumUsername("Mira Sol", random)).toMatch(/^mira_sol\d{2}$/);
+    expect(simplifyForumUsername("sophie_braun68")).toBe("sophiebraun68");
     expect(generateForumUsername("Jürgen Groß", random)).toMatch(/^jurgen_gross\d{2}$/);
     expect(generateForumUsername("!!!", random)).toMatch(/^member\d{2}$/);
     expect(generateForumUsername("x", random)).toMatch(/^x\d{2}$/);

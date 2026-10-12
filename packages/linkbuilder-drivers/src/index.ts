@@ -23,6 +23,7 @@ export * from "./messages.js";
 export * from "./mybb.js";
 export * from "./nodebb.js";
 export * from "./phpbb.js";
+export * from "./registration-flow.js";
 export * from "./vanilla.js";
 export * from "./vbulletin.js";
 export * from "./verify.js";

@@ -23,7 +23,7 @@ export interface DesktopUpdateState {
   checkedAt: string | null;
 }
 
-export interface RakazoDesktopUpdate {
+export interface AutoSEODesktopUpdate {
   state: () => Promise<DesktopUpdateState>;
   check: () => Promise<DesktopUpdateState>;
   download: () => Promise<DesktopUpdateState>;
@@ -31,12 +31,12 @@ export interface RakazoDesktopUpdate {
   install: () => Promise<DesktopUpdateState>;
 }
 
-export interface RakazoDesktopOAuthCallback {
+export interface AutoSEODesktopOAuthCallback {
   code: string;
   state?: string;
 }
 
-export interface RakazoDesktop {
+export interface AutoSEODesktop {
   platform: string;
   window: {
     close: () => Promise<void>;
@@ -44,17 +44,17 @@ export interface RakazoDesktop {
     toggleMaximize: () => Promise<void>;
     state: () => Promise<{ minimized: boolean; maximized: boolean; fullScreen: boolean }>;
   };
-  update: RakazoDesktopUpdate;
+  update: AutoSEODesktopUpdate;
   oauth: {
     /**
      * Authorization codes captured from a sign-in popup's loopback redirect.
      * Returns an unsubscribe function.
      */
-    onCallback: (listener: (callback: RakazoDesktopOAuthCallback) => void) => () => void;
+    onCallback: (listener: (callback: AutoSEODesktopOAuthCallback) => void) => () => void;
   };
 }
 
-/** How the desktop app was pointed at a Rakazo server during first-run setup. */
+/** How the desktop app was pointed at an autoSEO server during first-run setup. */
 export type DesktopInstanceMode = "new" | "existing";
 
 export interface DesktopSetup {
@@ -82,7 +82,7 @@ export interface DesktopReachability {
  * Bridge exposed only to the first-run setup window. The app window keeps the
  * narrower `rakazoDesktop` bridge so a connected server can never re-point the app.
  */
-export interface RakazoSetup {
+export interface AutoSEOSetup {
   state: () => Promise<DesktopSetupState>;
   test: (url: string) => Promise<DesktopReachability>;
   save: (setup: DesktopSetup) => Promise<{ ok: boolean; error?: string }>;

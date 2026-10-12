@@ -1,26 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="autoseo-mark-title">
-  <title id="autoseo-mark-title">AutoSEO.run</title>
-  <defs>
-    <linearGradient id="autoseo-mark-fill" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#6366F1" />
-      <stop offset="1" stop-color="#2563EB" />
-    </linearGradient>
-  </defs>
-  <rect width="64" height="64" rx="16" fill="url(#autoseo-mark-fill)" />
-  <path
-    d="M16 43 L28 31 L36 39 L48 27"
-    fill="none"
-    stroke="#FFFFFF"
-    stroke-width="5"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  />
-  <path
-    d="M40 27 H48 V35"
-    fill="none"
-    stroke="#FFFFFF"
-    stroke-width="5"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="AutoSEO">
+  <rect width="32" height="32" fill="#1C1B16"/>
+  <polygon points="32,0 18,0 32,14" fill="#FFE14A"/>
+  <rect x="6" y="12" width="8" height="8" fill="none" stroke="#E8E4D8" stroke-width="2"/>
+  <rect x="14" y="16" width="8" height="8" fill="none" stroke="#E8E4D8" stroke-width="2"/>
+  <rect x="12" y="15" width="4" height="2" fill="#E8E4D8"/>
 </svg>

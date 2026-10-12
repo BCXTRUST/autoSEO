@@ -85,7 +85,7 @@ export async function seedLinkBuilderDemo(
       ]),
       facts: ["Nordlicht verkauft eine dimmbare Nachttischlampe."],
       denyHosts: ["spam.nordlicht.example"],
-      warmup: json({ minPostsBeforeLink: 2, minAccountAgeHours: 24 }),
+      warmup: json({ minPostsBeforeLink: 3, minAccountAgeHours: 24 }),
       content: json({ toneNotes: "Ruhig, konkret.", bannedClaims: [], maxReplyChars: 1200 }),
       operator: json({ parkedHostTtlHours: 48, channels: ["push", "email"] }),
     },
@@ -247,18 +247,6 @@ export async function seedLinkBuilderDemo(
       },
     ],
   });
-  await prisma.lbOperatorTicket.create({
-    data: {
-      workspaceId,
-      projectId: project.id,
-      hostId: hosts.parked,
-      runId: run.id,
-      reason: "captcha_unsolved",
-      status: "open",
-      expiresAt: new Date(now.getTime() + 48 * 60 * 60 * 1000),
-    },
-  });
-
   return { projectId: project.id, created: true };
 }
 

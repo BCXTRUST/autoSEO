@@ -229,7 +229,7 @@ function detectPlatform(html: string, blob: string): LbHostPlatform {
 }
 
 function detectUnsupported(html: string): boolean {
-  return /funcaptcha|arkoselabs|geetest|gt_captcha|keycaptcha/i.test(html);
+  return /keycaptcha/i.test(html);
 }
 
 function detectCaptcha(html: string): LbCaptchaType | null {
@@ -238,6 +238,8 @@ function detectCaptcha(html: string): LbCaptchaType | null {
   if (/g-recaptcha|google\.com\/recaptcha/i.test(html)) return "recaptcha_v2";
   if (/cf-turnstile|challenges\.cloudflare\.com/i.test(html)) return "turnstile";
   if (/h-captcha|hcaptcha\.com/i.test(html)) return "hcaptcha";
+  if (/funcaptcha|arkoselabs/i.test(html)) return "funcaptcha";
+  if (/geetest|gt_captcha/i.test(html)) return "geetest";
   if (/Bestätigungscode|id=["']confirm_code["']|captcha-image/i.test(html)) return "image_letters";
   if (/id=["']qa_answer["']|Sicherheitsfrage/i.test(html)) return "knowledge_question";
   if (/security check|Überprüfung/i.test(html)) return "security_check_label";

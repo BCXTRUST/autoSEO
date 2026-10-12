@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Rakazo",
+    "name": "autoSEO",
     "slug": "rakazo",
     "owner": "inbox-zero",
     "scheme": "rakazo",
@@ -33,8 +33,8 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Rakazo uses your photo library so you can attach images to a bot message.",
-          "cameraPermission": "Rakazo uses the camera so you can attach photos to a bot message.",
+          "photosPermission": "autoSEO uses your photo library so you can attach images to a bot message.",
+          "cameraPermission": "autoSEO uses the camera so you can attach photos to a bot message.",
           "microphonePermission": false
         }
       ],
@@ -50,9 +50,9 @@
         "usesNonExemptEncryption": false
       },
       "infoPlist": {
-        "NSCameraUsageDescription": "Rakazo uses the camera so you can attach photos to a bot message.",
-        "NSPhotoLibraryUsageDescription": "Rakazo uses your photo library so you can attach images to a bot message.",
-        "NSLocalNetworkUsageDescription": "Rakazo connects to a self-hosted Rakazo server on your local network.",
+        "NSCameraUsageDescription": "autoSEO uses the camera so you can attach photos to a bot message.",
+        "NSPhotoLibraryUsageDescription": "autoSEO uses your photo library so you can attach images to a bot message.",
+        "NSLocalNetworkUsageDescription": "autoSEO connects to a self-hosted autoSEO server on your local network.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         }

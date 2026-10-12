@@ -1,10 +1,10 @@
 import path from "node:path";
 import { _electron as electron, expect, test } from "@playwright/test";
-import type { RakazoDesktop } from "@rakazo/contracts";
+import type { AutoSEODesktop } from "@rakazo/contracts";
 
 const fixture = `<!doctype html>
 <html lang="en">
-  <head><meta charset="utf-8"><title>Rakazo desktop smoke</title></head>
+  <head><meta charset="utf-8"><title>autoSEO desktop smoke</title></head>
   <body><main>Desktop fixture ready</main></body>
 </html>`;
 
@@ -21,10 +21,10 @@ test("launches with a narrow preload bridge and an isolated renderer", async () 
   try {
     const page = await app.firstWindow();
     await expect(page.getByText("Desktop fixture ready")).toBeVisible();
-    await expect(page).toHaveTitle("Rakazo desktop smoke");
+    await expect(page).toHaveTitle("autoSEO desktop smoke");
 
     const renderer = await page.evaluate(async () => {
-      const desktop = (window as typeof window & { rakazoDesktop?: RakazoDesktop }).rakazoDesktop;
+      const desktop = (window as typeof window & { rakazoDesktop?: AutoSEODesktop }).rakazoDesktop;
 
       return {
         bridgeKeys: desktop ? Object.keys(desktop).sort() : [],

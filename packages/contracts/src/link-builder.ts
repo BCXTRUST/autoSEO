@@ -103,6 +103,8 @@ export const LbCaptchaTypeSchema = z.enum([
   "recaptcha_enterprise",
   "turnstile",
   "hcaptcha",
+  "geetest",
+  "funcaptcha",
   "image_letters",
   "knowledge_question",
   "security_check_label",
@@ -117,6 +119,8 @@ export const LbTokenCaptchaTypeSchema = LbCaptchaTypeSchema.extract([
   "recaptcha_enterprise",
   "turnstile",
   "hcaptcha",
+  "geetest",
+  "funcaptcha",
 ]);
 export type LbTokenCaptchaType = z.infer<typeof LbTokenCaptchaTypeSchema>;
 
@@ -334,6 +338,8 @@ export const LbScheduleSchema = z
     overtimeUntilLiveMet: z.boolean().default(false),
     /** Local hour (exclusive) at which overtime stops; 24 means midnight. */
     hardStopHour: z.number().int().min(1).max(24).default(24),
+    /** ISO time. While it is still ahead, Start and "continue" keep the run open. */
+    resumeUntil: z.string().datetime({ offset: true }).optional(),
   })
   .refine((schedule) => schedule.hardStopHour * 60 >= clockMinutes(schedule.window.end), {
     message: "hardStopHour must not be before the window end",
@@ -364,7 +370,7 @@ export type LbLinkRatio = z.infer<typeof LbLinkRatioSchema>;
 export const LB_DEFAULT_LINK_RATIO: LbLinkRatio = { links: 1, posts: 3 };
 
 export const LbWarmupSchema = z.object({
-  minPostsBeforeLink: z.number().int().min(0).max(20).default(2),
+  minPostsBeforeLink: z.number().int().min(0).max(20).default(3),
   minAccountAgeHours: z
     .number()
     .int()
@@ -397,8 +403,11 @@ export const LbContentSchema = z.object({
   maxReplyChars: z.number().int().min(200).max(10_000).default(1200),
   /** `queue` sends a failed facts-only check to the drafts queue; `discard` drops it. */
   mode: LbContentModeSchema.default("discard"),
-  /** Thread activity window for selection (plan 6.4). */
-  threadActivityDays: z.number().int().min(1).max(3650).default(180),
+  /**
+   * Newest post in the thread must be this recent. One month: a reply under a post
+   * from last year does not get an answer.
+   */
+  threadActivityDays: z.number().int().min(1).max(3650).default(30),
   excludedLaneIds: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
   /** Per-project OpenRouter model ids. Deployment defaults apply when a lane is omitted. */
   modelLanes: LbModelLaneOverrideSchema.default({}),
@@ -466,7 +475,7 @@ export const LbProjectConfigSchema = z.object({
   facts: z.array(z.string().trim().min(1).max(500)).max(100).default([]),
   denyHosts: z.array(LbRegistrableDomainSchema).max(500).default([]),
   preferHosts: z.array(LbRegistrableDomainSchema).max(500).default([]),
-  warmup: LbWarmupSchema.default({ minPostsBeforeLink: 2, minAccountAgeHours: 24 }),
+  warmup: LbWarmupSchema.default({ minPostsBeforeLink: 3, minAccountAgeHours: 24 }),
   spamRetry: LbSpamRetrySchema.default({
     maxRetries: 1,
     sentences: [...LB_DEFAULT_SPAM_SENTENCES],
@@ -476,7 +485,7 @@ export const LbProjectConfigSchema = z.object({
     bannedClaims: [],
     maxReplyChars: 1200,
     mode: "discard" as const,
-    threadActivityDays: 180,
+    threadActivityDays: 30,
     excludedLaneIds: [],
     modelLanes: {},
   })),
@@ -490,10 +499,9 @@ export const LbProjectConfigSchema = z.object({
 export type LbProjectConfig = z.infer<typeof LbProjectConfigSchema>;
 export type LbProjectConfigInput = z.input<typeof LbProjectConfigSchema>;
 
-/** Fields the wizard must have before Start building is allowed. */
+/** Fields the wizard must have before Start building is allowed. Captell stays on the deployment. */
 export const LbProjectStartableSchema = LbProjectConfigSchema.extend({
   mailboxId: Id,
-  captchaSecretId: Id,
   topicLanes: z.array(LbTopicLaneSchema).min(1).max(20),
 });
 
@@ -512,17 +520,29 @@ export type LbDraftQualityChecks = z.infer<typeof LbDraftQualityChecksSchema>;
 export const LbThreadRelevanceSchema = z.object({
   relevance: z.number().min(0).max(1),
   openQuestion: z.boolean(),
-  reasons: z.array(z.string().max(300)).max(12),
+  reasons: z.array(z.string().max(300)).max(12).default([]),
 });
 export type LbThreadRelevance = z.infer<typeof LbThreadRelevanceSchema>;
 
-export const LbDraftReplySchema = z.object({
+const DRAFT_BODY_KEYS = ["body", "text", "reply", "message", "answer", "response", "content"] as const;
+
+export const LbDraftReplySchema = z.preprocess((value) => {
+  if (!value || typeof value !== "object") return value;
+  const record = { ...(value as Record<string, unknown>) };
+  const named = DRAFT_BODY_KEYS.map((key) => record[key]).find((item) => typeof item === "string");
+  if (typeof record.body !== "string" && typeof named === "string") record.body = named;
+  if (record.linkSlot === undefined) record.linkSlot = "none";
+  if (record.targetUrlIndex === undefined) record.targetUrlIndex = null;
+  if (record.anchorText === undefined) record.anchorText = null;
+  if (typeof record.confidence !== "number") record.confidence = 0.6;
+  return record;
+}, z.object({
   body: z.string().max(10_000),
   linkSlot: LbLinkSlotSchema,
   targetUrlIndex: z.number().int().min(0).nullable(),
   anchorText: z.string().max(80).nullable(),
   confidence: z.number().min(0).max(1),
-});
+}));
 export type LbDraftReply = z.infer<typeof LbDraftReplySchema>;
 
 export const LbFitCheckSchema = z.object({

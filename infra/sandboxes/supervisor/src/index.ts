@@ -550,7 +550,7 @@ async function findBotContainer(botId: string, workspaceId: string) {
   for (const item of listed) {
     const container = docker.getContainer(item.Id);
     const info = await container.inspect();
-    if (isRakazoContainer(info, botId, workspaceId)) return container;
+    if (isAutoSEOContainer(info, botId, workspaceId)) return container;
   }
   return undefined;
 }
@@ -559,7 +559,7 @@ async function managedContainer(id: string, botId?: string, workspaceId?: string
   if (!botId || !workspaceId) throw new Error("missing computer identity");
   const container = docker.getContainer(id);
   const info = await container.inspect();
-  if (!isRakazoContainer(info, botId, workspaceId)) throw new Error("computer identity mismatch");
+  if (!isAutoSEOContainer(info, botId, workspaceId)) throw new Error("computer identity mismatch");
   return { container, info };
 }
 
@@ -586,7 +586,7 @@ async function managedScreen(
   return { container, info, layout };
 }
 
-function isRakazoContainer(info: Docker.ContainerInspectInfo, botId: string, workspaceId: string) {
+function isAutoSEOContainer(info: Docker.ContainerInspectInfo, botId: string, workspaceId: string) {
   const labels = info.Config.Labels ?? {};
   const managed = labels["rakazo.managed"] === "true" || info.Config.Image === COMPUTER_IMAGE;
   return (

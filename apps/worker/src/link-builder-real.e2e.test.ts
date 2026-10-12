@@ -9,14 +9,13 @@ import {
   EncryptedSecretStore,
   LocalArtifactStore,
   RecordedTextModel,
+  StaticPlanProvider,
   textModelFixtureKey,
 } from "@rakazo/adapters";
 import {
-  continueLbTicket,
   createLbProject,
-  getLbArtifact,
+  grantExplicitProjectAllowance,
   listLbRunSteps,
-  listLbTickets,
   startLbProject,
   updateLbProject,
 } from "@rakazo/api/link-builder";
@@ -25,7 +24,7 @@ import { createPgliteDb, type TestDatabase } from "@rakazo/db/pglite";
 import { LocalBrowserSessionFactory } from "@rakazo/linkbuilder-browser";
 import { browserTestGate, FIXTURE_PAGE_HELPER_DIR } from "@rakazo/linkbuilder-browser/testing";
 import { draftPrompt, fitPrompt, relevancePrompt, TEST_PACING } from "@rakazo/linkbuilder-core";
-import { PHPBB_SELECTORS, VERIFY_USER_AGENT } from "@rakazo/linkbuilder-drivers";
+import { VERIFY_USER_AGENT } from "@rakazo/linkbuilder-drivers";
 import {
   type FixtureMail,
   type MarkupFixture,
@@ -91,7 +90,15 @@ async function createHarness(): Promise<Harness> {
   const artifacts = new LocalArtifactStore(root);
   return {
     db,
-    deps: { prisma: db.prisma, secrets, artifacts } as unknown as ApiDeps,
+    deps: {
+      prisma: db.prisma,
+      secrets,
+      artifacts,
+      plan: new StaticPlanProvider({
+        name: "e2e",
+        caps: { projects: 100, live_per_day: 100, personas: 100 },
+      }),
+    } as unknown as ApiDeps,
     root,
     artifacts,
     secrets,
@@ -114,6 +121,7 @@ async function wizardProject(
   personaName: string,
   platform = "phpbb",
 ) {
+  await grantExplicitProjectAllowance(h.db.prisma, actor.workspaceId);
   const created = await createLbProject(h.deps, actor, {
     name,
     brandName: "Vereinsplaner",
@@ -188,6 +196,7 @@ async function recordedDraftModel(displayName: string): Promise<TextModel> {
     title,
     excerpt: "",
     citeSource: true,
+    maxChars: 1200,
   });
   const fit = fitPrompt({ title, excerpt: "", body: RECORDED_REPLY.body, facts });
   await mkdir(join(root, "classify"), { recursive: true });
@@ -448,7 +457,7 @@ describe.skipIf(!gate.available)(
       }
     }, 180_000);
 
-    it("parks a rejected captcha and resumes from the page without replaying a submit", async () => {
+    it("skips a forum when Captell cannot solve the captcha", async () => {
       const fixture = await startPhpbbFixture({
         rel: "follow",
         linkRuleMinPosts: 0,
@@ -479,63 +488,16 @@ describe.skipIf(!gate.available)(
       const hostStatus = async () =>
         (await prisma.lbHost.findUniqueOrThrow({ where: { id: host.id } })).status;
 
-      await tickUntil(runner, async () => (await hostStatus()) === "parked_operator");
+      await tickUntil(runner, async () => (await hostStatus()) === "unsupported_captcha");
       expect(fixture.registrationSubmits()).toBe(2);
-      const [ticket] = await listLbTickets(h.deps, actor, {
-        projectId: project.id,
-        status: "open",
-      });
-      expect(ticket).toMatchObject({ reason: "captcha_unsolved", hostId: host.id });
-      expect(ticket?.screenshotArtifactId).toBeTruthy();
-      const parkedHost = await prisma.lbHost.findUniqueOrThrow({ where: { id: host.id } });
-      expect(parkedHost.parkedFrom).toBe("registering");
-      const ticketShot = await getLbArtifact(h.deps, actor, {
-        projectId: project.id,
-        artifactId: ticket!.screenshotArtifactId!,
-      });
-      expect(ticketShot.mimeType).toBe("image/png");
-      if (process.env.LB_E2E_ARTIFACT_DIR) {
-        await writeFile(
-          join(process.env.LB_E2E_ARTIFACT_DIR, "lb-m2-operator-ticket.png"),
-          Buffer.from(ticketShot.contentBase64, "base64"),
-        );
-      }
-
-      // While parked the runner waits instead of retrying the board.
-      const stepsBefore = await prisma.lbRunStep.count({ where: { hostId: host.id } });
-      await runner.tick();
-      expect(await prisma.lbRunStep.count({ where: { hostId: host.id } })).toBe(stepsBefore);
-
-      // The operator solves the captcha in the persona browser and submits the form themselves.
-      const session = runner.sessionFor(project.id);
-      expect(session).not.toBeNull();
-      await session!.fill(PHPBB_SELECTORS.captchaAnswer, CAPTCHA_ANSWER);
-      await session!.click(PHPBB_SELECTORS.registerSubmit);
-      expect(fixture.registrationSubmits()).toBe(3);
-      const imagesBeforeResume = fixture.captchaImagesServed();
-
-      await continueLbTicket(h.deps, actor, { projectId: project.id, ticketId: ticket!.id });
-      expect(await hostStatus()).toBe("registering");
-
-      await runner.tick();
-      expect(await hostStatus()).toBe("pending_email");
-      const resumed = await prisma.lbRunStep.findFirstOrThrow({
-        where: { hostId: host.id },
-        orderBy: { stepIndex: "desc" },
-      });
-      expect(resumed.kind).toBe("register");
-      expect(resumed.outcome).toMatchObject({ resumed: true, registration: "pending_email" });
-      expect(fixture.registrationSubmits()).toBe(3);
-      expect(fixture.captchaImagesServed()).toBe(imagesBeforeResume);
-
-      const run = await prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
-      await tickUntil(runner, async () => {
-        const current = await prisma.lbRun.findUniqueOrThrow({ where: { id: run.id } });
-        return current.status === "succeeded";
-      });
-      const placement = await prisma.lbPlacement.findFirstOrThrow({ where: { hostId: host.id } });
-      expect(placement).toMatchObject({ status: "live", counted: true });
-      expect(fixture.registrationSubmits()).toBe(3);
+      expect(
+        await prisma.lbOperatorTicket.count({
+          where: { projectId: project.id, reason: "captcha_unsolved" },
+        }),
+      ).toBe(0);
+      const skipped = await prisma.lbHost.findUniqueOrThrow({ where: { id: host.id } });
+      expect(skipped.parkedFrom).toBeNull();
+      expect(skipped.statusReason).toBe("captcha_unsolved");
     }, 180_000);
 
     it("records placed_submitted when the fixture Page Helper places the check", async () => {

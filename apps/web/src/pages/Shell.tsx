@@ -491,7 +491,7 @@ export function ShellPage() {
     const request = ++screenRequest.current;
     const screen = await rpc.computer
       .screenUrl({ botId: id })
-      .catch(() => ({ url: null as string | null, error: "screen request failed" }));
+      .catch(() => ({ url: null as string | null, error: "Failed to connect to server" }));
     if (
       request !== screenRequest.current ||
       activeBotId.current !== id ||
@@ -500,7 +500,7 @@ export function ShellPage() {
       return null;
     }
     setScreenUrl(screen.url);
-    if (screen.url) setComputerError(null);
+    setComputerError(screen.url ? null : (screen.error ?? "Failed to connect to server"));
     return screen.url;
   }
 
@@ -2026,7 +2026,8 @@ export function ShellPage() {
                       This bot runs on this computer, not a Linux desktop. Shell and files use your
                       home folder.
                     </div>
-                  ) : computer?.state === "running" && (embeddedScreenUrl || screenPreview) ? (
+                  ) : computer?.state === "running" &&
+                    (embeddedScreenUrl || (screenPreview && !computerError)) ? (
                     <LiveDesktopView
                       embeddedScreenUrl={embeddedScreenUrl}
                       previewSrc={screenPreview}
@@ -2035,7 +2036,7 @@ export function ShellPage() {
                     />
                   ) : (
                     <div className="grid h-full place-items-center text-sm text-[#6C6C70]">
-                      {computerPlaceholder(computer?.state, booting)}
+                      {computerPlaceholder(computer?.state, booting, computerError)}
                     </div>
                   )}
                   <button
@@ -2626,7 +2627,8 @@ export function ShellPage() {
                 This bot runs on this computer. There is no separate Linux desktop. Ask it to use
                 the shell; working directories under your home folder are allowed.
               </div>
-            ) : computer?.state === "running" && (embeddedScreenUrl || screenPreview) ? (
+            ) : computer?.state === "running" &&
+              (embeddedScreenUrl || (screenPreview && !computerError)) ? (
               <>
                 <LiveDesktopView
                   embeddedScreenUrl={embeddedScreenUrl}
@@ -2646,7 +2648,7 @@ export function ShellPage() {
               </>
             ) : (
               <div className="grid h-full place-items-center text-sm text-[#6C6C70]">
-                {computerPlaceholder(computer?.state, booting)}
+                {computerPlaceholder(computer?.state, booting, computerError)}
               </div>
             )}
           </div>
@@ -4284,6 +4286,12 @@ function LiveDesktopView({
   return null;
 }
 
+function novncClientPath(pathname: string): string | null {
+  const page = pathname.split("?")[0] ?? pathname;
+  if (!/\/(?:vnc|embed)\.html$/.test(page)) return null;
+  return `${page.replace(/^\//, "").replace(/\/(?:vnc|embed)\.html$/, "")}/websockify`;
+}
+
 function embeddableScreenUrl(url: string | null): string | null {
   if (!url) return null;
   try {
@@ -4294,6 +4302,10 @@ function embeddableScreenUrl(url: string | null): string | null {
     if (local && parsed.port && parsed.port !== pagePort) {
       return null;
     }
+    const socketPath = novncClientPath(parsed.pathname);
+    if (socketPath && !parsed.searchParams.get("path")) parsed.searchParams.set("path", socketPath);
+    if (!parsed.searchParams.get("autoconnect")) parsed.searchParams.set("autoconnect", "true");
+    if (!parsed.searchParams.get("reconnect")) parsed.searchParams.set("reconnect", "true");
     return parsed.toString();
   } catch {
     return url;
@@ -4311,7 +4323,12 @@ function screenIframeSandbox(url: string | null) {
   }
 }
 
-function computerPlaceholder(state: ComputerStatus["state"] | undefined, booting: boolean) {
+function computerPlaceholder(
+  state: ComputerStatus["state"] | undefined,
+  booting: boolean,
+  error?: string | null,
+) {
+  if (state === "running" && error) return error;
   if (state === "booting" || booting) return "Booting live desktop…";
   if (state === "running") return "Connecting desktop…";
   if (state === "suspended") return "Computer is asleep — take control to wake it";

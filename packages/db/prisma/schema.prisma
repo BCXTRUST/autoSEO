@@ -129,6 +129,7 @@ model Organization {
   lbWebhookDeliveries LbWebhookDelivery[]
   lbCostEntries LbCostEntry[]
   lbInboundMail LbInboundMail[]
+  lbCreditPurchases LbCreditPurchase[]
 
   @@unique([slug])
   @@map("organization")
@@ -920,7 +921,7 @@ model LbProject {
   facts                    String[]            @default([])
   denyHosts                String[]            @default([])
   preferHosts              String[]            @default([])
-  warmup                   Json                @default("{\"minPostsBeforeLink\":2,\"minAccountAgeHours\":24}")
+  warmup                   Json                @default("{\"minPostsBeforeLink\":3,\"minAccountAgeHours\":24}")
   spamRetry                Json                @default("{\"maxRetries\":1,\"sentences\":[\"Die Registrierung ist wegen Spamschutzmaßnahmen fehlgeschlagen.\",\"No soup for you!\"]}")
   content                  Json                @default("{\"toneNotes\":\"\",\"bannedClaims\":[],\"maxReplyChars\":1200}")
   operator                 Json                @default("{\"parkedHostTtlHours\":48,\"ticketTtlHours\":24,\"onExpire\":\"skip\",\"channels\":[\"push\",\"email\"]}")
@@ -1321,6 +1322,24 @@ model LbCostEntry {
 
   @@index([workspaceId, projectId, occurredAt])
   @@map("lb_cost_entries")
+}
+
+// A purchased package is a settled live charge, or an explicit allowance row.
+// Stub checkout attempts are not stored. Allowance rows do not add credits.
+model LbCreditPurchase {
+  id          String       @id @default(cuid())
+  workspaceId String
+  workspace   Organization @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  packageId   String
+  credits     Int
+  priceCents  Int
+  currency    String
+  billing     String
+  chargeId    String?      @unique
+  createdAt   DateTime     @default(now())
+
+  @@index([workspaceId, createdAt])
+  @@map("lb_credit_purchases")
 }
 
 model LbInboundMail {

@@ -88,6 +88,10 @@ export function App() {
             element={user ? <LinkBuilderPage /> : <Navigate to="/sign-in" replace />}
           />
           <Route
+            path="/link-builder/credits"
+            element={user ? <LinkBuilderPage /> : <Navigate to="/sign-in" replace />}
+          />
+          <Route
             path="/link-builder/new"
             element={user ? <LinkBuilderPage /> : <Navigate to="/sign-in" replace />}
           />

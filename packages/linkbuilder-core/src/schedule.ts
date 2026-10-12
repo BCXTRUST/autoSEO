@@ -5,6 +5,8 @@ export interface ScheduleWindow {
   overtimeUntilLiveMet: boolean;
   /** Local hour (exclusive) at which overtime stops; 24 means midnight. */
   hardStopHour: number;
+  /** When set and still in the future, the run is open even outside the window. */
+  resumeUntil?: string;
 }
 
 export type ScheduleMode = "window" | "overtime" | "closed";
@@ -82,6 +84,10 @@ export function isWithinWindow(
   schedule: ScheduleWindow,
   progress: { liveMet: boolean },
 ): ScheduleState {
+  const resumeUntil = schedule.resumeUntil ? Date.parse(schedule.resumeUntil) : Number.NaN;
+  if (Number.isFinite(resumeUntil) && resumeUntil > now.getTime()) {
+    return { active: true, mode: "window", reason: "in_window" };
+  }
   const start = parseClockTime(schedule.window.start);
   const end = parseClockTime(schedule.window.end);
   if (start >= end) throw new RangeError("Window must start before it ends on the same day");
@@ -99,4 +105,28 @@ export function isWithinWindow(
     return { active: false, mode: "closed", reason: "hard_stop" };
   }
   return { active: true, mode: "overtime", reason: "overtime" };
+}
+
+/** The next moment the window is open, or `now` when a resume is already in effect. */
+export function nextWindowStart(now: Date, schedule: ScheduleWindow): Date {
+  if (isWithinWindow(now, schedule, { liveMet: false }).active) return now;
+  const step = 60_000;
+  const limit = now.getTime() + 8 * 24 * 60 * 60_000;
+  for (let at = now.getTime() + step; at <= limit; at += step) {
+    if (isWithinWindow(new Date(at), schedule, { liveMet: false }).active) return new Date(at);
+  }
+  return new Date(limit);
+}
+
+/** Short local label: "Now" or "Sat 09:00" in the project timezone. */
+export function formatNextRun(now: Date, schedule: ScheduleWindow): string {
+  if (isWithinWindow(now, schedule, { liveMet: false }).active) return "Now";
+  const clock = new Intl.DateTimeFormat("en-GB", {
+    timeZone: schedule.timezone,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(nextWindowStart(now, schedule));
+  return `${clock} ${schedule.timezone}`;
 }

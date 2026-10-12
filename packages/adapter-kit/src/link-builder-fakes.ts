@@ -75,9 +75,15 @@ export interface FakeElement {
   attributes?: Record<string, string>;
   /** Value typed by `fill`. */
   value?: string;
+  /** Present in the DOM but not shown, such as a dismissed cookie bar. */
+  hidden?: boolean;
+  /** Checkbox or radio state. A click toggles it. */
+  checked?: boolean;
   png?: Uint8Array;
   /** Used when a crop asks for padding. Falls back to `png`. */
   paddedPng?: Uint8Array;
+  /** Closer crops, consumed in order when `insetPx` is set. */
+  closerPngs?: Uint8Array[];
   onClick?: (page: FakePageController) => void;
 }
 
@@ -114,6 +120,7 @@ function clonePage(page: FakePage): FakePage {
     elements[selector] = {
       ...element,
       attributes: element.attributes ? { ...element.attributes } : undefined,
+      closerPngs: element.closerPngs ? [...element.closerPngs] : undefined,
     };
   }
   return { ...page, elements, formFields: page.formFields?.map((field) => ({ ...field })) };
@@ -121,6 +128,7 @@ function clonePage(page: FakePage): FakePage {
 
 export class FakeBrowserSession implements BrowserSession {
   readonly actions: FakeBrowserAction[] = [];
+  readonly screenshots: Array<{ selector: string; paddingPx?: number; insetPx?: number }> = [];
   private readonly pages = new Map<string, FakePage>();
   private currentUrl = "about:blank";
   private closed = false;
@@ -157,6 +165,7 @@ export class FakeBrowserSession implements BrowserSession {
   async click(selector: string): Promise<void> {
     const element = this.require(selector);
     this.actions.push({ kind: "click", selector });
+    if (element.checked !== undefined) element.checked = !element.checked;
     element.onClick?.(this.controller());
   }
 
@@ -171,6 +180,17 @@ export class FakeBrowserSession implements BrowserSession {
     return selector in this.page().elements;
   }
 
+  async isVisible(selector: string): Promise<boolean> {
+    this.assertOpen();
+    const element = this.page().elements[selector];
+    return Boolean(element) && element.hidden !== true;
+  }
+
+  async isChecked(selector: string): Promise<boolean> {
+    this.assertOpen();
+    return this.page().elements[selector]?.checked === true;
+  }
+
   async attribute(selector: string, name: string): Promise<string | null> {
     this.assertOpen();
     return this.page().elements[selector]?.attributes?.[name] ?? null;
@@ -178,9 +198,18 @@ export class FakeBrowserSession implements BrowserSession {
 
   async elementScreenshotPng(
     selector: string,
-    options?: { paddingPx?: number },
+    options?: { paddingPx?: number; insetPx?: number },
   ): Promise<Uint8Array> {
+    this.screenshots.push({
+      selector,
+      paddingPx: options?.paddingPx,
+      insetPx: options?.insetPx,
+    });
     const element = this.require(selector);
+    if (options?.insetPx && element.closerPngs && element.closerPngs.length > 0) {
+      const closer = element.closerPngs.shift();
+      if (closer) return closer;
+    }
     if (options?.paddingPx && element.paddedPng) return element.paddedPng;
     return element.png ?? fakePngBytes(256, `${selector}:${element.text ?? ""}`);
   }
@@ -318,6 +347,8 @@ export const FAKE_CAPTCHA_COSTS: Record<FakeCaptchaCostKey, number> = {
   recaptcha_enterprise: 25,
   turnstile: 10,
   hcaptcha: 10,
+  geetest: 9,
+  funcaptcha: 15,
 };
 
 export type FakeCaptchaOutcome = string | CaptchaSolverError;
@@ -350,6 +381,8 @@ export class FakeCaptchaSolver implements CaptchaSolver {
       "recaptcha_enterprise",
       "turnstile",
       "hcaptcha",
+      "geetest",
+      "funcaptcha",
       "image_letters",
       "knowledge_question",
     ];

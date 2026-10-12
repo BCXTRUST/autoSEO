@@ -52,11 +52,11 @@ import {
   extraDisplayInputCommand,
   extraDisplayLayout,
   observeExtraDisplayCommand,
+  PRIMARY_WATCH_VIEW_PORT,
   parseAllocatedExtraDisplay,
   parseExtraDisplayObservation,
   parseExtraDisplayViewPassword,
   parseReleasedExtraDisplay,
-  PRIMARY_WATCH_VIEW_PORT,
   releaseExtraDisplayCommand,
   screenControlKey,
 } from "./extra-displays.js";
@@ -68,6 +68,21 @@ export interface E2BSandboxSdk {
   create(options: ReturnType<typeof e2bCreateOptions>): Promise<Sandbox>;
   connect(id: string, options: { apiKey: string; timeoutMs: number }): Promise<Sandbox>;
   pause(id: string, options: { apiKey: string }): Promise<void>;
+}
+
+/** The desktop SDK throws on a non-zero exit. Callers still need that stdout, for example a runner ping. */
+function commandFailure(
+  error: unknown,
+): { exitCode: number; stdout?: string; stderr?: string } | null {
+  if (!error || typeof error !== "object" || !("result" in error)) return null;
+  const result = (error as { result?: { exitCode?: unknown; stdout?: unknown; stderr?: unknown } })
+    .result;
+  if (!result || typeof result.exitCode !== "number") return null;
+  return {
+    exitCode: result.exitCode,
+    ...(typeof result.stdout === "string" ? { stdout: result.stdout } : {}),
+    ...(typeof result.stderr === "string" ? { stderr: result.stderr } : {}),
+  };
 }
 
 export function e2bCreateOptions(botId: string, apiKey: string) {
@@ -241,6 +256,17 @@ export class E2BSandboxProvider implements SandboxProvider {
   ): AsyncIterable<ProcessEvent> {
     const desktop = await this.box(computer);
     const cmd = request.argv.map(shellQuote).join(" ");
+    if (cmd.includes("RAKAZO_DETACH_BROWSER")) {
+      const handle = await desktop.commands.run(cmd, {
+        cwd: e2bCwd(request.cwd),
+        background: true,
+        timeoutMs: 0,
+        signal: context.signal,
+      });
+      await handle.disconnect();
+      yield { type: "exit", code: 0 };
+      return;
+    }
     const timeoutMs = boundedSandboxCommandTimeoutMs(request.timeoutMs);
     try {
       const result = await desktop.commands.run(cmd, {
@@ -253,6 +279,13 @@ export class E2BSandboxProvider implements SandboxProvider {
       if (result.stderr) yield { type: "stderr", data: result.stderr };
       yield { type: "exit", code: result.exitCode ?? 0 };
     } catch (error) {
+      const failed = commandFailure(error);
+      if (failed) {
+        if (failed.stdout) yield { type: "stdout", data: failed.stdout };
+        if (failed.stderr) yield { type: "stderr", data: failed.stderr };
+        yield { type: "exit", code: failed.exitCode };
+        return;
+      }
       if (error instanceof TimeoutError) {
         yield {
           type: "stderr",
@@ -291,6 +324,10 @@ export class E2BSandboxProvider implements SandboxProvider {
           mimeType: "text/html",
           close: async () => undefined,
         };
+      }
+      const vendor = await this.vendorWatchUrl(desktop);
+      if (vendor) {
+        return { url: vendor, mimeType: "text/html", close: async () => undefined };
       }
       const viewPassword = await this.ensurePrimaryView(desktop, layout, context);
       const url = new URL(`https://${desktop.getHost(PRIMARY_WATCH_VIEW_PORT)}/vnc.html`);
@@ -619,23 +656,64 @@ export class E2BSandboxProvider implements SandboxProvider {
     return extraDisplayLayout(index, desktop.display ?? ":0");
   }
 
+  /** The vendor desktop stream (E2B noVNC). Falls back to the local watcher when it is down. */
+  private async vendorWatchUrl(desktop: Sandbox): Promise<string | null> {
+    const stream = desktop.stream;
+    if (!stream || typeof stream.getUrl !== "function") return null;
+    const read = (): string | null => {
+      try {
+        return watchUrl(stream.getUrl({ autoConnect: true, viewOnly: true, resize: "scale" }));
+      } catch {
+        return null;
+      }
+    };
+    const existing = read();
+    if (existing) return existing;
+    if (typeof stream.start !== "function") return null;
+    try {
+      await stream.start();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      // The SDK only keeps the URL in memory. A live x11vnc from an older
+      // connection still serves the desktop on the standard noVNC port.
+      if (!/already running/i.test(message)) return null;
+      if (await tcpOpen(desktop, 6080))
+        return watchUrl(`https://${desktop.getHost(6080)}/vnc.html`);
+      await stream.stop?.().catch(() => undefined);
+      try {
+        await stream.start();
+      } catch {
+        return null;
+      }
+    }
+    return read();
+  }
+
   private async ensurePrimaryView(
     desktop: Sandbox,
     layout: ReturnType<typeof extraDisplayLayout>,
     context: AdapterContext,
   ): Promise<string> {
-    const result = await desktop.commands.run(
-      ensurePrimaryViewCommand(layout, randomBytes(9).toString("base64url")),
-      { timeoutMs: 8_000, signal: context.signal },
-    );
-    if (result.exitCode !== 0) {
-      const detail = String(result.stderr || result.stdout || "");
-      const tagged = detail.match(/RAKAZO_SCREEN_ERROR=(\S+)/)?.[1];
+    try {
+      const result = await desktop.commands.run(
+        ensurePrimaryViewCommand(layout, randomBytes(9).toString("base64url")),
+        { timeoutMs: 20_000, signal: context.signal },
+      );
+      if (result.exitCode !== 0) {
+        throw new ComputerScreenUnavailableError(screenFailureDetail(result.stderr, result.stdout));
+      }
+      return parseExtraDisplayViewPassword(result.stdout);
+    } catch (error) {
+      if (error instanceof ComputerScreenUnavailableError) throw error;
+      const record = error as { stderr?: string; stdout?: string };
       throw new ComputerScreenUnavailableError(
-        tagged || detail.trim().slice(0, 240) || "primary view failed",
+        screenFailureDetail(
+          record?.stderr,
+          record?.stdout,
+          error instanceof Error ? error.message : "",
+        ),
       );
     }
-    return parseExtraDisplayViewPassword(result.stdout);
   }
 
   private async ensureExtraDisplay(
@@ -676,12 +754,11 @@ export class E2BSandboxProvider implements SandboxProvider {
         controlStreamStopCommand(),
         `printf %s ${shellQuote(controlToken)} > ${tokenFile}`,
         `x11vnc -storepasswd ${shellQuote(password)} ${passwordFile} >/dev/null`,
-        `x11vnc -bg -display ${shellQuote(desktop.display)} -forever -wait 50 -shared -rfbport ${layout.controlVncPort} -rfbauth ${passwordFile} 2>/tmp/rakazo-control-x11vnc.log`,
-        "cd /opt/noVNC/utils",
-        `(nohup ./novnc_proxy --vnc localhost:${layout.controlVncPort} --listen ${layout.controlPort} --web /opt/noVNC >/tmp/rakazo-control-novnc.log 2>&1 &)`,
+        `( x11vnc -bg -display ${shellQuote(desktop.display)} -forever -wait 50 -shared -rfbport ${layout.controlVncPort} -rfbauth ${passwordFile} ) </dev/null >/tmp/rakazo-control-x11vnc.log 2>&1`,
+        `( cd /opt/noVNC/utils && exec ./novnc_proxy --vnc localhost:${layout.controlVncPort} --listen ${layout.controlPort} --web /opt/noVNC ) </dev/null >/tmp/rakazo-control-novnc.log 2>&1 &`,
         `for i in $(seq 1 50); do netstat -tuln | grep -q ':${layout.controlPort} ' && exit 0; sleep 0.1; done`,
         "exit 1",
-      ].join(" && ");
+      ].join("\n");
       const result = await desktop.commands.run(command);
       if (result.exitCode !== 0) throw new Error(result.stderr || "control stream failed to start");
     } else {
@@ -711,6 +788,39 @@ export class E2BSandboxProvider implements SandboxProvider {
       this.controlStreams.delete(controlKey);
     }
   }
+}
+
+function screenFailureDetail(...parts: Array<string | undefined>): string {
+  const detail = parts.filter(Boolean).join("\n");
+  const tagged = detail.match(/RAKAZO_SCREEN_ERROR=(\S+)/)?.[1];
+  if (tagged) return tagged;
+  return (
+    detail
+      .replace(/RAKAZO_SCREEN_PASSWORD=\S+/g, "RAKAZO_SCREEN_PASSWORD=redacted")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 240) || "primary view failed"
+  );
+}
+
+function watchUrl(raw: string | null | undefined): string | null {
+  if (typeof raw !== "string" || !raw.startsWith("https://")) return null;
+  const url = new URL(raw);
+  if (!url.searchParams.has("autoconnect")) url.searchParams.set("autoconnect", "true");
+  if (!url.searchParams.has("reconnect")) url.searchParams.set("reconnect", "true");
+  if (!url.searchParams.has("resize")) url.searchParams.set("resize", "scale");
+  url.searchParams.set("view_only", "true");
+  return url.toString();
+}
+
+async function tcpOpen(desktop: Sandbox, port: number): Promise<boolean> {
+  const result = await desktop.commands
+    .run(
+      `python3 -c 'import socket,sys;s=socket.socket();s.settimeout(0.4);s.connect(("127.0.0.1",int(sys.argv[1])))' ${port}`,
+      { timeoutMs: 5_000 },
+    )
+    .catch(() => undefined);
+  return result?.exitCode === 0;
 }
 
 function controlStreamStopCommand(controlToken?: string) {

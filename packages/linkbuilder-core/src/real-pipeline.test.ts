@@ -53,6 +53,26 @@ describe("planRealStep", () => {
     ).toEqual({ kind: "select_host" });
   });
 
+  it("rechecks a site-admin hold only when that check is due", () => {
+    const host = { id: "h1", ...hostState("pending_admin") };
+    expect(planRealStep(input({ host }))).toEqual({ kind: "select_host" });
+    expect(planRealStep(input({ host, adminCheckDue: true }))).toEqual({ kind: "open_session" });
+    expect(
+      planRealStep(
+        input({
+          host,
+          adminCheckDue: true,
+          session: { ...onHost, helperConnected: false },
+        }),
+      ),
+    ).toEqual({ kind: "helper_connected" });
+    expect(
+      planRealStep(
+        input({ host, adminCheckDue: true, session: { ...onHost, helperConnected: true } }),
+      ),
+    ).toEqual({ kind: "admin_check" });
+  });
+
   it("opens a session before any browser step on a new host", () => {
     expect(planRealStep(input({}))).toEqual({ kind: "open_session" });
     expect(
@@ -92,6 +112,24 @@ describe("planRealStep", () => {
     ).toEqual({
       kind: "email_verify",
     });
+  });
+
+  it("refuses to register before research and to link before warmup", () => {
+    expect(planRealStep(input({ researchComplete: false, session: onHost }))).toEqual({
+      kind: "wait",
+      reason: "research",
+    });
+    const ready = { id: "h1", ...hostState("ready") };
+    expect(
+      planRealStep(
+        input({
+          host: ready,
+          session: onHost,
+          minPostsBeforeLink: 3,
+          warmupPosts: 0,
+        }),
+      ),
+    ).toEqual({ kind: "warmup_post" });
   });
 
   it("warms up, posts and verifies", () => {

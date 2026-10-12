@@ -226,11 +226,11 @@ describe("E2B computer backend", () => {
       provider.connectScreen(computer, { view: "stream" }, context),
       provider.connectScreen(computer, { view: "stream" }, context),
     ]);
-    expect(screen.url).toMatch(/^https:\/\/6090-desktop\.test\/vnc\.html\?/);
+    expect(screen.url).toMatch(/^https:\/\/desktop\.test\/vnc\.html\?/);
     expect(screen.url).toContain("view_only=true");
-    expect(screen.url).toContain("password=watch-secret");
+    expect(screen.url).not.toContain("password=");
     expect(command.mock.calls.some(([value]) => String(value).includes("screen-primary.lock"))).toBe(
-      true,
+      false,
     );
 
     const control = await provider.connectScreen(
@@ -315,7 +315,46 @@ describe("E2B computer backend", () => {
     const screen = await provider.connectScreen(computer, { view: "stream" }, context);
     expect(screen.url).toMatch(/^https:\/\/6090-desktop\.test\/vnc\.html\?/);
     expect(screen.url).toContain("password=watch-secret");
-    expect(desktop.stream.start).not.toHaveBeenCalled();
+    expect(desktop.stream.start).toHaveBeenCalled();
+  });
+
+  it("reuses the vendor noVNC port when x11vnc is already running", async () => {
+    const command = vi.fn(async (value: string) => {
+      if (value.includes("RAKAZO_SCREEN_INDEX=")) {
+        return { stdout: "RAKAZO_SCREEN_INDEX=0\n", stderr: "", exitCode: 0 };
+      }
+      if (value.includes("127.0.0.1")) return { stdout: "", stderr: "", exitCode: 0 };
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const desktop = {
+      sandboxId: "e2b-live-stream",
+      display: ":0",
+      getHost: (port: number) => `${port}-desktop.test`,
+      commands: { run: command },
+      stream: {
+        start: vi.fn(async () => {
+          throw new Error("Stream is already running");
+        }),
+        stop: vi.fn(async () => undefined),
+        getUrl: () => {
+          throw new Error("Server is not running");
+        },
+      },
+    } as unknown as Sandbox;
+    const provider = new E2BSandboxProvider("test-key", {
+      create: vi.fn(async () => desktop),
+      connect: vi.fn(async () => desktop),
+      pause: vi.fn(async () => undefined),
+    });
+    const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
+    const screen = await provider.connectScreen(computer, { view: "stream" }, context);
+    expect(screen.url).toMatch(/^https:\/\/6080-desktop\.test\/vnc\.html\?/);
+    expect(screen.url).toContain("view_only=true");
+    expect(screen.url).not.toContain("password=");
+    expect(desktop.stream.stop).not.toHaveBeenCalled();
+    expect(command.mock.calls.some(([value]) => String(value).includes("screen-primary.lock"))).toBe(
+      false,
+    );
   });
 
   it("gives Team bots distinct E2B screens and shared files", async () => {
@@ -431,7 +470,8 @@ describe("E2B computer backend", () => {
     await provider.observe(computer, researcher);
     const writerView = await provider.connectScreen(computer, { view: "stream" }, writer);
     const researcherView = await provider.connectScreen(computer, { view: "stream" }, researcher);
-    expect(writerView.url).toContain("6090-desktop.test");
+    expect(writerView.url).toContain("6080-desktop.test");
+    expect(writerView.url).toContain("view_only=true");
     expect(researcherView.url).toContain("6082-desktop.test");
     expect(researcherView.url).toContain("password=test-view-password");
     expect(writerView.url).not.toBe(researcherView.url);
@@ -603,5 +643,78 @@ describe("E2B computer backend", () => {
     expect(command.mock.calls.some(([value]) => String(value).includes("RAKAZO_SCREEN_INDEX"))).toBe(
       false,
     );
+  });
+
+  it("keeps a detached browser after the command handle disconnects", async () => {
+    const disconnect = vi.fn(async () => undefined);
+    const command = vi.fn(async (value: string, opts?: { background?: boolean; timeoutMs?: number }) => {
+      if (opts?.background) {
+        expect(value).toContain("RAKAZO_DETACH_BROWSER");
+        expect(opts.timeoutMs).toBe(0);
+        return { disconnect };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const desktop = {
+      sandboxId: "e2b-detach-browser",
+      display: ":0",
+      commands: { run: command },
+      setTimeout: vi.fn(async () => undefined),
+    } as unknown as Sandbox;
+    const provider = new E2BSandboxProvider("test-key", {
+      create: vi.fn(async () => desktop),
+      connect: vi.fn(async () => desktop),
+      pause: vi.fn(async () => undefined),
+    });
+    const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
+    const events = [];
+    for await (const event of provider.execute(
+      computer,
+      {
+        argv: [
+          "bash",
+          "-lc",
+          "# RAKAZO_DETACH_BROWSER\nexec /usr/bin/google-chrome --new-window https://www.google.com/search?q=forum",
+        ],
+      },
+      context,
+    )) {
+      events.push(event);
+    }
+    expect(events).toEqual([{ type: "exit", code: 0 }]);
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("returns stdout when a command exits non-zero", async () => {
+    const command = vi.fn(async () => {
+      const error = new Error("exit status 3") as Error & {
+        result: { exitCode: number; stdout: string; stderr: string };
+      };
+      error.result = {
+        exitCode: 3,
+        stdout: '{"ok":false,"error":"runner not running"}\n',
+        stderr: "",
+      };
+      throw error;
+    });
+    const desktop = {
+      sandboxId: "e2b-exit",
+      commands: { run: command },
+      setTimeout: vi.fn(async () => undefined),
+    } as unknown as Sandbox;
+    const provider = new E2BSandboxProvider("test-key", {
+      create: vi.fn(async () => desktop),
+      connect: vi.fn(async () => desktop),
+      pause: vi.fn(async () => undefined),
+    });
+    const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
+    const events = [];
+    for await (const event of provider.execute(computer, { argv: ["rakazo-lb-browser", "call"] }, context)) {
+      events.push(event);
+    }
+    expect(events).toEqual([
+      { type: "stdout", data: '{"ok":false,"error":"runner not running"}\n' },
+      { type: "exit", code: 3 },
+    ]);
   });
 });

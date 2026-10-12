@@ -1,6 +1,7 @@
+import { lookup } from "node:dns/promises";
 import { ORPCError } from "@orpc/server";
 import { CaptchaSolverError } from "@rakazo/adapter-kit";
-import { CaptellHttpSolver } from "@rakazo/adapters";
+import { CaptellHttpSolver, StaticPlanProvider, stripeCheckoutConfigured } from "@rakazo/adapters";
 import type { Actor } from "@rakazo/contracts";
 import {
   EMPTY_COST_SUMMARY,
@@ -50,42 +51,202 @@ import {
   LbWarmupSchema,
   LbWhyNotSchema,
 } from "@rakazo/contracts";
-import { Prisma, type PrismaClient, seedLinkBuilderDemo } from "@rakazo/db";
+import { LB_DEMO_SLUG, Prisma, type PrismaClient, seedLinkBuilderDemo } from "@rakazo/db";
 import {
+  applyRunPhrase,
+  assertStartWithinPlan,
+  brandNameSources,
+  resolvePersonaDisplayName,
   buildWhyNot,
+  CHECKOUT_NOT_CONNECTED_REASON,
+  CREDIT_PACKAGES,
+  creditBalanceFromLedger,
+  type HostnameResolver,
+  isCannedResearchLine,
+  isStaleResearchLine,
   isWithinWindow,
   linkBuilderTopic,
   localDateKey,
+  operatorHelpFor,
+  mayCreateLinkBuilderProject,
+  mentionsExampleDomain,
+  mentionsFixtureHost,
   PAGE_HELPER_VERSION,
+  PlanLimitError,
   projectActivity,
+  quoteCreditPurchase,
   type ScheduleState,
+  settleCreditPurchase,
+  showHostToCustomer,
+  stageFromActivity,
+  suggestFromPublicPage,
   transitionHost,
   transitionPlacement,
   transitionProject,
   transitionRun,
+  validateTargetUrl,
   webhookUrlAllowed,
 } from "@rakazo/linkbuilder-core";
 import type { RouterDeps } from "./router.js";
 
 const DEFAULT_SCHEDULE = LbScheduleSchema.parse({ timezone: "Europe/Berlin" });
 
+const productionHostnameResolver: HostnameResolver = async (hostname) => {
+  const records = await lookup(hostname, { all: true, verbatim: true });
+  return records.map((record) => ({ address: record.address }));
+};
+
+/** Drop offline board names, and drop the old captcha handoff line, from a customer-facing event. */
+function customerFacingEvent(text: string | null): string | null {
+  if (!text) return null;
+  const cleaned = text
+    .replace(/\b(?:forum|fragen|brett)-[a-z0-9]+\.example\b/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (/parked/i.test(cleaned) && /operator/i.test(cleaned)) return null;
+  if (/live quota met/i.test(cleaned) || /captcha/i.test(cleaned)) return null;
+  if (isCannedResearchLine(cleaned) || isStaleResearchLine(cleaned)) return null;
+  return cleaned || null;
+}
+
+/** Captell solves captchas. Fixture boards and unsolved-captcha tickets stay off the customer UI. */
+function shownToCustomer(
+  row: {
+    reason?: string;
+    domain?: string | null;
+    registrableDomain?: string;
+    host?: { registrableDomain: string } | null;
+  },
+  slug?: string | null,
+): boolean {
+  if (row.reason === "captcha_unsolved") return false;
+  const domain = row.registrableDomain ?? row.domain ?? row.host?.registrableDomain ?? "";
+  if (!domain) return true;
+  return showHostToCustomer(domain, slug);
+}
+
+/**
+ * Closes tickets a person cannot finish from the UI. A host still parked for one of
+ * those tickets is skipped. A view-only desktop is not an action.
+ */
+async function retireUnusableTickets(prisma: PrismaClient, workspaceId: string): Promise<void> {
+  const open = await prisma.lbOperatorTicket.findMany({
+    where: { workspaceId, status: "open" },
+    include: {
+      host: { select: { status: true, parkedFrom: true, registrableDomain: true } },
+    },
+  });
+  for (const ticket of open) {
+    if (
+      operatorHelpFor({
+        id: ticket.id,
+        status: ticket.status,
+        reason: ticket.reason,
+        domain: ticket.host.registrableDomain,
+        hostStatus: ticket.host.status,
+      })
+    ) {
+      continue;
+    }
+    await prisma.$transaction(async (tx) => {
+      const closed = await tx.lbOperatorTicket.updateMany({
+        where: { id: ticket.id, status: "open" },
+        data: { status: "skipped", resolvedAt: new Date() },
+      });
+      if (closed.count !== 1 || ticket.host.status !== "parked_operator") return;
+      const parkedFrom = LbParkableHostStatusSchema.safeParse(ticket.host.parkedFrom).data ?? null;
+      const next = transitionHost({ status: "parked_operator", parkedFrom }, "operator_skipped");
+      await tx.lbHost.updateMany({
+        where: { id: ticket.hostId, status: "parked_operator" },
+        data: {
+          status: next.status,
+          parkedFrom: next.parkedFrom,
+          statusReason: ticket.reason,
+        },
+      });
+    });
+  }
+}
+
+function helpForTicket(ticket: {
+  id: string;
+  status: string;
+  reason: string;
+  host?: { status: string; registrableDomain: string } | null;
+}): ReturnType<typeof operatorHelpFor> {
+  return operatorHelpFor({
+    id: ticket.id,
+    status: ticket.status,
+    reason: ticket.reason,
+    domain: ticket.host?.registrableDomain ?? "",
+    hostStatus: ticket.host?.status ?? "",
+  });
+}
+
+/** Fixture boards are not this customer's links. The Nordlicht demo keeps its own counts. */
+function customerCounters(
+  slug: string,
+  run: { newToday: number; liveToday: number; liveWeek: number } | null,
+  hosts: { registrableDomain: string }[],
+): { newToday: number; liveToday: number; liveWeek: number } {
+  const fixtureOnly =
+    slug !== LB_DEMO_SLUG &&
+    hosts.length > 0 &&
+    hosts.every((host) => !showHostToCustomer(host.registrableDomain, slug));
+  if (fixtureOnly || !run) {
+    return {
+      newToday: fixtureOnly ? 0 : (run?.newToday ?? 0),
+      liveToday: fixtureOnly ? 0 : (run?.liveToday ?? 0),
+      liveWeek: fixtureOnly ? 0 : (run?.liveWeek ?? 0),
+    };
+  }
+  return { newToday: run.newToday, liveToday: run.liveToday, liveWeek: run.liveWeek };
+}
+
+/** Read a public page on one of the project's sites and suggest a keyword and a short rule. */
+export async function suggestLbPage(input: {
+  url: string;
+  allowedDomains: string[];
+}): Promise<{ keyword: string; rule: string }> {
+  const trimmed = input.url.trim();
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  const checked = validateTargetUrl(withScheme, input.allowedDomains);
+  if (!checked.ok) return { keyword: "", rule: "" };
+  try {
+    return await suggestFromPublicPage(checked.url, { resolve: productionHostnameResolver });
+  } catch {
+    return { keyword: "", rule: "" };
+  }
+}
+
 export async function listLbProjects(deps: RouterDeps, actor: Actor) {
+  await retireUnusableTickets(deps.prisma, actor.workspaceId);
   const projects = await deps.prisma.lbProject.findMany({
     where: { workspaceId: actor.workspaceId, archivedAt: null },
     orderBy: { updatedAt: "desc" },
   });
   const ids = projects.map((project) => project.id);
-  const [runs, tickets, alerts] = await Promise.all([
+  const [runs, tickets, alerts, hostRows] = await Promise.all([
     deps.prisma.lbRun.findMany({
       where: { workspaceId: actor.workspaceId, projectId: { in: ids } },
     }),
     deps.prisma.lbOperatorTicket.findMany({
       where: { workspaceId: actor.workspaceId, projectId: { in: ids }, status: "open" },
-      select: { projectId: true },
+      select: {
+        id: true,
+        projectId: true,
+        status: true,
+        reason: true,
+        host: { select: { status: true, registrableDomain: true } },
+      },
     }),
     deps.prisma.lbAlert.findMany({
       where: { workspaceId: actor.workspaceId, projectId: { in: ids } },
       orderBy: { createdAt: "desc" },
+    }),
+    deps.prisma.lbHost.findMany({
+      where: { workspaceId: actor.workspaceId, projectId: { in: ids } },
+      select: { projectId: true, registrableDomain: true },
     }),
   ]);
   const now = new Date();
@@ -96,12 +257,16 @@ export async function listLbProjects(deps: RouterDeps, actor: Actor) {
     const todayRun = projectRuns.find((run) => run.date === today) ?? null;
     const latest = [...projectRuns].sort((a, b) => b.date.localeCompare(a.date))[0] ?? null;
     const quotas = readQuotas(project.quotas);
-    const openTickets = tickets.filter((ticket) => ticket.projectId === project.id).length;
+    const help =
+      tickets
+        .filter((ticket) => ticket.projectId === project.id && shownToCustomer(ticket, project.slug))
+        .map((ticket) => helpForTicket(ticket))
+        .find((item) => item !== null) ?? null;
     const runStatus = todayRun ? readRunStatus(todayRun.status) : null;
     const activity = projectActivity({
       projectStatus: readProjectStatus(project.status),
       runStatus,
-      openTickets,
+      openTickets: 0,
       schedule: scheduleState(
         schedule,
         now,
@@ -116,19 +281,24 @@ export async function listLbProjects(deps: RouterDeps, actor: Actor) {
       brandName: project.brandName,
       activity: activity.activity,
       activityLabel: activity.label,
-      newToday: todayRun?.newToday ?? 0,
-      liveToday: todayRun?.liveToday ?? 0,
-      liveWeek: todayRun?.liveWeek ?? 0,
+      ...customerCounters(
+        project.slug,
+        todayRun,
+        hostRows.filter((host) => host.projectId === project.id),
+      ),
       newPerDay: quotas?.newPerDay ?? 0,
       livePerDay: quotas?.livePerDay ?? 0,
       liveWeekCap: quotas?.liveWeekCap ?? null,
       runStatus,
-      lastEvent: newerEvent(
-        todayRun?.lastAction ?? latest?.lastAction ?? null,
-        todayRun?.updatedAt ?? latest?.updatedAt ?? null,
-        alerts.find((alert) => alert.projectId === project.id) ?? null,
+      lastEvent: customerFacingEvent(
+        newerEvent(
+          todayRun?.lastAction ?? latest?.lastAction ?? null,
+          todayRun?.updatedAt ?? latest?.updatedAt ?? null,
+          alerts.find((alert) => alert.projectId === project.id) ?? null,
+        ),
       ),
-      operatorQueue: openTickets,
+      operatorQueue: 0,
+      operatorHelp: help,
     };
   });
 }
@@ -148,6 +318,7 @@ export async function createLbProject(
     markets?: LbProjectDetail["markets"];
   },
 ) {
+  await assertMayCreateProject(deps.prisma, actor.workspaceId);
   const markets = input.markets ?? [{ ...LB_DEFAULT_MARKET }];
   const schedule = LbScheduleSchema.parse({ timezone: markets[0]?.timezoneId ?? "Europe/Berlin" });
   const base = slugifyProjectName(input.slug ?? input.name);
@@ -181,11 +352,56 @@ export async function updateLbProject(
 ) {
   const row = await requireProject(deps.prisma, actor, input.projectId);
   const data: Prisma.LbProjectUpdateInput = {};
+  if (input.instruction) {
+    const quotas = readQuotas(row.quotas);
+    const schedule = readSchedule(row.schedule);
+    if (!quotas) throw new ORPCError("BAD_REQUEST", { message: "Project has no quotas" });
+    const today = localDateKey(new Date(), schedule.timezone);
+    const run = await deps.prisma.lbRun.findFirst({
+      where: { projectId: row.id, workspaceId: actor.workspaceId, date: today },
+    });
+    const applied = applyRunPhrase({
+      phrase: input.instruction,
+      quotas,
+      schedule,
+      newToday: run?.newToday ?? 0,
+      liveToday: run?.liveToday ?? 0,
+    });
+    if (!applied) throw new ORPCError("BAD_REQUEST", { message: "Unknown instruction" });
+    data.quotas = json(applied.quotas);
+    data.schedule = json(applied.schedule);
+    if (applied.resume) {
+      const current = readProjectStatus(row.status);
+      if (current === "paused" || current === "stopped" || current === "draft") {
+        data.status = transitionOrBad(current === "draft" ? "draft" : current, "active");
+      }
+    }
+    const updated = await deps.prisma.lbProject.update({ where: { id: row.id }, data });
+    if (applied.resume) {
+      await ensureRunningToday(deps.prisma, actor.workspaceId, row.id, applied.schedule);
+      await deps.prisma.lbRun.updateMany({
+        where: { projectId: row.id, workspaceId: actor.workspaceId, date: today },
+        data: { lastAction: applied.summary },
+      });
+    }
+    await publish(deps, row.id);
+    return toDetail(updated);
+  }
   if (input.name !== undefined) data.name = input.name;
   if (input.slug !== undefined) data.slug = input.slug;
   if (input.brandName !== undefined) data.brandName = input.brandName;
   if (input.allowedDomains !== undefined) data.allowedDomains = input.allowedDomains;
-  if (input.persona !== undefined) data.persona = json(input.persona);
+  if (input.persona !== undefined) {
+    data.persona = json(
+      personaWithPersonalName(input.persona, {
+        brandName: input.brandName ?? row.brandName,
+        name: input.name ?? row.name,
+        slug: input.slug ?? row.slug,
+        allowedDomains: input.allowedDomains ?? row.allowedDomains,
+        markets: input.markets ?? row.markets,
+      }),
+    );
+  }
   if (input.captchaLowBalanceCredits !== undefined) {
     data.captchaLowBalanceCredits = input.captchaLowBalanceCredits;
   }
@@ -215,8 +431,10 @@ export async function updateLbProject(
     if (!input.webhookUrl) {
       data.webhookUrl = null;
     } else {
-      const allowed = webhookUrlAllowed(input.webhookUrl, {
-        production: process.env.NODE_ENV === "production",
+      const production = process.env.NODE_ENV === "production";
+      const allowed = await webhookUrlAllowed(input.webhookUrl, {
+        production,
+        resolve: production ? productionHostnameResolver : undefined,
       });
       if (!allowed.ok)
         throw new ORPCError("BAD_REQUEST", { message: "Webhook URL is not allowed" });
@@ -268,15 +486,54 @@ export async function startLbProject(deps: RouterDeps, actor: Actor, projectId: 
     });
   }
   const current = readProjectStatus(row.status);
+  const others = await deps.prisma.lbProject.count({
+    where: {
+      workspaceId: actor.workspaceId,
+      archivedAt: null,
+      status: { in: ["active", "paused", "stopped"] },
+      id: { not: row.id },
+    },
+  });
+  const plan = await (deps.plan ?? new StaticPlanProvider()).current(actor.workspaceId, {
+    operationId: "lb-plan",
+    traceId: "lb-plan",
+    workspaceId: actor.workspaceId,
+    userId: actor.userId,
+    signal: new AbortController().signal,
+  });
+  try {
+    assertStartWithinPlan({ otherStartedProjects: others, caps: plan.caps });
+  } catch (error) {
+    if (error instanceof PlanLimitError) {
+      throw new ORPCError("FORBIDDEN", { message: error.message });
+    }
+    throw error;
+  }
   const status = current === "active" ? current : transitionOrBad(current, "active");
   const ack = LbResponsibilityAckSchema.parse({
     acceptedAt: new Date().toISOString(),
     acceptedByUserId: actor.userId,
     textVersion: LB_RESPONSIBILITY_ACK_TEXT_VERSION,
   });
+  const persona = readPersona(row.persona);
+  const personal = persona
+    ? personaWithPersonalName(persona, {
+        brandName: row.brandName,
+        name: row.name,
+        slug: row.slug,
+        allowedDomains: row.allowedDomains,
+        markets: row.markets,
+      })
+    : null;
   await deps.prisma.lbProject.update({
     where: { id: row.id },
-    data: { status, responsibilityAck: json(ack) },
+    data: {
+      status,
+      responsibilityAck: json(ack),
+      ...(personal && personal.displayName !== persona?.displayName
+        ? { persona: json(personal) }
+        : {}),
+    },
   });
   await ensureRunningToday(deps.prisma, actor.workspaceId, row.id, parsed.data.schedule);
   await publish(deps, row.id);
@@ -303,18 +560,25 @@ export async function stopLbProject(deps: RouterDeps, actor: Actor, projectId: s
 
 export async function statusLbProject(deps: RouterDeps, actor: Actor, projectId: string) {
   const row = await requireProject(deps.prisma, actor, projectId);
+  await retireUnusableTickets(deps.prisma, actor.workspaceId);
   const schedule = readSchedule(row.schedule);
   const quotas = readQuotas(row.quotas);
   const now = new Date();
   const today = localDateKey(now, schedule.timezone);
-  const [runs, openTickets, hosts, latestAlert, costs] = await Promise.all([
+  const [runs, openTicketRows, hosts, latestAlert, costs] = await Promise.all([
     deps.prisma.lbRun.findMany({ where: { workspaceId: actor.workspaceId, projectId: row.id } }),
-    deps.prisma.lbOperatorTicket.count({
+    deps.prisma.lbOperatorTicket.findMany({
       where: { workspaceId: actor.workspaceId, projectId: row.id, status: "open" },
+      select: {
+        id: true,
+        status: true,
+        reason: true,
+        host: { select: { status: true, registrableDomain: true } },
+      },
     }),
     deps.prisma.lbHost.findMany({
       where: { workspaceId: actor.workspaceId, projectId: row.id },
-      select: { status: true },
+      select: { status: true, registrableDomain: true },
     }),
     deps.prisma.lbAlert.findFirst({
       where: { workspaceId: actor.workspaceId, projectId: row.id },
@@ -322,45 +586,74 @@ export async function statusLbProject(deps: RouterDeps, actor: Actor, projectId:
     }),
     costWindow(deps.prisma, actor.workspaceId, row.id, schedule.timezone),
   ]);
+  const help =
+    openTicketRows
+      .filter((ticket) => shownToCustomer(ticket, row.slug))
+      .map((ticket) => helpForTicket(ticket))
+      .find((item) => item !== null) ?? null;
   const todayRun = runs.find((run) => run.date === today) ?? null;
   const runStatus = todayRun ? readRunStatus(todayRun.status) : null;
-  const liveMet =
-    (todayRun?.liveToday ?? 0) >= (quotas?.livePerDay ?? 0) && (quotas?.livePerDay ?? 0) > 0;
+  const faced = customerCounters(row.slug, todayRun, hosts);
+  const runView = todayRun
+    ? {
+        ...runCounters(todayRun),
+        newToday: faced.newToday,
+        liveToday: faced.liveToday,
+        liveWeek: faced.liveWeek,
+        uniqueHosts: faced.liveToday === 0 && faced.newToday === 0 ? 0 : todayRun.uniqueHosts,
+      }
+    : null;
+  const credits = await readCreditBalance(deps.prisma, actor.workspaceId);
+  const liveMet = faced.liveToday >= (quotas?.livePerDay ?? 0) && (quotas?.livePerDay ?? 0) > 0;
   const scheduleView = scheduleState(schedule, now, liveMet);
   const activity = projectActivity({
     projectStatus: readProjectStatus(row.status),
     runStatus,
-    openTickets,
+    openTickets: 0,
     schedule: scheduleView,
   });
   const storedWhy = todayRun ? LbWhyNotSchema.safeParse(todayRun.whyNot) : null;
-  const whyNot =
+  const visibleParked = hosts.filter(
+    (host) => host.status === "parked_operator" && shownToCustomer(host, row.slug),
+  ).length;
+  const whyNotBase =
     storedWhy?.success === true
       ? storedWhy.data
       : liveMet
         ? null
         : buildWhyNot({
-            hostCounts: countHosts(hosts),
+            hostCounts: countHosts(hosts.filter((host) => shownToCustomer(host, row.slug))),
             modelErrors: 0,
             modelRefusals: 0,
             captchaBalance: null,
             lowBalanceCredits: row.captchaLowBalanceCredits,
             proxy: "ok",
           });
+  const whyNot = whyNotBase
+    ? { ...whyNotBase, parked: Math.min(whyNotBase.parked, visibleParked) }
+    : null;
   return {
     projectId: row.id,
     projectStatus: readProjectStatus(row.status),
     activity: activity.activity,
     activityLabel: activity.label,
-    run: todayRun ? runCounters(todayRun) : null,
+    run: runView,
+    stage: stageFromActivity({
+      runStatus,
+      lastAction: todayRun?.lastAction ?? null,
+    }),
+    credits: { balance: credits, payment: "stub" as const },
     whyNot,
-    operatorQueue: openTickets,
+    operatorQueue: 0,
+    operatorHelp: help,
     scheduleActive: scheduleView.active,
     scheduleReason: scheduleView.reason,
     newPerDay: quotas?.newPerDay ?? 0,
     livePerDay: quotas?.livePerDay ?? 0,
     liveWeekCap: quotas?.liveWeekCap ?? null,
-    lastEvent: newerEvent(todayRun?.lastAction ?? null, todayRun?.updatedAt ?? null, latestAlert),
+    lastEvent: customerFacingEvent(
+      newerEvent(todayRun?.lastAction ?? null, todayRun?.updatedAt ?? null, latestAlert),
+    ),
     costs,
   };
 }
@@ -378,6 +671,7 @@ export async function summarizeLbCosts(
 }
 
 export async function seedLbDemo(deps: RouterDeps, actor: Actor) {
+  await assertMayCreateProject(deps.prisma, actor.workspaceId);
   const seeded = await seedLinkBuilderDemo(deps.prisma, {
     workspaceId: actor.workspaceId,
     userId: actor.userId,
@@ -386,42 +680,44 @@ export async function seedLbDemo(deps: RouterDeps, actor: Actor) {
 }
 
 export async function listLbHosts(deps: RouterDeps, actor: Actor, projectId: string) {
-  await requireProject(deps.prisma, actor, projectId);
+  const project = await requireProject(deps.prisma, actor, projectId);
   const hosts = await deps.prisma.lbHost.findMany({
     where: { workspaceId: actor.workspaceId, projectId },
     orderBy: { registrableDomain: "asc" },
   });
-  return hosts.map((host) => ({
-    id: host.id,
-    registrableDomain: host.registrableDomain,
-    homepageUrl: host.homepageUrl,
-    platform: LbHostPlatformSchema.parse(host.platform),
-    country: host.country,
-    language: host.language,
-    locale: host.locale,
-    timezoneId: host.timezoneId,
-    status: LbHostStatusSchema.parse(host.status),
-    parkedFrom: host.parkedFrom ? LbParkableHostStatusSchema.parse(host.parkedFrom) : null,
-    qualityScore: host.qualityScore,
-    topicTags: host.topicTags,
-    captchaType: host.captchaType ? LbCaptchaTypeSchema.parse(host.captchaType) : null,
-    hrefForNewMembers: LbHrefForNewMembersSchema.parse(host.hrefForNewMembers),
-    relDefault: LbRelDefaultSchema.parse(host.relDefault),
-    signatureLinks: host.signatureLinks,
-    minPostsForLinks: host.minPostsForLinks,
-    registerUrl: host.registerUrl,
-    statusReason: host.statusReason,
-  }));
+  return hosts
+    .filter((host) => shownToCustomer(host, project.slug))
+    .map((host) => ({
+      id: host.id,
+      registrableDomain: host.registrableDomain,
+      homepageUrl: host.homepageUrl,
+      platform: LbHostPlatformSchema.parse(host.platform),
+      country: host.country,
+      language: host.language,
+      locale: host.locale,
+      timezoneId: host.timezoneId,
+      status: LbHostStatusSchema.parse(host.status),
+      parkedFrom: host.parkedFrom ? LbParkableHostStatusSchema.parse(host.parkedFrom) : null,
+      qualityScore: host.qualityScore,
+      topicTags: host.topicTags,
+      captchaType: host.captchaType ? LbCaptchaTypeSchema.parse(host.captchaType) : null,
+      hrefForNewMembers: LbHrefForNewMembersSchema.parse(host.hrefForNewMembers),
+      relDefault: LbRelDefaultSchema.parse(host.relDefault),
+      signatureLinks: host.signatureLinks,
+      minPostsForLinks: host.minPostsForLinks,
+      registerUrl: host.registerUrl,
+      statusReason: host.statusReason,
+    }));
 }
 
 export async function listLbPlacements(deps: RouterDeps, actor: Actor, projectId: string) {
-  await requireProject(deps.prisma, actor, projectId);
+  const project = await requireProject(deps.prisma, actor, projectId);
   const rows = await deps.prisma.lbPlacement.findMany({
     where: { workspaceId: actor.workspaceId, projectId },
     include: { host: { select: { registrableDomain: true } } },
     orderBy: { createdAt: "desc" },
   });
-  return rows.map((row) => placementView(row));
+  return rows.filter((row) => shownToCustomer(row, project.slug)).map((row) => placementView(row));
 }
 
 export async function verifyLbPlacement(
@@ -493,7 +789,7 @@ export async function listLbRunSteps(
   actor: Actor,
   input: { projectId: string; runId: string },
 ) {
-  await requireProject(deps.prisma, actor, input.projectId);
+  const project = await requireProject(deps.prisma, actor, input.projectId);
   const run = await deps.prisma.lbRun.findFirst({
     where: { id: input.runId, workspaceId: actor.workspaceId, projectId: input.projectId },
     select: { id: true },
@@ -503,22 +799,28 @@ export async function listLbRunSteps(
     where: { workspaceId: actor.workspaceId, runId: run.id },
     orderBy: { stepIndex: "asc" },
   });
-  return steps.map((step) => ({
-    id: step.id,
-    stepIndex: step.stepIndex,
-    kind: step.kind,
-    hostId: step.hostId,
-    lastAction: outcomeAction(step.outcome),
-    error: step.error,
-    costs: {
-      credits: numberField(step.costs, "credits"),
-      tokens: numberField(step.costs, "tokens"),
-      bytes: numberField(step.costs, "bytes"),
-      ms: numberField(step.costs, "ms"),
-    },
-    artifactIds: step.artifactIds,
-    createdAt: step.createdAt.toISOString(),
-  }));
+  return steps.flatMap((step) => {
+    const lastAction = outcomeAction(step.outcome);
+    if (!customerStepVisible(project.slug, lastAction)) return [];
+    return [
+      {
+        id: step.id,
+        stepIndex: step.stepIndex,
+        kind: step.kind,
+        hostId: step.hostId,
+        lastAction,
+        error: step.error,
+        costs: {
+          credits: numberField(step.costs, "credits"),
+          tokens: numberField(step.costs, "tokens"),
+          bytes: numberField(step.costs, "bytes"),
+          ms: numberField(step.costs, "ms"),
+        },
+        artifactIds: step.artifactIds,
+        createdAt: step.createdAt.toISOString(),
+      },
+    ];
+  });
 }
 
 /** Reads a step screenshot or verification snapshot that belongs to this project. */
@@ -573,19 +875,21 @@ export async function listLbThreads(deps: RouterDeps, actor: Actor, projectId: s
     include: { host: { select: { registrableDomain: true } } },
     orderBy: { updatedAt: "desc" },
   });
-  return rows.map((row) => ({
-    id: row.id,
-    hostId: row.hostId,
-    domain: row.host.registrableDomain,
-    url: row.url,
-    title: row.title,
-    excerpt: row.excerpt,
-    status: LbThreadStatusSchema.parse(row.status),
-    relevance: row.relevance,
-    openQuestion: row.openQuestion,
-    laneId: row.laneId,
-    rejectReason: row.rejectReason,
-  }));
+  return rows
+    .filter((row) => shownToCustomer(row))
+    .map((row) => ({
+      id: row.id,
+      hostId: row.hostId,
+      domain: row.host.registrableDomain,
+      url: row.url,
+      title: row.title,
+      excerpt: row.excerpt,
+      status: LbThreadStatusSchema.parse(row.status),
+      relevance: row.relevance,
+      openQuestion: row.openQuestion,
+      laneId: row.laneId,
+      rejectReason: row.rejectReason,
+    }));
 }
 
 export async function listLbDrafts(deps: RouterDeps, actor: Actor, projectId: string) {
@@ -667,19 +971,21 @@ export async function listLbCaptchaEvents(deps: RouterDeps, actor: Actor, projec
     include: { host: { select: { registrableDomain: true } } },
     orderBy: { createdAt: "desc" },
   });
-  return rows.map((row) => ({
-    id: row.id,
-    hostId: row.hostId,
-    domain: row.host?.registrableDomain ?? null,
-    type: LbCaptchaTypeSchema.parse(row.type),
-    door: LbCaptchaDoorSchema.parse(row.door),
-    outcome: LbCaptchaOutcomeSchema.parse(row.outcome),
-    buttonTextObserved: row.buttonTextObserved,
-    attempt: row.attempt,
-    creditsCharged: row.creditsCharged,
-    taskId: row.taskId,
-    createdAt: row.createdAt.toISOString(),
-  }));
+  return rows
+    .filter((row) => shownToCustomer(row))
+    .map((row) => ({
+      id: row.id,
+      hostId: row.hostId,
+      domain: row.host?.registrableDomain ?? null,
+      type: LbCaptchaTypeSchema.parse(row.type),
+      door: LbCaptchaDoorSchema.parse(row.door),
+      outcome: LbCaptchaOutcomeSchema.parse(row.outcome),
+      buttonTextObserved: row.buttonTextObserved,
+      attempt: row.attempt,
+      creditsCharged: row.creditsCharged,
+      taskId: row.taskId,
+      createdAt: row.createdAt.toISOString(),
+    }));
 }
 
 export async function listLbTickets(
@@ -688,6 +994,9 @@ export async function listLbTickets(
   input: { projectId: string; status?: string },
 ) {
   await requireProject(deps.prisma, actor, input.projectId);
+  if (!input.status || input.status === "open") {
+    await retireUnusableTickets(deps.prisma, actor.workspaceId);
+  }
   const rows = await deps.prisma.lbOperatorTicket.findMany({
     where: {
       workspaceId: actor.workspaceId,
@@ -697,8 +1006,9 @@ export async function listLbTickets(
     include: { host: { select: { registrableDomain: true } } },
     orderBy: { createdAt: "desc" },
   });
-  const screenshots = await ticketScreenshots(deps.prisma, actor.workspaceId, rows);
-  return rows.map((row) => ticketView(row, screenshots.get(row.id) ?? null));
+  const visible = rows.filter((row) => shownToCustomer(row));
+  const screenshots = await ticketScreenshots(deps.prisma, actor.workspaceId, visible);
+  return visible.map((row) => ticketView(row, screenshots.get(row.id) ?? null));
 }
 
 /** The last PNG a run stored for the ticket's host up to the moment the ticket was opened. */
@@ -898,23 +1208,128 @@ async function ensureRunningToday(
         status: "running",
         liveWeek,
         startedAt: new Date(),
-        lastAction: "Started",
+        lastAction: null,
       },
     });
     return;
   }
   const status = readRunStatus(existing.status);
   const next = resumeRunStatus(status);
-  if (!next) return;
+  const keptAction =
+    existing.lastAction &&
+    !isCannedResearchLine(existing.lastAction) &&
+    !isStaleResearchLine(existing.lastAction)
+      ? existing.lastAction
+      : null;
   await prisma.lbRun.update({
     where: { id: existing.id },
-    data: { status: next, startedAt: existing.startedAt ?? new Date(), lastAction: "Started" },
+    data: {
+      status: next ?? status,
+      startedAt: existing.startedAt ?? new Date(),
+      lastAction: keptAction,
+      currentHostId: null,
+      currentUrl: null,
+      finishedAt: null,
+    },
   });
+}
+
+function customerStepVisible(slug: string, lastAction: string | null): boolean {
+  if (!lastAction) return true;
+  if (isCannedResearchLine(lastAction) || isStaleResearchLine(lastAction)) return false;
+  if (mentionsFixtureHost(lastAction)) return false;
+  if (slug !== LB_DEMO_SLUG && mentionsExampleDomain(lastAction)) return false;
+  if (slug !== LB_DEMO_SLUG && /live quota met|captcha/i.test(lastAction)) return false;
+  if (slug !== LB_DEMO_SLUG && /parked/i.test(lastAction) && /operator/i.test(lastAction))
+    return false;
+  return true;
+}
+
+async function readCreditBalance(prisma: PrismaClient, workspaceId: string): Promise<number> {
+  const [steps, purchases] = await Promise.all([
+    prisma.lbRunStep.findMany({
+      where: { workspaceId },
+      select: { costs: true },
+    }),
+    listCreditPurchases(prisma, workspaceId),
+  ]);
+  let spent = 0;
+  for (const step of steps) spent += numberField(step.costs, "credits");
+  return creditBalanceFromLedger(spent, purchases);
+}
+
+async function listCreditPurchases(prisma: PrismaClient, workspaceId: string) {
+  return prisma.lbCreditPurchase.findMany({
+    where: { workspaceId },
+    select: { billing: true, chargeId: true, credits: true },
+  });
+}
+
+async function assertMayCreateProject(prisma: PrismaClient, workspaceId: string) {
+  const purchases = await listCreditPurchases(prisma, workspaceId);
+  if (!mayCreateLinkBuilderProject(purchases)) {
+    throw new ORPCError("FORBIDDEN", { message: "Buy a credit package first." });
+  }
+}
+
+/**
+ * Writes an explicit dev/test allowance. It does not record a charge and adds no credits.
+ * Production routes never call this.
+ */
+export async function grantExplicitProjectAllowance(prisma: PrismaClient, workspaceId: string) {
+  await prisma.lbCreditPurchase.create({
+    data: {
+      workspaceId,
+      packageId: "allowance",
+      credits: 0,
+      priceCents: 0,
+      currency: "eur",
+      billing: "allowance",
+    },
+  });
+}
+
+export async function offerLbBilling(deps: RouterDeps, actor: Actor) {
+  const purchases = await listCreditPurchases(deps.prisma, actor.workspaceId);
+  const balance = await readCreditBalance(deps.prisma, actor.workspaceId);
+  const checkoutConnected = stripeCheckoutConfigured();
+  return {
+    packages: CREDIT_PACKAGES.map((pack) => ({ ...pack })),
+    entitled: mayCreateLinkBuilderProject(purchases),
+    checkoutConnected,
+    balance,
+    reason: checkoutConnected ? "" : CHECKOUT_NOT_CONNECTED_REASON,
+  };
+}
+
+/**
+ * Quotes a package. A card is charged only when billing is live and a charge id already exists.
+ * This route has no charge id, so it does not write a purchase or change the balance.
+ */
+export async function checkoutLbPackage(deps: RouterDeps, actor: Actor, packageId: string) {
+  const billing = stripeCheckoutConfigured() ? "live" : "stub";
+  const purchases = await listCreditPurchases(deps.prisma, actor.workspaceId);
+  const balance = await readCreditBalance(deps.prisma, actor.workspaceId);
+  const quote = quoteCreditPurchase({ billing, chargeId: null, packageId, balance });
+  return {
+    charged: quote.charged,
+    entitled: quote.charged || mayCreateLinkBuilderProject(purchases),
+    balance: quote.balance,
+    reason: quote.reason,
+    checkoutUrl: null,
+  };
+}
+
+/** Buying credits never charges a card while billing is a stub, and never invents a payment. */
+export async function buyLbCredits(deps: RouterDeps, actor: Actor, projectId: string) {
+  await requireProject(deps.prisma, actor, projectId);
+  const billing = (deps.plan ?? new StaticPlanProvider()).describe().capabilities.billing;
+  const balance = await readCreditBalance(deps.prisma, actor.workspaceId);
+  return settleCreditPurchase({ billing, balance, chargeId: null, amount: 0 });
 }
 
 function resumeRunStatus(current: LbRunStatus): LbRunStatus | null {
   if (current === "running" || current === "overtime") return null;
-  if (current === "succeeded" || current === "partial" || current === "cancelled") return null;
   if (current === "failed") return transitionRun(transitionRun(current, "queued"), "running");
   return transitionRun(current, "running");
 }
@@ -1284,6 +1699,7 @@ function runCounters(run: {
   uniqueHosts: number;
   lastAction: string | null;
   lastError: string | null;
+  currentUrl?: string | null;
 }) {
   return {
     id: run.id,
@@ -1295,6 +1711,7 @@ function runCounters(run: {
     uniqueHosts: run.uniqueHosts,
     lastAction: run.lastAction,
     lastError: run.lastError,
+    currentUrl: run.currentUrl ?? null,
   };
 }
 
@@ -1335,6 +1752,33 @@ function readQuotas(value: unknown) {
 
 function readPersona(value: unknown) {
   return LbPersonaSchema.safeParse(value).data ?? null;
+}
+
+function personaWithPersonalName(
+  persona: NonNullable<ReturnType<typeof readPersona>>,
+  row: {
+    brandName: string;
+    name: string;
+    slug: string;
+    allowedDomains: string[];
+    markets: unknown;
+  },
+) {
+  const markets = LbMarketsSchema.safeParse(row.markets);
+  const language = persona.language ?? markets.data?.[0]?.language ?? "de";
+  return {
+    ...persona,
+    displayName: resolvePersonaDisplayName({
+      displayName: persona.displayName,
+      language,
+      sources: brandNameSources({
+        brandName: row.brandName,
+        projectName: row.name,
+        slug: row.slug,
+        domains: row.allowedDomains,
+      }),
+    }),
+  };
 }
 
 function scheduleState(

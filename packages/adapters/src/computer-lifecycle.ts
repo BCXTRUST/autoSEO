@@ -15,6 +15,17 @@ import { resolveAgentHomePath } from "./home.js";
 const EXECUTION_LEASE_MS = 5 * 60_000;
 const BOOT_WAIT_ATTEMPTS = 40;
 const BOOT_WAIT_MS = 250;
+/** A boot the process no longer owns. A deploy can leave the row in `booting`. */
+const STALE_BOOT_MS = 3 * 60_000;
+
+export function staleComputerBoot(
+  computer: { state: string; updatedAt?: Date | null },
+  now = new Date(),
+): boolean {
+  if (computer.state !== "booting" && computer.state !== "suspending") return false;
+  if (!computer.updatedAt) return false;
+  return now.getTime() - computer.updatedAt.getTime() > STALE_BOOT_MS;
+}
 
 export class ComputerBusyError extends Error {
   constructor() {
@@ -51,6 +62,15 @@ export async function provisionComputer(
 
   if (existing.state === "running" && existing.providerRef) {
     return reconnectComputer(deps, existing, homePath, context);
+  }
+  if (staleComputerBoot(existing)) {
+    const reset = await deps.prisma.computer.updateMany({
+      where: { id: computerId, state: existing.state, updatedAt: existing.updatedAt },
+      data: { state: "stopped" },
+    });
+    if (reset.count === 1) {
+      existing = await deps.prisma.computer.findUniqueOrThrow({ where: { id: computerId } });
+    }
   }
   if (existing.state === "booting" || existing.state === "suspending") {
     const ready = await waitForComputerReady(deps.prisma, computerId, context);

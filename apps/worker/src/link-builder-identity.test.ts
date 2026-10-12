@@ -10,8 +10,14 @@ import {
   EndpointTemplateProxyProvider,
   iproyalPreset,
   readLeaseId,
+  StaticPlanProvider,
 } from "@rakazo/adapters";
-import { createLbProject, startLbProject, updateLbProject } from "@rakazo/api/link-builder";
+import {
+  createLbProject,
+  grantExplicitProjectAllowance,
+  startLbProject,
+  updateLbProject,
+} from "@rakazo/api/link-builder";
 import { type Actor, LbProjectPatchSchema } from "@rakazo/contracts";
 import { createPgliteDb, type TestDatabase } from "@rakazo/db/pglite";
 import { BrowserEngineUnavailable } from "@rakazo/linkbuilder-browser";
@@ -57,6 +63,7 @@ describe("link builder identity", () => {
       data: { id: actor.workspaceId, name: "Identity", slug: "identity", createdAt: new Date() },
     });
     await db.prisma.user.create({ data: { id: actor.userId, name: "Owner", email: actor.email } });
+    await grantExplicitProjectAllowance(db.prisma, actor.workspaceId);
   });
 
   afterAll(async () => {
@@ -64,7 +71,14 @@ describe("link builder identity", () => {
   });
 
   async function startedProject(name: string) {
-    const deps = { prisma: db.prisma, secrets };
+    const deps = {
+      prisma: db.prisma,
+      secrets,
+      plan: new StaticPlanProvider({
+        name: "starter",
+        caps: { projects: 8, live_per_day: 10, personas: 8 },
+      }),
+    };
     const created = await createLbProject(deps as never, actor, {
       name,
       brandName: "Nordlicht",
@@ -211,7 +225,7 @@ describe("link builder identity", () => {
     expect(projectRow.status).toBe("active");
   });
 
-  it("refuses a second registration on the same host the same day", async () => {
+  it("refuses a fifth registration on the same host the same day", async () => {
     const project = await startedProject("Cap");
     const host = await db.prisma.lbHost.create({
       data: {
@@ -228,16 +242,16 @@ describe("link builder identity", () => {
       },
     });
     const run = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
-    await db.prisma.lbRunStep.create({
-      data: {
+    await db.prisma.lbRunStep.createMany({
+      data: [0, 1, 2, 3].map((stepIndex) => ({
         workspaceId: actor.workspaceId,
         runId: run.id,
-        stepIndex: 0,
+        stepIndex,
         kind: "register",
         hostId: host.id,
         outcome: { username: "mira" },
         createdAt: clock,
-      },
+      })),
     });
     const real = runner(browsersFor(""), new FakeProxyProvider([]));
     await real.tick();

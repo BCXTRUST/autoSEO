@@ -24,7 +24,7 @@ import {
   SandboxBrowserSessionFactory,
 } from "./factory.js";
 import { BrowserRpcServer, RpcBrowserSession } from "./rpc.js";
-import { LAUNCH_ENV, REQUEST_ENV } from "./runner-cli.js";
+import { describeCall, LAUNCH_ENV, REQUEST_ENV } from "./runner-cli.js";
 import { browserTestGate, FIXTURE_PAGE_HELPER_DIR } from "./testing.js";
 
 const context: AdapterContext = {
@@ -105,6 +105,21 @@ describe("browser RPC", () => {
       secret: true,
     });
     expect(response).toEqual({ ok: false, error: "could not type [redacted] into field" });
+  });
+
+  it("logs each runner call with method, target and timing but never the text", () => {
+    const line = describeCall(
+      { method: "fill", selector: "#password", text: "Sup3r-Secret!pw", secret: true },
+      { ok: false, error: "could not type [redacted] into field" },
+      42,
+    );
+    expect(line).toMatch(
+      /^\d{4}-\d{2}-\d{2}T.* fill #password 42ms error could not type \[redacted\] into field$/,
+    );
+    expect(line).not.toContain("Sup3r");
+    expect(
+      describeCall({ method: "goto", url: "https://board.example/" }, { ok: true }, 7),
+    ).toContain("goto https://board.example/ 7ms ok");
   });
 });
 
@@ -219,7 +234,27 @@ describe.skipIf(!gate.available)(
     beforeAll(async () => {
       root = await mkdtemp(join(tmpdir(), "rakazo-lb-browser-"));
       server = createServer((request, response) => {
+        if (request.url?.startsWith("/slow-submit")) {
+          // A board that sends its activation mail before answering the registration POST.
+          setTimeout(() => {
+            response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+            response.end(`<!doctype html><div id="message">Konto angelegt</div>`);
+          }, 3_000);
+          return;
+        }
         response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        if (request.url?.startsWith("/register")) {
+          response.end(
+            `<!doctype html><form id="register" method="post" action="/slow-submit"><input id="name" name="name"><input type="submit" name="submit" value="Absenden"></form>`,
+          );
+          return;
+        }
+        if (request.url?.startsWith("/covered")) {
+          response.end(
+            `<!doctype html><form><div style="position:fixed;inset:0;z-index:5"></div><input id="name" name="name" oninput="document.getElementById('out').textContent=this.value"><p id="out"></p></form>`,
+          );
+          return;
+        }
         if (request.url?.startsWith("/widget")) {
           response.end(
             `<!doctype html><form><div class="g-recaptcha" data-sitekey="fixture-key"><textarea name="g-recaptcha-response"></textarea></div><input id="name"></form>`,
@@ -227,7 +262,7 @@ describe.skipIf(!gate.available)(
           return;
         }
         response.end(
-          `<!doctype html><title>Board</title><p id="hello">Hallo</p><p id="visits"></p><script>localStorage.visits = String(Number(localStorage.visits || 0) + 1); document.getElementById("visits").textContent = localStorage.visits;</script>`,
+          `<!doctype html><title>Board</title><p id="hello">Hallo</p><p id="visits"></p><span id="hidden-count" style="display:none">12</span><script>localStorage.visits = String(Number(localStorage.visits || 0) + 1); document.getElementById("visits").textContent = localStorage.visits;</script>`,
         );
       });
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -270,6 +305,9 @@ describe.skipIf(!gate.available)(
         await session.goto(origin);
         expect(await session.text("#hello")).toBe("Hallo");
         expect(await session.text("#visits")).toBe("1");
+        const started = Date.now();
+        expect(await session.text("#hidden-count")).toBe("12");
+        expect(Date.now() - started).toBeLessThan(2_000);
       } finally {
         await session.close();
       }
@@ -281,6 +319,46 @@ describe.skipIf(!gate.available)(
         expect(await again.text("#visits")).toBe("2");
       } finally {
         await again.close();
+      }
+    });
+
+    it("fills a field that a banner covers", async () => {
+      const factory = new LocalBrowserSessionFactory({
+        profileRoot: root,
+        helperDirs: [FIXTURE_PAGE_HELPER_DIR],
+        headless: true,
+        pacing: TEST_PACING,
+        env: { LINK_BUILDER_BROWSER: "local" },
+      });
+      const session = await factory.open(persona("profile-covered"), context);
+      try {
+        await session.goto(`${origin}/covered`);
+        await session.fill("#name", "sophie_braun68");
+        expect(await session.text("#out")).toBe("sophie_braun68");
+      } finally {
+        await session.close();
+      }
+    });
+
+    it("waits for a slow board to answer a submit before the next read", async () => {
+      const factory = new LocalBrowserSessionFactory({
+        profileRoot: root,
+        helperDirs: [FIXTURE_PAGE_HELPER_DIR],
+        headless: true,
+        pacing: TEST_PACING,
+        env: { LINK_BUILDER_BROWSER: "local" },
+      });
+      const session = await factory.open(persona("profile-slow"), context);
+      try {
+        await session.goto(`${origin}/register`);
+        await session.fill("#name", "mira_sol42");
+        const started = Date.now();
+        await session.click("form#register input[name='submit']");
+        expect(Date.now() - started).toBeGreaterThanOrEqual(2_500);
+        expect(await session.text("#message")).toBe("Konto angelegt");
+        expect(await session.exists("form#register")).toBe(false);
+      } finally {
+        await session.close();
       }
     });
 

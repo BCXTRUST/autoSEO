@@ -20,7 +20,7 @@ export function AuthPage({ mode }: { mode: "in" | "up" }) {
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const title = mode === "in" ? "Sign in to Rakazo" : "Create your Rakazo";
+  const title = mode === "in" ? "Sign in to autoSEO" : "Create your autoSEO";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -101,6 +101,14 @@ export function AuthPage({ mode }: { mode: "in" | "up" }) {
         >
           {pending ? "Working…" : mode === "in" ? "Continue with email" : "Create account"}
         </button>
+        {mode === "up" ? (
+          <a
+            href="https://autoseo.run/privacy/"
+            className="mt-[22px] text-[16px] font-medium text-[#1B1B1E]"
+          >
+            Privacy
+          </a>
+        ) : null}
         <p className="mt-[30px] text-[16px] text-[#8C8C86]">
           {mode === "in" ? (
             <>

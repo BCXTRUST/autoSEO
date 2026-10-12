@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   COMPUTER_AUTONOMY_INSTRUCTION,
+  detachedBrowserCommand,
   exposeBrowserDesktopCommand,
   isFileManagerLabel,
   isHttpUrl,
@@ -9,6 +10,7 @@ import {
   openHttpUrlCommand,
   openPathDesktopCommand,
   parseVisibleWindows,
+  raiseBrowserWindowCommand,
   refuseBrowserHuntShell,
 } from "./computer-desktop.js";
 
@@ -36,6 +38,75 @@ describe("computer desktop window helpers", () => {
     const command = openPathDesktopCommand(":0", "/home/user/rakazo-home/notes");
     expect(command).toContain("xdg-open");
     expect(command).not.toContain("windowquit");
+  });
+
+  it("detaches Chrome so the sandbox command can return", () => {
+    const command = detachedBrowserCommand(
+      ":0",
+      "https://www.google.de/search?q=Magnesium+Kr%C3%A4mpfe+Forum&hl=de&gl=de",
+    );
+    expect(command).toContain("RAKAZO_DETACH_BROWSER");
+    expect(command).toContain("/usr/bin/google-chrome");
+    expect(command).toContain("--no-sandbox");
+    expect(command).toContain("--no-first-run");
+    expect(command).toContain("--disable-fre");
+    expect(command).toContain("OutdatedBuildDetector");
+    expect(command).toContain("setsid -f");
+    expect(command).toContain("pgrep -f '[r]akazo-desktop-watch'");
+    expect(command).toContain("xfce4-panel");
+    expect(command).toContain(
+      "https://www.google.de/search?q=Magnesium+Kr%C3%A4mpfe+Forum&hl=de&gl=de",
+    );
+    expect(command).toContain("--kiosk");
+    expect(command).toContain("exec /usr/bin/google-chrome");
+    expect(command).not.toContain(">/tmp/rakazo-browser.log");
+    expect(command.trimEnd().endsWith("&")).toBe(false);
+  });
+
+  it("replaces the shell with Chrome so the sandbox cannot reap it", () => {
+    const command = detachedBrowserCommand(
+      ":0",
+      "https://www.google.de/search?q=Magnesium+Kr%C3%A4mpfe+Forum&hl=de&gl=de",
+    );
+    expect(command).toContain("RAKAZO_DETACH_BROWSER");
+    expect(command).toContain("exec /usr/bin/google-chrome");
+    expect(command).toContain("--kiosk");
+    expect(command).toContain("--disable-fre");
+    expect(command).toContain("--no-first-run");
+    expect(command).toContain("--no-default-browser-check");
+    expect(command).toContain("First Run");
+    expect(command).toContain(
+      "https://www.google.de/search?q=Magnesium+Kr%C3%A4mpfe+Forum&hl=de&gl=de",
+    );
+    const raised = raiseBrowserWindowCommand(":0");
+    expect(raised).toContain("Can't update Chrome");
+    expect(raised).toContain("Reinstall Chrome");
+    expect(raised).toContain("Welcome to Google Chrome");
+    expect(raised).toContain("windowclose");
+    expect(raised).not.toContain("key Return");
+    expect(raised).toContain("xfce4-panel");
+    expect(raised).toContain("fluxbox");
+    expect(raised).toContain("toolbar.visible: false");
+    expect(raised).toContain("FULLSCREEN");
+    expect(command).toContain("fluxbox");
+    expect(command).toContain("--disable-component-update");
+    expect(command).toContain("--disable-translate");
+    expect(command).toContain("--lang=de");
+    expect(command).toContain("LANG=de_DE.UTF-8");
+    expect(command).toContain("TranslateEnabled");
+    expect(command).toContain("translate_blocked_languages");
+    expect(command).toContain("app_locale");
+    expect(command).toContain("rakazo-chrome-kiosk-v3");
+    expect(command).toContain("Translate this page");
+    expect(command).toContain("Diese Seite übersetzen");
+    expect(command).toContain("Toolbar");
+    expect(command).not.toContain("rakazo-chrome-kiosk-v2");
+    expect(command).toContain("TranslateUI");
+    expect(raised).toContain("Google Translate");
+    expect(raised).toContain("Translate this page");
+    expect(raised).not.toContain("key --window");
+    expect(raised).not.toContain("key Escape");
+    expect(command).not.toContain("nohup");
   });
 
   it("quotes URLs so query strings stay one argv", () => {

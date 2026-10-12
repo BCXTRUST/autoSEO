@@ -17,8 +17,10 @@ import type { CaptchaChallenge } from "./driver.js";
 
 export { PAGE_HELPER_BUTTON_SELECTOR };
 
-/** Padding added on the one re-crop when a tight captcha image is unusable. */
+/** Padding added when a tight captcha image is too small to send. */
 export const CAPTCHA_CROP_PADDING_PX = 12;
+/** Insets used when the solver cannot read the picture: closer, then closer again. */
+export const CAPTCHA_CLOSER_INSET_PX = [8, 16] as const;
 const MIN_WIDTH = 40;
 const MIN_HEIGHT = 16;
 const MIN_ASPECT = 1.5;
@@ -79,6 +81,8 @@ export function captchaCropAcceptable(bytes: Uint8Array): boolean {
 export function captchaResponseField(type: TokenCaptchaType): string {
   if (type === "turnstile") return "cf-turnstile-response";
   if (type === "hcaptcha") return "h-captcha-response";
+  if (type === "geetest") return "geetest_validate";
+  if (type === "funcaptcha") return "fc-token";
   return "g-recaptcha-response";
 }
 
@@ -123,16 +127,41 @@ export async function enrichCaptchaChallenge(
 async function crop(
   session: BrowserSession,
   selector: string,
-  paddingPx: number,
+  options: { paddingPx?: number; insetPx?: number },
 ): Promise<Uint8Array> {
-  return paddingPx > 0
-    ? session.elementScreenshotPng(selector, { paddingPx })
-    : session.elementScreenshotPng(selector);
+  if (options.insetPx && options.insetPx > 0) {
+    return session.elementScreenshotPng(selector, { insetPx: options.insetPx });
+  }
+  if (options.paddingPx && options.paddingPx > 0) {
+    return session.elementScreenshotPng(selector, { paddingPx: options.paddingPx });
+  }
+  return session.elementScreenshotPng(selector);
+}
+
+export { isSecretRegistrationPrompt } from "@rakazo/adapter-kit";
+
+/** A registration-form click from an answer instruction. Login controls are refused. */
+export function instructionClickSelector(instruction: string): string | null {
+  const match = /^click\s+([^.!\n]+?)(?:\s+on\b.*)?$/i.exec(instruction.trim());
+  if (!match) return null;
+  const label = match[1]?.trim() ?? "";
+  if (!/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,40}$/.test(label)) return null;
+  if (/login|sign in|anmelden|password/i.test(label)) return null;
+  return `button:has-text("${label}"), input[type="submit"][value="${label}"]`;
+}
+
+export function isLoginPath(url: string): boolean {
+  try {
+    const path = new URL(url).pathname.toLowerCase();
+    return path === "/login" || path === "/login/" || path.endsWith("/login.php");
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Crops the captcha image, re-crops once with padding when the crop is too small or the wrong
- * shape, and types the answer. "Not read" gets one padded re-crop and then a park reason.
+ * Crops the captcha image and types the answer. A crop that is too small is expanded once.
+ * An unreadable image is cropped closer and sent again, then closer a second time.
  * The image is the only thing sent to the solver.
  */
 export async function solveImageCaptcha(
@@ -141,31 +170,36 @@ export async function solveImageCaptcha(
   solver: CaptchaSolver,
   context: AdapterContext,
 ): Promise<ImageCaptchaResult> {
-  let image = await crop(session, challenge.imageSelector, 0);
-  let padded = captchaCropAcceptable(image);
-  if (!padded) {
-    image = await crop(session, challenge.imageSelector, CAPTCHA_CROP_PADDING_PX);
-    padded = captchaCropAcceptable(image);
-    if (!padded) return { ok: false, reason: "crop_rejected" };
+  let image = await crop(session, challenge.imageSelector, {});
+  if (!captchaCropAcceptable(image)) {
+    image = await crop(session, challenge.imageSelector, { paddingPx: CAPTCHA_CROP_PADDING_PX });
+    if (!captchaCropAcceptable(image)) return { ok: false, reason: "crop_rejected" };
   }
+  const submitted = await submitImage(session, challenge.answerSelector, solver, context, image);
+  if (submitted !== "not_read") return submitted;
+  for (const insetPx of CAPTCHA_CLOSER_INSET_PX) {
+    const closer = await crop(session, challenge.imageSelector, { insetPx });
+    if (closer.byteLength < MIN_CAPTCHA_IMAGE_BYTES) continue;
+    const again = await submitImage(session, challenge.answerSelector, solver, context, closer);
+    if (again !== "not_read") return again;
+  }
+  return { ok: false, reason: "not_read" };
+}
+
+async function submitImage(
+  session: BrowserSession,
+  answerSelector: string,
+  solver: CaptchaSolver,
+  context: AdapterContext,
+  image: Uint8Array,
+): Promise<ImageCaptchaResult | "not_read"> {
   try {
     const result = await solver.solve({ type: "ImageToText", imagePng: image }, context);
-    await session.fill(challenge.answerSelector, result.answer);
+    await session.fill(answerSelector, result.answer);
     return { ok: true, ...result };
   } catch (error) {
-    if (!(error instanceof CaptchaSolverError) || error.code !== "not_read") throw error;
-    const again = await crop(session, challenge.imageSelector, CAPTCHA_CROP_PADDING_PX);
-    if (!captchaCropAcceptable(again)) return { ok: false, reason: "not_read" };
-    try {
-      const result = await solver.solve({ type: "ImageToText", imagePng: again }, context);
-      await session.fill(challenge.answerSelector, result.answer);
-      return { ok: true, ...result };
-    } catch (second) {
-      if (second instanceof CaptchaSolverError && second.code === "not_read") {
-        return { ok: false, reason: "not_read" };
-      }
-      throw second;
-    }
+    if (error instanceof CaptchaSolverError && error.code === "not_read") return "not_read";
+    throw error;
   }
 }
 

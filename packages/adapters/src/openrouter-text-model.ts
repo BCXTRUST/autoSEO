@@ -16,9 +16,14 @@ import { z } from "zod";
 
 export const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
 
+/** Reasoning models can spend most of a minute before the JSON arrives. */
+export const OPENROUTER_TEXT_TIMEOUT_MS = 120_000;
+
 /** Product names from plan section 9, as OpenRouter-style ids. Deployments may override them. */
 export const DEFAULT_TEXT_MODEL_LANES = {
-  draft: "anthropic/claude-fable-5",
+  // Gemini 3.8 Flash is the quality/cost default for end-user drafting.
+  // Claude Fable 5 stays available by setting LINK_BUILDER_MODEL_DRAFT.
+  draft: "google/gemini-3.8-flash",
   classify: "google/gemini-3.8-flash",
   fallback: "moonshotai/kimi-k3",
 } as const;
@@ -70,7 +75,7 @@ export class OpenRouterTextModel implements TextModel {
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.models = { ...DEFAULT_TEXT_MODEL_LANES, ...options.models };
     this.baseUrl = (options.baseUrl ?? OPENROUTER_CHAT_URL).replace(/\/$/, "");
-    this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.timeoutMs = options.timeoutMs ?? OPENROUTER_TEXT_TIMEOUT_MS;
     if (!this.baseUrl.startsWith("https://")) throw new Error("invalid");
   }
 
@@ -89,7 +94,7 @@ export class OpenRouterTextModel implements TextModel {
   ): Promise<TextModelResult<T>> {
     const key = await this.apiKey(context);
     this.onSecret?.(key);
-    const modelId = this.models[request.lane];
+    const modelId = requestedModel(request.modelId, this.models[request.lane]);
     let response: Response;
     try {
       response = await this.fetchImpl(this.baseUrl, {
@@ -158,6 +163,11 @@ export function lanesFromEnv(
     fallback:
       override?.fallback || env.LINK_BUILDER_MODEL_FALLBACK || DEFAULT_TEXT_MODEL_LANES.fallback,
   };
+}
+
+function requestedModel(override: string | undefined, laneModel: string): string {
+  if (override && /^[A-Za-z0-9._:/-]{1,80}$/.test(override)) return override;
+  return laneModel;
 }
 
 function parseJsonContent(content: string): unknown {

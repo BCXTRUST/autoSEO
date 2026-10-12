@@ -12,13 +12,23 @@ describe("mobile link builder", () => {
   it("summarizes counters and run state", () => {
     expect(
       projectStatusLine({
-        activityLabel: "needs operator ×1",
+        activityLabel: "running",
         newToday: 1,
         newPerDay: 2,
         liveToday: 1,
         livePerDay: 2,
       }),
-    ).toBe("needs operator ×1 · NEW 1/2 · LIVE 1/2");
+    ).toBe("running · NEW 1/2 · LIVE 1/2");
+    expect(
+      projectStatusLine({
+        activityLabel: "needs operator ×10",
+        newToday: 0,
+        newPerDay: 2,
+        liveToday: 0,
+        livePerDay: 1,
+        operatorHelp: { label: "Skip board.example" },
+      }),
+    ).toBe("Skip board.example · NEW 0/2 · LIVE 0/1");
   });
 
   it("sends a note only when the operator typed one", () => {

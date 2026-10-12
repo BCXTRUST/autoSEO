@@ -8,6 +8,7 @@ export * from "./mybb-fixture.js";
 export * from "./nodebb-fixture.js";
 export * from "./phpbb-fixture.js";
 export { noisePng, TINY_PNG } from "./png.js";
+export * from "./registration-fixtures.js";
 export * from "./vanilla-fixture.js";
 export * from "./vbulletin-fixture.js";
 export * from "./woltlab-fixture.js";

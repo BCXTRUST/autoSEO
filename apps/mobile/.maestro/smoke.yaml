@@ -1,10 +1,10 @@
 appId: com.rakazo.app
-name: Rakazo mobile smoke
+name: autoSEO mobile smoke
 ---
 - launchApp:
     clearState: true
 
-- assertVisible: "Sign in to Rakazo"
+- assertVisible: "Sign in to autoSEO"
 - tapOn: "Email"
 - inputText: ${RAKAZO_E2E_EMAIL}
 - tapOn: "Password"

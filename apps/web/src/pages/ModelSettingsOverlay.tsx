@@ -299,7 +299,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
           <div>
             <div className="text-2xl font-medium text-[#F1F1F2]">Models</div>
             <p className="mt-1 text-[13.5px] text-[#7A7A80]">
-              {loading ? "Loading model catalog…" : "Choose which connected model Rakazo uses."}
+              {loading ? "Loading model catalog…" : "Choose which connected model autoSEO uses."}
             </p>
           </div>
           <button
@@ -630,7 +630,7 @@ export function ModelSettingsOverlay({ onClose }: { onClose: () => void }) {
 
                 {selected.auth === "oauth" && !subscriptionSignIn ? (
                   <p className="mt-5 text-sm leading-[1.5] text-[#85858A]">
-                    This subscription sign-in is not available in Rakazo yet. Use a deployment
+                    This subscription sign-in is not available in autoSEO yet. Use a deployment
                     credential or choose another provider.
                   </p>
                 ) : null}

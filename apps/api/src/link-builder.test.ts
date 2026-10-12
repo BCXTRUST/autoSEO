@@ -1,5 +1,5 @@
 import { RPCHandler } from "@orpc/server/fetch";
-import { CaptellEmulator, captellCues } from "@rakazo/adapters";
+import { CaptellEmulator, captellCues, StaticPlanProvider } from "@rakazo/adapters";
 import type { Actor } from "@rakazo/contracts";
 import { LB_RESPONSIBILITY_ACK_TEXT_VERSION } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
@@ -113,6 +113,7 @@ describe("link builder routes", () => {
     const prisma = {
       lbProject: {
         findFirst: vi.fn(async () => row),
+        count: vi.fn(async () => 0),
         update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
           updates.push(data);
           Object.assign(row, data);
@@ -147,6 +148,42 @@ describe("link builder routes", () => {
         data: expect.objectContaining({ workspaceId: "workspace-1", status: "running" }),
       }),
     );
+  });
+
+  it("replaces a brand-derived persona name when Start building is clicked", async () => {
+    const row = projectRow({
+      name: "Vitaminexpress",
+      slug: "vitaminexpress-3096",
+      brandName: "Vitaminexpress",
+      allowedDomains: ["vitaminexpress.org"],
+      persona: { displayName: "Vitaminexpress", bio: "", language: "de", register: "du" },
+    });
+    const updates: unknown[] = [];
+    const prisma = {
+      lbProject: {
+        findFirst: vi.fn(async () => row),
+        count: vi.fn(async () => 0),
+        update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          updates.push(data);
+          Object.assign(row, data);
+          return row;
+        }),
+      },
+      lbRun: {
+        findFirst: vi.fn(async () => null),
+        findMany: vi.fn(async () => []),
+        create: vi.fn(async ({ data }: { data: { status: string } }) => data),
+      },
+    } as unknown as PrismaClient;
+    const { response } = await call(deps(prisma), actor, "linkBuilder/projects/start", {
+      projectId: "project-1",
+    });
+    expect(response.status).toBe(200);
+    const saved = updates[0] as { persona?: { displayName?: string } };
+    expect(saved.persona?.displayName).toMatch(/\s/);
+    expect(saved.persona?.displayName?.toLowerCase()).not.toMatch(/vitamin|express/);
+    const body = JSON.stringify(await response.json());
+    expect(body.toLowerCase()).not.toContain("vitaminexpress47");
   });
 
   it("returns active proxy leases without credentials", async () => {
@@ -190,6 +227,31 @@ describe("link builder routes", () => {
         },
       }),
     );
+  });
+
+  it("refuses to start when the plan cap is already full", async () => {
+    const row = projectRow();
+    const prisma = {
+      lbProject: {
+        findFirst: vi.fn(async () => row),
+        count: vi.fn(async () => 1),
+        update: vi.fn(),
+      },
+    } as unknown as PrismaClient;
+    const { response } = await call(
+      {
+        ...deps(prisma),
+        plan: new StaticPlanProvider({
+          name: "starter",
+          caps: { projects: 1, live_per_day: 1, personas: 3 },
+        }),
+      },
+      actor,
+      "linkBuilder/projects/start",
+      { projectId: "project-1" },
+    );
+    expect(response.status).toBe(403);
+    expect(prisma.lbProject.update).not.toHaveBeenCalled();
   });
 
   it("refuses to start a project that is missing a mailbox or Captell seat", async () => {
@@ -365,5 +427,59 @@ describe("link builder routes", () => {
     expect(prisma.secret.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "secret-1", workspaceId: "workspace-1" } }),
     );
+  });
+
+  it("refuses a new project until a package is purchased", async () => {
+    const create = vi.fn();
+    const prisma = {
+      lbCreditPurchase: { findMany: vi.fn(async () => []) },
+      lbProject: { create },
+    } as unknown as PrismaClient;
+    const { response } = await call(deps(prisma), actor, "linkBuilder/projects/create", {
+      name: "New",
+      brandName: "New",
+      allowedDomains: ["nordlicht.example"],
+    });
+    expect(response.status).toBe(403);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("creates a project when an explicit allowance is already stored", async () => {
+    const row = projectRow();
+    const prisma = {
+      lbCreditPurchase: {
+        findMany: vi.fn(async () => [{ billing: "allowance", chargeId: null, credits: 0 }]),
+      },
+      lbProject: { create: vi.fn(async () => row) },
+    } as unknown as PrismaClient;
+    const { response } = await call(deps(prisma), actor, "linkBuilder/projects/create", {
+      name: "New",
+      brandName: "New",
+      allowedDomains: ["nordlicht.example"],
+    });
+    expect(response.status).toBe(200);
+    expect(prisma.lbProject.create).toHaveBeenCalled();
+  });
+
+  it("does not charge or store a purchase while checkout is disconnected", async () => {
+    const create = vi.fn();
+    const prisma = {
+      lbRunStep: { findMany: vi.fn(async () => []) },
+      lbCreditPurchase: { findMany: vi.fn(async () => []), create },
+    } as unknown as PrismaClient;
+    const { response } = await call(deps(prisma), actor, "linkBuilder/billing/checkout", {
+      packageId: "growth",
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      json: { charged: boolean; entitled: boolean; balance: number; reason: string; checkoutUrl: null };
+    };
+    expect(body.json.charged).toBe(false);
+    expect(body.json.entitled).toBe(false);
+    expect(body.json.balance).toBe(80);
+    expect(body.json.checkoutUrl).toBeNull();
+    expect(body.json.reason).toMatch(/not connected/i);
+    expect(body.json.reason).toMatch(/not added/i);
+    expect(create).not.toHaveBeenCalled();
   });
 });

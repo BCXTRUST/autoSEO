@@ -12,11 +12,7 @@ export default function LinkBuilderStatus() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      let next = await rpc<MobileLbCard[]>("linkBuilder/projects/list");
-      if (next.length === 0) {
-        await rpc("linkBuilder/projects/seedDemo");
-        next = await rpc<MobileLbCard[]>("linkBuilder/projects/list");
-      }
+      const next = await rpc<MobileLbCard[]>("linkBuilder/projects/list");
       setCards(next);
     } finally {
       setLoading(false);
@@ -44,8 +40,17 @@ export default function LinkBuilderStatus() {
       contentContainerStyle={styles.list}
       renderItem={({ item }) => (
         <Pressable
-          accessibilityLabel={item.name}
+          accessibilityLabel={item.operatorHelp?.label ?? item.name}
           onPress={() => {
+            const help = item.operatorHelp;
+            if (help) {
+              const path =
+                help.action === "skip"
+                  ? "linkBuilder/operator/skip"
+                  : "linkBuilder/operator/continue";
+              void rpc(path, { projectId: item.id, ticketId: help.ticketId }).then(() => load());
+              return;
+            }
             if (item.operatorQueue > 0) {
               router.push({ pathname: "/link-builder-ticket", params: { projectId: item.id } });
               return;

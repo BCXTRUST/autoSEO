@@ -17,6 +17,12 @@ function run(status: LbRunStatus = "running"): FakeRunRecord {
     workspaceId: "workspace-1",
     status,
     stepCount: 0,
+    researchBeats: 0,
+    stageBeats: 0,
+    previousAction: null,
+    forumName: null,
+    threadName: null,
+    counters: { newToday: 0, liveToday: 0, liveWeek: 0, uniqueHosts: 0 },
     seed: "project-1",
     brandName: "Nordlicht",
     targetUrl: "https://nordlicht.example/schlaf",
@@ -24,6 +30,7 @@ function run(status: LbRunStatus = "running"): FakeRunRecord {
     quotas: { livePerDay: 1, liveWeekCap: 5 },
     countNofollow: true,
     lowBalanceCredits: 500,
+    searchQuery: null,
   };
 }
 
@@ -46,7 +53,11 @@ function memoryStore(initial: FakeRunRecord): LinkBuilderFakeStore & {
     async apply(record, step) {
       steps.push(step);
       current.stepCount = record.stepCount + 1;
+      current.previousAction = step.lastAction;
+      if (step.kind === "research") current.researchBeats += 1;
+      if (step.kind.startsWith("lb_")) current.stageBeats += 1;
       current.status = step.runStatus;
+      current.counters = step.counters;
     },
     async finishIfOpen(record) {
       current.status = record.status === "queued" ? "cancelled" : "partial";
@@ -63,34 +74,59 @@ describe("link builder fake runner", () => {
     expect(isLinkBuilderFakeEnabled({ LINK_BUILDER_DRIVER: "playwright" })).toBe(false);
   });
 
-  it("emits a seeded LIVE placement and an operator ticket, then stops", async () => {
+  it("holds the canned research loop and records a real forum once", async () => {
     vi.stubGlobal("fetch", () => {
       throw new Error("network");
     });
-    const store = memoryStore(run());
-    const clocks = [now, new Date("2026-10-05T18:00:00.000Z")];
-    const kinds: string[][] = [];
-    for (const clock of clocks) {
-      const fresh = memoryStore(run());
-      for (let guard = 0; guard < 30; guard += 1) {
-        const stepped = await tickLinkBuilderFake(fresh, clock);
-        if (stepped === 0) break;
-      }
-      kinds.push(fresh.steps.map((step) => step.kind));
+    const quiet = memoryStore(run("running"));
+    quiet.current.previousAction = "Continuing";
+    for (let guard = 0; guard < 5; guard += 1) {
+      expect(await tickLinkBuilderFake(quiet, now)).toBe(0);
     }
-    expect(kinds[0]).toEqual(kinds[1]);
-    expect(store.steps).toHaveLength(0);
-    const sample = memoryStore(run());
-    for (let guard = 0; guard < 30; guard += 1) {
-      if ((await tickLinkBuilderFake(sample, now)) === 0) break;
+    expect(quiet.steps).toEqual([]);
+    const sample = memoryStore(run("running"));
+    sample.current.forumName = "gutefrage.net";
+    sample.current.threadName = "Vitamin D im Winter?";
+    const stepped: number[] = [];
+    for (let guard = 0; guard < 5; guard += 1) {
+      stepped.push(await tickLinkBuilderFake(sample, now));
     }
-    const live = sample.steps.find((step) => step.kind === "verify");
-    const parked = sample.steps.find((step) => step.kind === "park");
-    expect(live?.placement).toMatchObject({ counted: true, status: "nofollow_live" });
-    expect(live?.host?.domain.endsWith(".example")).toBe(true);
-    expect(parked?.ticket?.reason).toBe("captcha_unsolved");
-    expect(sample.current.status).toBe("succeeded");
-    expect(sample.steps).toHaveLength(18);
+    expect(stepped).toEqual([1, 1, 0, 0, 0]);
+    expect(sample.steps.map((step) => step.lastAction)).toEqual([
+      "Found forum gutefrage.net",
+      "Found Vitamin D im Winter?",
+    ]);
+    expect(sample.steps.every((step) => step.kind === "research")).toBe(true);
+    expect(sample.steps.every((step) => step.host === undefined)).toBe(true);
+    expect(sample.steps.every((step) => step.placement === undefined)).toBe(true);
+    expect(
+      sample.steps.every((step) => step.captcha === undefined && step.ticket === undefined),
+    ).toBe(true);
+    expect(JSON.stringify(sample.steps)).not.toContain(".example");
+    expect(JSON.stringify(sample.steps)).not.toMatch(
+      /Checking Google for on-topic forums|captcha|solved it|LIVE quota|Parked|Verify/i,
+    );
+    expect(sample.current.status).toBe("running");
+    expect(sample.current.counters).toEqual(run().counters);
     vi.unstubAllGlobals();
+  });
+
+  it("records the problem query once and does not register or place a link", async () => {
+    const magnesium = memoryStore(run("running"));
+    magnesium.current.brandName = "Vitaminexpress";
+    magnesium.current.searchQuery = "Magnesium Krämpfe Forum";
+    expect(await tickLinkBuilderFake(magnesium, now)).toBe(1);
+    expect(await tickLinkBuilderFake(magnesium, now)).toBe(0);
+    expect(magnesium.steps.map((step) => step.lastAction)).toEqual([
+      "Searched Google.de for Magnesium Krämpfe Forum",
+    ]);
+    expect(magnesium.steps.every((step) => step.host === undefined)).toBe(true);
+    expect(magnesium.steps.every((step) => step.placement === undefined)).toBe(true);
+    expect(JSON.stringify(magnesium.steps)).not.toMatch(/vitaminexpress|kaufen|register/i);
+    const shop = memoryStore(run("running"));
+    shop.current.brandName = "Vitaminexpress";
+    shop.current.searchQuery = "Vitaminexpress Magnesium kaufen forum";
+    expect(await tickLinkBuilderFake(shop, now)).toBe(0);
+    expect(shop.steps).toEqual([]);
   });
 });

@@ -46,8 +46,8 @@ describe("pacing", () => {
     );
   });
 
-  it("caps registrations at one per host per local day and idles between hosts", () => {
-    expect(MAX_REGISTRATIONS_PER_HOST_PER_DAY).toBe(1);
+  it("allows three retries on a host the same day and idles between hosts", () => {
+    expect(MAX_REGISTRATIONS_PER_HOST_PER_DAY).toBe(4);
     expect(HUMAN_PACING.maxActionsPerMinute).toBeLessThanOrEqual(PACING_LIMITS.maxActionsPerMinute);
     expect(HOST_IDLE_GAP.minMs).toBeGreaterThan(0);
     expect(HOST_IDLE_GAP.maxMs).toBeGreaterThanOrEqual(HOST_IDLE_GAP.minMs);
@@ -58,6 +58,13 @@ describe("pacing", () => {
     const nextMorning = new Date("2026-10-06T10:00:00.000Z");
     expect(
       canRegisterHost({ priorRegistrationAts: [morning], now: evening, timeZone: "UTC" }),
+    ).toBe(true);
+    expect(
+      canRegisterHost({
+        priorRegistrationAts: [morning, morning, morning, morning],
+        now: evening,
+        timeZone: "UTC",
+      }),
     ).toBe(false);
     expect(
       canRegisterHost({ priorRegistrationAts: [morning], now: nextMorning, timeZone: "UTC" }),

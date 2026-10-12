@@ -47,6 +47,14 @@ import { cors } from "hono/cors";
 import { createAgentMailInbox, listAgentMailInboxes } from "./agentmail.js";
 import { type AppEnv, loadEnv } from "./env.js";
 import { ingestInboundMail, verifyInboundMailSignature } from "./link-builder-mail.js";
+import {
+  anonymousRateKey,
+  LINK_BUILDER_POLL_RATE_LIMIT,
+  LINK_BUILDER_RATE_LIMIT,
+  LINK_BUILDER_RATE_WINDOW_MS,
+  takeLinkBuilderRequest,
+  WorkspaceRateLimiter,
+} from "./link-builder-rate-limit.js";
 import { createRouter } from "./router.js";
 import { mountVoiceHttpRoutes } from "./voice.js";
 
@@ -275,6 +283,10 @@ export async function createApp(
     },
   });
   const rpc = new RPCHandler(router);
+  const linkBuilderLimiters = {
+    page: new WorkspaceRateLimiter(LINK_BUILDER_RATE_LIMIT, LINK_BUILDER_RATE_WINDOW_MS),
+    poll: new WorkspaceRateLimiter(LINK_BUILDER_POLL_RATE_LIMIT, LINK_BUILDER_RATE_WINDOW_MS),
+  };
   const app = new Hono();
   app.use(
     "*",
@@ -298,6 +310,16 @@ export async function createApp(
     const actor = session?.user
       ? await requireMembership(prisma, session.user.id).catch(() => null)
       : null;
+    const decision = takeLinkBuilderRequest(linkBuilderLimiters, {
+      pathname: new URL(c.req.url).pathname,
+      member: Boolean(actor),
+      clientKey: anonymousRateKey(c.req.header("x-forwarded-for"), c.req.header("x-real-ip")),
+    });
+    if (!decision.ok) {
+      return c.json({ error: "Too many requests" }, 429, {
+        "retry-after": String(Math.ceil(decision.retryAfterMs / 1000)),
+      });
+    }
     const { matched, response } = await rpc.handle(c.req.raw, {
       prefix: "/rpc",
       context: { actor, signal: c.req.raw.signal },
@@ -309,6 +331,54 @@ export async function createApp(
     const session = await auth.api.getSession({ headers: sessionHeaders(c.req.raw) });
     if (!session?.user) return null;
     return requireMembership(prisma, session.user.id).catch(() => null);
+  });
+  app.post("/api/link-builder/resend", async (c) => {
+    const secret = process.env.RESEND_WEBHOOK_SECRET;
+    const apiKey = process.env.RESEND_API_KEY;
+    const raw = await c.req.text();
+    const { verifyResendSignature, parseResendReceivedEvent } = await import("@rakazo/adapters");
+    const ok = secret
+      ? verifyResendSignature(secret, raw, {
+          id: c.req.header("svix-id") ?? null,
+          timestamp: c.req.header("svix-timestamp") ?? null,
+          signature: c.req.header("svix-signature") ?? null,
+        })
+      : false;
+    if (!ok || !apiKey) return c.json({ error: "invalid signature" }, 401);
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return c.json({ ok: true, stored: false });
+    }
+    const event = parseResendReceivedEvent(body);
+    if (!event) return c.json({ ok: true, stored: false });
+    const response = await fetch(`https://api.resend.com/emails/receiving/${event.emailId}`, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+    });
+    if (!response.ok) return c.json({ error: "mail unavailable" }, 502);
+    const received = (await response.json()) as {
+      from?: string;
+      to?: string[];
+      subject?: string;
+      text?: string;
+      html?: string;
+      created_at?: string;
+    };
+    const to = received.to?.[0] ?? event.to[0];
+    if (!to) return c.json({ ok: true, stored: false });
+    const { ingestResendMail } = await import("./link-builder-mail.js");
+    return c.json(
+      await ingestResendMail(prisma, {
+        to,
+        from: received.from ?? "unknown",
+        subject: received.subject ?? "",
+        text: received.text ?? "",
+        html: received.html,
+        receivedAt: received.created_at ?? new Date().toISOString(),
+        eventId: event.emailId,
+      }),
+    );
   });
   app.post("/api/link-builder/mail", async (c) => {
     const secret = process.env.AGENTMAIL_WEBHOOK_SECRET;

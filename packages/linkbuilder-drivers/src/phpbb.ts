@@ -1,4 +1,5 @@
 import type { BrowserSession } from "@rakazo/adapter-kit";
+import { acceptCookieWall } from "./cookie-wall.js";
 import type {
   ActivationResult,
   BoardAccount,
@@ -11,6 +12,7 @@ import type {
   RegistrationResult,
   ReplyResult,
 } from "./driver.js";
+import { captchaRejected } from "./messages.js";
 import { detectWidget } from "./widgets.js";
 
 /*
@@ -30,6 +32,9 @@ export const PHPBB_SELECTORS = {
   captchaAnswer: "#confirm_code",
   questionText: "#qa_answer",
   registerSubmit: "form#register #submit, form#register input[name='submit']",
+  privacyCheckbox: "form#register input[type='checkbox'][name='agreed']",
+  privacyLabel: "form#register label[for='agreed']",
+  privacyYes: "form#register input[type='radio'][name='privacy'][value='1']",
   loginForm: "form#login",
   loginUsername: "form#login #username",
   loginPassword: "form#login #password",
@@ -46,13 +51,11 @@ export const PHPBB_SELECTORS = {
 } as const;
 
 const PENDING_EMAIL =
-  /activation key has been sent|check your e-?mail|aktivierungsschlüssel .* gesendet|e-?mail.*(aktivier|bestätig)/i;
+  /activation key has been sent|check your e-?mail|aktivierungs-?schlüssel|freischalten|e-?mail.*(aktivier|bestätig)|benutzer ist momentan inaktiv/i;
 const PENDING_ADMIN =
-  /administrator (must|will) (activate|approve)|activation by an administrator|vom administrator (freigeschaltet|aktiviert)/i;
+  /administrator (must|will) (activate|approve)|activation by an administrator|(?:vom|von einem|durch einen) administrator (freigeschaltet|aktiviert)/i;
 const ACTIVE =
   /account has (now )?been (created|activated|registered)|you (may|can) now (log ?in|login)|registrierung (war|ist) erfolgreich|konto wurde (aktiviert|erstellt)/i;
-const CAPTCHA_REJECTED =
-  /confirmation code you entered was incorrect|solution you provided was incorrect|bestätigungscode .* (falsch|nicht korrekt)/i;
 const REGISTRATION_CLOSED =
   /registration (is )?(disabled|closed)|registrierung (ist )?deaktiviert/i;
 const POSTED = /posted successfully|erfolgreich (erstellt|gespeichert|eingetragen)/i;
@@ -69,6 +72,17 @@ function absolute(href: string, base: string): string {
   return new URL(href, base).href;
 }
 
+/** Topic URL without the session id, so the same thread is one candidate across searches. */
+export function phpbbTopicUrl(href: string, base: string): string {
+  const url = new URL(href, base);
+  const id = url.searchParams.get("t");
+  if (id && /^\d+$/.test(id)) return `${boardRoot(url.href)}viewtopic.php?t=${id}`;
+  url.hash = "";
+  url.searchParams.delete("sid");
+  url.searchParams.delete("hilit");
+  return url.href;
+}
+
 /** Canonical post permalink `viewtopic.php?p=<id>#p<id>`, or null when the URL has no post id. */
 export function phpbbPermalink(url: string): string | null {
   const parsed = new URL(url);
@@ -76,6 +90,44 @@ export function phpbbPermalink(url: string): string | null {
   if (!id || !/^\d+$/.test(id)) return null;
   const root = boardRoot(parsed.href);
   return `${root}viewtopic.php?p=${id}#p${id}`;
+}
+
+/**
+ * Stock phpBB uses an `agreed` checkbox. Some German boards use Ja/Nein radios named
+ * `privacy`, and the form is submitted with Nein selected until Ja is chosen.
+ */
+async function acceptPrivacyPolicy(session: BrowserSession): Promise<void> {
+  const yes = PHPBB_SELECTORS.privacyYes;
+  if (await session.exists(yes)) {
+    if (!session.isChecked || !(await session.isChecked(yes))) await session.click(yes);
+    return;
+  }
+  const box = PHPBB_SELECTORS.privacyCheckbox;
+  if (!(await session.exists(box))) return;
+  if (session.isChecked && (await session.isChecked(box))) return;
+  const label = PHPBB_SELECTORS.privacyLabel;
+  const target =
+    session.isVisible && !(await session.isVisible(box)) && (await session.exists(label))
+      ? label
+      : box;
+  await session.click(target);
+}
+
+async function readTopicRows(session: BrowserSession, limit: number): Promise<BoardThread[]> {
+  const threads: BoardThread[] = [];
+  for (let index = 1; index <= limit; index += 1) {
+    const selector = `ul.topics li.row:nth-of-type(${index}) ${PHPBB_SELECTORS.topicLink}`;
+    const topicHref = await session.attribute(selector, "href");
+    if (topicHref === null) break;
+    const title = (await session.text(selector)) ?? "";
+    const replies = await session.text(`ul.topics li.row:nth-of-type(${index}) dd.posts`);
+    threads.push({
+      url: phpbbTopicUrl(topicHref, await session.url()),
+      title,
+      replyCount: replies ? Number.parseInt(replies, 10) || 0 : undefined,
+    });
+  }
+  return threads;
 }
 
 async function collect(
@@ -121,6 +173,7 @@ export class PhpbbDriver implements BoardDriver {
     await session.fill(PHPBB_SELECTORS.email, account.email);
     await session.fill(PHPBB_SELECTORS.password, account.password, { secret: true });
     await session.fill(PHPBB_SELECTORS.passwordConfirm, account.password, { secret: true });
+    await acceptPrivacyPolicy(session);
   }
 
   async detectCaptcha(session: BrowserSession): Promise<CaptchaChallenge> {
@@ -156,7 +209,7 @@ export class PhpbbDriver implements BoardDriver {
     }
     const messages = await this.pageMessages(session);
     const text = messages.join("\n");
-    if (CAPTCHA_REJECTED.test(text)) return { kind: "captcha_rejected" };
+    if (captchaRejected(text)) return { kind: "captcha_rejected" };
     if (PENDING_ADMIN.test(text)) return { kind: "pending_admin" };
     if (PENDING_EMAIL.test(text)) return { kind: "pending_email" };
     if (ACTIVE.test(text)) return { kind: "active" };
@@ -172,6 +225,7 @@ export class PhpbbDriver implements BoardDriver {
   }
 
   async isLoggedIn(session: BrowserSession): Promise<boolean> {
+    if (await session.exists(PHPBB_SELECTORS.loginForm)) return false;
     return session.exists(PHPBB_SELECTORS.logoutLink);
   }
 
@@ -181,6 +235,7 @@ export class PhpbbDriver implements BoardDriver {
     account: Pick<BoardAccount, "username" | "password">,
   ): Promise<boolean> {
     await session.goto(`${boardRoot(homepageUrl)}ucp.php?mode=login`);
+    await acceptCookieWall(session);
     if (await this.isLoggedIn(session)) return true;
     if (!(await session.waitFor(PHPBB_SELECTORS.loginForm, { timeoutMs: 10_000 }))) return false;
     await session.fill(PHPBB_SELECTORS.loginUsername, account.username);
@@ -198,33 +253,49 @@ export class PhpbbDriver implements BoardDriver {
       (selector) => session.attribute(selector, "href"),
     );
     const threads: BoardThread[] = [];
-    for (const href of forumHrefs.slice(0, 3)) {
+    for (const href of forumHrefs.slice(0, 2)) {
       await session.goto(absolute(href, root));
-      for (let index = 1; index <= 25; index += 1) {
-        const selector = `ul.topics li.row:nth-of-type(${index}) ${PHPBB_SELECTORS.topicLink}`;
-        const topicHref = await session.attribute(selector, "href");
-        if (topicHref === null) break;
-        const title = (await session.text(selector)) ?? "";
-        const replies = await session.text(`ul.topics li.row:nth-of-type(${index}) dd.posts`);
-        threads.push({
-          url: absolute(topicHref, await session.url()),
-          title,
-          replyCount: replies ? Number.parseInt(replies, 10) || 0 : undefined,
-        });
-      }
+      threads.push(...(await readTopicRows(session, 8)));
     }
     return threads;
   }
 
+  async searchThreads(
+    session: BrowserSession,
+    homepageUrl: string,
+    query: string,
+  ): Promise<BoardThread[]> {
+    const keywords = query.trim();
+    if (!keywords) return [];
+    const root = boardRoot(homepageUrl);
+    await session.goto(
+      `${root}search.php?keywords=${encodeURIComponent(keywords)}&sr=topics&sk=t&sd=d`,
+    );
+    return readTopicRows(session, 8);
+  }
+
   async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {
     await session.goto(thread.url);
+    await acceptCookieWall(session);
+    if (await this.replyNeedsLogin(session)) return false;
     const href = await session.attribute(PHPBB_SELECTORS.replyLink, "href");
     if (!href) return false;
     await session.goto(absolute(href, await session.url()));
+    if (await this.replyNeedsLogin(session)) return false;
     return session.waitFor(PHPBB_SELECTORS.replyMessage, { timeoutMs: 10_000 });
   }
 
+  /** phpBB shows the login form instead of the editor when the session cannot reply. */
+  private async replyNeedsLogin(session: BrowserSession): Promise<boolean> {
+    if (!(await session.exists(PHPBB_SELECTORS.loginForm))) return false;
+    return !(await session.exists(PHPBB_SELECTORS.replyMessage));
+  }
+
   async fillReply(session: BrowserSession, body: string): Promise<void> {
+    const rules = "form#postform input[type='checkbox']";
+    if (await session.exists(rules)) {
+      if (!session.isChecked || !(await session.isChecked(rules))) await session.click(rules);
+    }
     await session.fill(PHPBB_SELECTORS.replyMessage, body);
   }
 

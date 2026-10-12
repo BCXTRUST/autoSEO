@@ -74,6 +74,50 @@ export function agentMailLiveClient(
       const inboxId = String(body.inbox_id ?? body.inboxId ?? "");
       return { inboxId, email: String(body.email ?? inboxId) };
     },
+    async listMessages(inboxId) {
+      const load = () =>
+        fetchImpl(
+          `https://api.agentmail.to/v0/inboxes/${encodeURIComponent(inboxId)}/messages?limit=20&include_spam=true`,
+          { headers },
+        );
+      let listed = await load();
+      if (!listed.ok) listed = await load();
+      if (!listed.ok) throw new Error(`AgentMail HTTP ${listed.status}`);
+      const page = (await listed.json()) as {
+        messages?: Array<{ message_id?: string; messageId?: string }>;
+      };
+      const mails: InboundMail[] = [];
+      for (const item of page.messages ?? []) {
+        const messageId = item.message_id ?? item.messageId;
+        if (!messageId) continue;
+        const response = await fetchImpl(
+          `https://api.agentmail.to/v0/inboxes/${encodeURIComponent(inboxId)}/messages/${encodeURIComponent(messageId)}`,
+          { headers },
+        );
+        if (!response.ok) throw new Error(`AgentMail HTTP ${response.status}`);
+        mails.push(inboundMail(inboxId, (await response.json()) as Record<string, unknown>));
+      }
+      return mails;
+    },
+  };
+}
+
+function stringField(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function inboundMail(inboxId: string, message: Record<string, unknown>): InboundMail {
+  const received = stringField(message.timestamp) || new Date(0).toISOString();
+  return {
+    inboxId,
+    from: stringField(message.from) || "unknown",
+    subject: stringField(message.subject),
+    textBody:
+      stringField(message.text) ||
+      stringField(message.extracted_text) ||
+      stringField(message.preview),
+    htmlBody: stringField(message.html) || stringField(message.extracted_html) || undefined,
+    receivedAt: received,
   };
 }
 

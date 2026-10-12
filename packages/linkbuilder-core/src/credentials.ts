@@ -68,3 +68,12 @@ export function generateForumUsername(
   const name = `${trimmed.length >= 1 ? trimmed : "member"}${suffix}`;
   return name.length >= 3 ? name : `member${suffix}`;
 }
+
+/**
+ * A board that rejects punctuation gets the same name with only letters and digits.
+ * Strict XenForo rules are often 15 characters and no underscore.
+ */
+export function simplifyForumUsername(username: string): string {
+  const plain = username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 15);
+  return plain.length >= 3 ? plain : username;
+}

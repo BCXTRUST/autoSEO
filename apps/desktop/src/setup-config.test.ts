@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LOCAL_WEB_URL,
-  isRakazoHealth,
+  isAutoSEOHealth,
   normalizeServerUrl,
   parseSetupInput,
   parseStoredSetup,
@@ -46,12 +46,12 @@ describe("server address normalization", () => {
     expect(normalizeServerUrl("http://169.254.169.254")).toBeNull();
     expect(normalizeServerUrl("http://169.254.1.1:80")).toBeNull();
     expect(normalizeServerUrl("http://[fe80::1]:3100")).toBeNull();
-    // HTTPS to link-local still normalizes; the health probe must match Rakazo.
+    // HTTPS to link-local still normalizes; the health probe must match autoSEO.
     expect(normalizeServerUrl("https://169.254.169.254")).toBe("https://169.254.169.254");
   });
 
   it.each(["", "   ", "not a url", "ftp://example.com", "file:///etc/passwd", "http://"])(
-    "rejects an address that cannot reach a Rakazo server (%s)",
+    "rejects an address that cannot reach an autoSEO server (%s)",
     (value) => {
       expect(normalizeServerUrl(value)).toBeNull();
     },
@@ -169,11 +169,11 @@ describe("remote-content isolation", () => {
   });
 });
 
-describe("Rakazo health response", () => {
+describe("autoSEO health response", () => {
   it("requires the public RPC health contract", () => {
-    expect(isRakazoHealth({ json: { ok: true, version: "0.1.0" } })).toBe(true);
-    expect(isRakazoHealth({ json: { ok: true } })).toBe(false);
-    expect(isRakazoHealth({ ok: true, version: "0.1.0" })).toBe(false);
+    expect(isAutoSEOHealth({ json: { ok: true, version: "0.1.0" } })).toBe(true);
+    expect(isAutoSEOHealth({ json: { ok: true } })).toBe(false);
+    expect(isAutoSEOHealth({ ok: true, version: "0.1.0" })).toBe(false);
   });
 });
 

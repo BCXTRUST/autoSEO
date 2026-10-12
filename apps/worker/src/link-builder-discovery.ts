@@ -9,6 +9,7 @@ import type { PrismaClient } from "@rakazo/db";
 import {
   discoverHosts,
   discoveryDue,
+  isMailSendFailure,
   localDateKey,
   marketKey,
   registrableDomain,
@@ -147,6 +148,7 @@ export async function discoverDueProjects(input: {
           });
       found += host.status === "qualified" ? 1 : 0;
       for (const thread of host.facts.threads) {
+        if (isMailSendFailure(thread.title)) continue;
         await input.prisma.lbThreadCandidate.upsert({
           where: { hostId_url: { hostId: row.id, url: thread.url } },
           create: {

@@ -4,6 +4,7 @@ import { FakeProxyProvider } from "@rakazo/adapter-kit";
 import { EncryptedSecretStore } from "@rakazo/adapters";
 import {
   createLbProject,
+  grantExplicitProjectAllowance,
   startLbProject,
   summarizeLbCosts,
   updateLbProject,
@@ -67,6 +68,7 @@ describe("link builder week", () => {
       data: { id: actor.workspaceId, name: "Week", slug: "week", createdAt: new Date() },
     });
     await db.prisma.user.create({ data: { id: actor.userId, name: "Owner", email: actor.email } });
+    await grantExplicitProjectAllowance(db.prisma, actor.workspaceId);
     const deps = { prisma: db.prisma, secrets };
     const created = await createLbProject(deps as never, actor, {
       name: "Nordlicht",
@@ -229,6 +231,7 @@ describe("link builder week", () => {
       },
       allowPrivateVerify: true,
       webhookFetch: async (_url, init) => {
+        expect(init?.redirect).toBe("error");
         const headers = new Headers(init?.headers);
         const body = String(init?.body ?? "");
         const pause = body.includes('"kind":"project.paused"');
@@ -237,12 +240,13 @@ describe("link builder week", () => {
         const status = fail ? 500 : 200;
         deliveries.push({
           body,
-          signature: headers.get("X-Rakazo-Signature") ?? "",
+          signature: headers.get("X-autoSEO-Signature") ?? "",
           status,
         });
         return new Response(fail ? "no" : "ok", { status });
       },
       productionWebhooks: true,
+      resolveHostname: async () => [{ address: "203.0.113.10" }],
       now: () => clock,
       workerId: "week-worker",
     });
@@ -353,7 +357,7 @@ describe("link builder week", () => {
     expect(mondayClosed.status).toBe("succeeded");
     expect(mondayClosed.whyNot).toMatchObject({
       supply: { qualified: 0, ready: 0 },
-      parked: 1,
+      parked: 0,
       spamBlocked: 0,
       proxy: "ok",
       captchaBalance: 5000,
@@ -365,7 +369,7 @@ describe("link builder week", () => {
     expect(still).toHaveLength(2);
     await at("2026-10-06T08:00:00.000Z");
     const ticket = await db.prisma.lbOperatorTicket.findFirstOrThrow({ where: { projectId } });
-    expect(ticket.status).toBe("expired");
+    expect(ticket.status).toBe("skipped");
     const parkedHost = await db.prisma.lbHost.findFirstOrThrow({
       where: { projectId, registrableDomain: "parked.example" },
     });

@@ -64,6 +64,44 @@ export async function ingestInboundMail(
   return { ok: true, projectId: project.id, stored: true, link };
 }
 
+/** Stores one Resend inbound message on the project whose mailbox address matches `to`. */
+export async function ingestResendMail(
+  prisma: PrismaClient,
+  mail: {
+    to: string;
+    from: string;
+    subject: string;
+    text: string;
+    html?: string;
+    receivedAt: string;
+    eventId: string;
+  },
+): Promise<{ ok: true; projectId: string | null; stored: boolean }> {
+  const project = await prisma.lbProject.findFirst({
+    where: { mailboxAddress: mail.to, archivedAt: null },
+  });
+  if (!project) return { ok: true, projectId: null, stored: false };
+  try {
+    await prisma.lbInboundMail.create({
+      data: {
+        workspaceId: project.workspaceId,
+        projectId: project.id,
+        inboxId: mail.to,
+        eventId: mail.eventId,
+        fromAddress: mail.from,
+        subject: mail.subject,
+        textBody: mail.text,
+        htmlBody: mail.html ?? null,
+        receivedAt: new Date(mail.receivedAt),
+      },
+    });
+  } catch (error) {
+    if (!isUnique(error)) throw error;
+    return { ok: true, projectId: project.id, stored: false };
+  }
+  return { ok: true, projectId: project.id, stored: true };
+}
+
 function isUnique(error: unknown): boolean {
   return (
     typeof error === "object" &&

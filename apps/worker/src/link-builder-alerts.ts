@@ -5,6 +5,7 @@ import type { PrismaClient } from "@rakazo/db";
 import {
   type AlertEvent,
   type AlertSink,
+  type HostnameResolver,
   webhookNextAttempt,
   webhookSignatureHeader,
   webhookUrlAllowed,
@@ -18,6 +19,7 @@ export function createAlertSink(deps: {
   notifications?: NotificationProvider;
   now: Date;
   productionWebhooks: boolean;
+  resolveHostname?: HostnameResolver;
 }): AlertSink {
   return {
     async emit(event) {
@@ -50,6 +52,7 @@ async function notify(
     notifications?: NotificationProvider;
     now: Date;
     productionWebhooks: boolean;
+    resolveHostname?: HostnameResolver;
   },
   event: AlertEvent,
   alertId: string,
@@ -85,7 +88,10 @@ async function notify(
       .catch(() => undefined);
   }
   if (!project.webhookUrl || !project.webhookSecretId) return;
-  const allowed = webhookUrlAllowed(project.webhookUrl, { production: deps.productionWebhooks });
+  const allowed = await webhookUrlAllowed(project.webhookUrl, {
+    production: deps.productionWebhooks,
+    resolve: deps.productionWebhooks ? deps.resolveHostname : undefined,
+  });
   const next = webhookNextAttempt(0, deps.now);
   await deps.prisma.lbWebhookDelivery.create({
     data: {
@@ -106,6 +112,7 @@ export async function deliverDueWebhooks(deps: {
   now: Date;
   fetchImpl?: typeof fetch;
   productionWebhooks: boolean;
+  resolveHostname?: HostnameResolver;
 }): Promise<number> {
   const due = await deps.prisma.lbWebhookDelivery.findMany({
     where: { status: "pending", nextAttemptAt: { lte: deps.now } },
@@ -118,7 +125,10 @@ export async function deliverDueWebhooks(deps: {
     const url = row.project.webhookUrl;
     const secretId = row.project.webhookSecretId;
     const allowed = url
-      ? webhookUrlAllowed(url, { production: deps.productionWebhooks })
+      ? await webhookUrlAllowed(url, {
+          production: deps.productionWebhooks,
+          resolve: deps.productionWebhooks ? deps.resolveHostname : undefined,
+        })
       : { ok: false as const, reason: "missing" };
     if (!url || !secretId || !allowed.ok) {
       await deps.prisma.lbWebhookDelivery.update({
@@ -158,9 +168,10 @@ export async function deliverDueWebhooks(deps: {
     try {
       const response = await (deps.fetchImpl ?? fetch)(url, {
         method: "POST",
+        redirect: "error",
         headers: {
           "content-type": "application/json",
-          "X-Rakazo-Signature": header,
+          "X-autoSEO-Signature": header,
         },
         body,
         signal: AbortSignal.timeout(10_000),

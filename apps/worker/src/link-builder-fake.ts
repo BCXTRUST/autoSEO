@@ -9,8 +9,14 @@ import {
 import { Prisma, type PrismaClient } from "@rakazo/db";
 import {
   type FakeStepPlan,
+  isCustomerStageKind,
+  isExampleRegistrableDomain,
+  isFixtureHostDomain,
   linkBuilderTopic,
   planFakeStep,
+  primaryProblemQueryFromProject,
+  type RunCounters,
+  researchResultName,
   transitionRun,
 } from "@rakazo/linkbuilder-core";
 
@@ -29,6 +35,12 @@ export interface FakeRunRecord {
   workspaceId: string;
   status: LbRunStatus;
   stepCount: number;
+  researchBeats: number;
+  stageBeats: number;
+  previousAction: string | null;
+  forumName: string | null;
+  threadName: string | null;
+  counters: RunCounters;
   seed: string;
   brandName: string;
   targetUrl: string;
@@ -36,6 +48,7 @@ export interface FakeRunRecord {
   quotas: { livePerDay: number; liveWeekCap?: number };
   countNofollow: boolean;
   lowBalanceCredits: number;
+  searchQuery: string | null;
 }
 
 export interface LinkBuilderFakeStore {
@@ -53,16 +66,30 @@ export async function tickLinkBuilderFake(store: LinkBuilderFakeStore, now: Date
       const plan = planFakeStep({
         seed: run.seed,
         stepIndex: run.stepCount,
+        researchBeats: run.researchBeats,
+        stageBeats: run.stageBeats,
+        previousAction: run.previousAction,
+        forumName: run.forumName,
+        threadName: run.threadName,
+        counters: run.counters,
         now,
         markets: run.markets,
         brandName: run.brandName,
         targetUrl: run.targetUrl,
+        searchQuery: run.searchQuery,
         quotas: run.quotas,
         countNofollow: run.countNofollow,
         lowBalanceCredits: run.lowBalanceCredits,
       });
-      if (plan.done) {
+      if ("hold" in plan) continue;
+      if (!("kind" in plan)) {
         await store.finishIfOpen(run);
+        continue;
+      }
+      if (
+        plan.host &&
+        (isFixtureHostDomain(plan.host.domain) || isExampleRegistrableDomain(plan.host.domain))
+      ) {
         continue;
       }
       const runStatus =
@@ -120,7 +147,27 @@ export function createPrismaFakeStore(
     async runnable() {
       const runs = await prisma.lbRun.findMany({
         where: { status: { in: ["queued", "running", "overtime"] }, project: { status: "active" } },
-        include: { project: true, _count: { select: { steps: true } } },
+        include: {
+          project: {
+            include: {
+              hosts: {
+                select: { registrableDomain: true },
+                orderBy: { createdAt: "desc" },
+                take: 8,
+              },
+              threadCandidates: {
+                select: {
+                  title: true,
+                  host: { select: { registrableDomain: true } },
+                },
+                orderBy: { createdAt: "desc" },
+                take: 8,
+              },
+            },
+          },
+          _count: { select: { steps: true } },
+          steps: { select: { kind: true, stepIndex: true, outcome: true } },
+        },
       });
       const records: FakeRunRecord[] = [];
       for (const run of runs) {
@@ -237,15 +284,24 @@ function mapRun(run: {
   workspaceId: string;
   status: string;
   _count: { steps: number };
+  steps: { kind: string; stepIndex: number; outcome: unknown }[];
+  newToday: number;
+  liveToday: number;
+  liveWeek: number;
+  uniqueHosts: number;
   project: {
     id: string;
+    name: string;
     brandName: string;
     allowedDomains: string[];
     markets: unknown;
     quotas: unknown;
+    topicLanes: unknown;
     targets: unknown;
     countNofollow: boolean;
     captchaLowBalanceCredits: number;
+    hosts?: { registrableDomain: string }[];
+    threadCandidates?: { title: string; host?: { registrableDomain: string } | null }[];
   };
 }): FakeRunRecord | null {
   const status = LbRunStatusSchema.safeParse(run.status);
@@ -260,14 +316,53 @@ function mapRun(run: {
     workspaceId: run.workspaceId,
     status: status.data,
     stepCount: run._count.steps,
+    researchBeats: run.steps.filter((step) => step.kind === "research").length,
+    stageBeats: run.steps.filter((step) => isCustomerStageKind(step.kind)).length,
+    previousAction: latestAction(run.steps),
+    forumName: firstRealName((run.project.hosts ?? []).map((host) => host.registrableDomain)),
+    threadName: firstRealName(
+      (run.project.threadCandidates ?? [])
+        .filter((thread) => researchResultName(thread.host?.registrableDomain ?? "") !== null)
+        .map((thread) => thread.title),
+    ),
+    counters: {
+      newToday: run.newToday,
+      liveToday: run.liveToday,
+      liveWeek: run.liveWeek,
+      uniqueHosts: run.uniqueHosts,
+    },
     seed: run.project.id,
     brandName: run.project.brandName,
     targetUrl: targets[0]?.url ?? `https://${domain}/`,
+    searchQuery: primaryProblemQueryFromProject({
+      name: run.project.name,
+      brandName: run.project.brandName,
+      topicLanes: run.project.topicLanes,
+      targets: run.project.targets,
+    }),
     markets: markets.data,
     quotas: { livePerDay: quotas.data.livePerDay, liveWeekCap: quotas.data.liveWeekCap },
     countNofollow: run.project.countNofollow,
     lowBalanceCredits: run.project.captchaLowBalanceCredits,
   };
+}
+
+function latestAction(steps: { stepIndex: number; outcome: unknown }[]): string | null {
+  let latest: { stepIndex: number; outcome: unknown } | undefined;
+  for (const step of steps) {
+    if (!latest || step.stepIndex >= latest.stepIndex) latest = step;
+  }
+  if (!latest?.outcome || typeof latest.outcome !== "object") return null;
+  const value = (latest.outcome as { lastAction?: unknown }).lastAction;
+  return typeof value === "string" ? value : null;
+}
+
+function firstRealName(names: readonly string[]): string | null {
+  for (const name of names) {
+    const real = researchResultName(name);
+    if (real) return real;
+  }
+  return null;
 }
 
 function zTargets(value: unknown): Array<{ url: string }> {
@@ -280,6 +375,7 @@ type Tx = Prisma.TransactionClient;
 async function upsertHost(tx: Tx, run: FakeRunRecord, step: FakeStepPlan) {
   const host = step.host;
   if (!host) return null;
+  if (isFixtureHostDomain(host.domain) || isExampleRegistrableDomain(host.domain)) return null;
   const existing = await tx.lbHost.findFirst({
     where: {
       workspaceId: run.workspaceId,

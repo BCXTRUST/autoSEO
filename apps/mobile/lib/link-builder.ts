@@ -36,6 +36,7 @@ export interface MobileLbCard {
   runStatus: string | null;
   lastEvent: string | null;
   operatorQueue: number;
+  operatorHelp?: { ticketId: string; domain: string; label: string; action: "skip" | "continue" } | null;
 }
 
 export interface MobileLbTicket {
@@ -61,9 +62,15 @@ export function artifactImageUri(artifact: MobileLbArtifact): string | null {
 }
 
 export function projectStatusLine(
-  card: Pick<MobileLbCard, "activityLabel" | "newToday" | "liveToday" | "newPerDay" | "livePerDay">,
+  card: Pick<
+    MobileLbCard,
+    "activityLabel" | "newToday" | "liveToday" | "newPerDay" | "livePerDay"
+  > & { operatorHelp?: { label: string } | null },
 ): string {
-  return `${card.activityLabel} · NEW ${card.newToday}/${card.newPerDay} · LIVE ${card.liveToday}/${card.livePerDay}`;
+  const activity = /^needs operator\b/i.test(card.activityLabel) ? "" : card.activityLabel;
+  const head = card.operatorHelp?.label || activity;
+  const counts = `NEW ${card.newToday}/${card.newPerDay} · LIVE ${card.liveToday}/${card.livePerDay}`;
+  return head ? `${head} · ${counts}` : counts;
 }
 
 export function ticketActionBody(note: string): { note?: string } {
