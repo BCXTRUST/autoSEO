@@ -1,4 +1,5 @@
 import type { BrowserSession, ClickableControl, FormFieldInfo } from "@rakazo/adapter-kit";
+import { isMailSendFailure } from "@rakazo/linkbuilder-core";
 import { detectKnowledgeQuestion, looksLikeKnowledgeQuestion } from "./captcha.js";
 import { acceptCookieWall } from "./cookie-wall.js";
 import type {
@@ -163,7 +164,11 @@ function scoreEmailConfirm(field: FormFieldInfo): number {
 
 function scorePassword(field: FormFieldInfo, kind: "register" | "login"): number {
   if (field.type !== "password") return 0;
-  if (/confirm|repeat|again|match|password2|password-confirm|bestätig|wiederhol|_check\b/.test(blob(field)))
+  if (
+    /confirm|repeat|again|match|password2|password-confirm|bestätig|wiederhol|_check\b/.test(
+      blob(field),
+    )
+  )
     return 0;
   let score = 0;
   if (kind === "register" && field.autocomplete === "new-password") score += 4;
@@ -189,7 +194,9 @@ function scoreBody(field: FormFieldInfo): number {
 
 function scoreConsent(field: FormFieldInfo): number {
   if (field.type !== "checkbox") return 0;
-  return /agree|terms|consent|rules|accept|agb|datenschutz|stimme|bedingungen|regeln/.test(blob(field))
+  return /agree|terms|consent|rules|accept|agb|datenschutz|stimme|bedingungen|regeln/.test(
+    blob(field),
+  )
     ? 3
     : 0;
 }
@@ -1171,7 +1178,7 @@ function anchorsToThreads(
   const threads: BoardThread[] = [];
   for (const item of found) {
     const title = item.text.replace(/\s+/g, " ").trim();
-    if (!title || !item.href) continue;
+    if (!title || !item.href || isMailSendFailure(title)) continue;
     threads.push({
       url: new URL(item.href, base).href,
       title,

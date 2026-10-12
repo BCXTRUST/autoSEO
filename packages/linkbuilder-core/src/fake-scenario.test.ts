@@ -83,6 +83,7 @@ describe("fake scenario", () => {
     expect(foundThreadLine("thread.example")).toBeNull();
     expect(foundForumLine("gutefrage.net")).toBe("Found forum gutefrage.net");
     expect(foundThreadLine("Vitamin D im Winter?")).toBe("Found Vitamin D im Winter?");
+    expect(foundThreadLine("[3.3] Fehler bei E-Mail Versand")).toBeNull();
     expect(
       researchLogLines({ forumName: "gutefrage.net", threadName: "Vitamin D im Winter?" }),
     ).toEqual(["Found forum gutefrage.net", "Found Vitamin D im Winter?"]);

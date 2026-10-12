@@ -75,10 +75,13 @@ export function agentMailLiveClient(
       return { inboxId, email: String(body.email ?? inboxId) };
     },
     async listMessages(inboxId) {
-      const listed = await fetchImpl(
-        `https://api.agentmail.to/v0/inboxes/${encodeURIComponent(inboxId)}/messages?limit=20&include_spam=true`,
-        { headers },
-      );
+      const load = () =>
+        fetchImpl(
+          `https://api.agentmail.to/v0/inboxes/${encodeURIComponent(inboxId)}/messages?limit=20&include_spam=true`,
+          { headers },
+        );
+      let listed = await load();
+      if (!listed.ok) listed = await load();
       if (!listed.ok) throw new Error(`AgentMail HTTP ${listed.status}`);
       const page = (await listed.json()) as {
         messages?: Array<{ message_id?: string; messageId?: string }>;

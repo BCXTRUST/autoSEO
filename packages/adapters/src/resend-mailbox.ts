@@ -33,7 +33,10 @@ export class ResendMailbox implements MailboxProvider {
   }
 
   ensureInbox(projectId: string, _context: AdapterContext): Promise<MailboxInbox> {
-    const local = `lb-${projectId.replace(/[^a-z0-9]/gi, "").slice(0, 24).toLowerCase()}`;
+    const local = `lb-${projectId
+      .replace(/[^a-z0-9]/gi, "")
+      .slice(0, 24)
+      .toLowerCase()}`;
     const address = `${local}@${this.options.domain}`;
     return Promise.resolve({ inboxId: address, address });
   }
@@ -66,16 +69,23 @@ export class ResendMailbox implements MailboxProvider {
       Accept: "application/json",
       "User-Agent": "autoSEO-mail",
     };
-    const listed = await fetchImpl("https://api.resend.com/emails/receiving", { headers });
+    let listed = await fetchImpl("https://api.resend.com/emails/receiving", { headers });
+    if (!listed.ok) {
+      listed = await fetchImpl("https://api.resend.com/emails/receiving", { headers });
+    }
     if (!listed.ok) return [];
     const body = (await listed.json()) as { data?: Array<{ id?: string; to?: string[] }> };
     const ids = (body.data ?? [])
-      .filter((row) => (row.to ?? []).some((address) => address.toLowerCase() === inboxId.toLowerCase()))
+      .filter((row) =>
+        (row.to ?? []).some((address) => address.toLowerCase() === inboxId.toLowerCase()),
+      )
       .map((row) => row.id)
       .filter((id): id is string => Boolean(id));
     const mails: InboundMail[] = [];
     for (const id of ids) {
-      const response = await fetchImpl(`https://api.resend.com/emails/receiving/${id}`, { headers });
+      const response = await fetchImpl(`https://api.resend.com/emails/receiving/${id}`, {
+        headers,
+      });
       if (!response.ok) continue;
       const message = (await response.json()) as {
         from?: string;

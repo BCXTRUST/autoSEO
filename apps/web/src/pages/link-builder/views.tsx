@@ -13,6 +13,7 @@ import type {
 import {
   FIXTURE_DEMO_SLUG,
   formatPackagePrice,
+  isMailSendFailure,
   mentionsExampleDomain,
   mentionsFixtureHost,
   primaryProblemQueryFromProject,
@@ -711,8 +712,8 @@ function Dashboard({
     project.slug,
   );
   const forums = hosts.filter((host) => showHostToCustomer(host.registrableDomain, project.slug));
-  const visibleThreads = threads.filter((thread) =>
-    showHostToCustomer(thread.domain, project.slug),
+  const visibleThreads = threads.filter(
+    (thread) => showHostToCustomer(thread.domain, project.slug) && !isMailSendFailure(thread.title),
   );
   const visibleDrafts = drafts.filter((draft) => customerDraft(draft, hideExampleCopy));
   const draftBodies = new Set(visibleDrafts.map((draft) => draft.body.trim()));
@@ -841,8 +842,8 @@ function DetailsView({
 }) {
   const hideExampleCopy = project.slug !== FIXTURE_DEMO_SLUG;
   const forums = hosts.filter((host) => showHostToCustomer(host.registrableDomain, project.slug));
-  const visibleThreads = threads.filter((thread) =>
-    showHostToCustomer(thread.domain, project.slug),
+  const visibleThreads = threads.filter(
+    (thread) => showHostToCustomer(thread.domain, project.slug) && !isMailSendFailure(thread.title),
   );
   const visiblePlacements = placements.filter((row) =>
     showHostToCustomer(row.domain, project.slug),
@@ -1043,14 +1044,14 @@ function WorkingScreen({
     >
       <BuiCard className="flex w-fit max-w-md flex-col gap-3 px-4 py-3">
         <p className="text-[13px] text-[#8A8A90]">{WORK_STAGE_LABELS[stage]}</p>
-        {screenError ? (
+        {screenError && !isMailSendFailure(screenError) ? (
           <p className="text-[22px] font-medium leading-none text-[#ECECEE]">{screenError}</p>
         ) : working ? (
           <LoadingState label={label} prominent />
         ) : (
           <p className="text-[22px] font-medium leading-none text-[#ECECEE]">{label}</p>
         )}
-        {screenError ? null : screenPending ? (
+        {screenError && !isMailSendFailure(screenError) ? null : screenPending ? (
           <p className="text-[12px] text-[#6C6C70]">Starting computer</p>
         ) : closed ? (
           <p className="text-[12px] text-[#6C6C70]">
