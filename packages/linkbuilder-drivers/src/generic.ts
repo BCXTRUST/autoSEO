@@ -1187,6 +1187,7 @@ const THREAD_LINK_SELECTORS = [
   "li.thread a.threadTitle",
   "a.topictitle",
   "li.row a.topictitle",
+  "a[href*='thread-']",
 ];
 
 async function collectThreads(session: BrowserSession): Promise<BoardThread[]> {

@@ -466,7 +466,10 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     where: {
       workspaceId: ctx.project.workspaceId,
       projectId: ctx.project.id,
-      status: { in: [...WORKABLE_HOST_ORDER] },
+      OR: [
+        { status: { in: [...WORKABLE_HOST_ORDER] } },
+        { status: "dead", statusReason: "no_open_thread" },
+      ],
     },
     include: { accounts: true, placements: { select: { status: true } } },
   });
@@ -501,6 +504,9 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     }
     if (row.status === "ready") return !row.placements.some((p) => p.status !== "pending");
     if (row.status === "pending_admin") return dueAdmin.has(row.id);
+    if (row.status === "dead") {
+      return row.statusReason === "no_open_thread" && row.accounts.length > 0;
+    }
     return true;
   });
   const eligible = [];
@@ -538,12 +544,15 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
   if (ctx.services.sleep && ctx.host && ctx.host.id !== picked.id) {
     await ctx.services.sleep(pacedDelayMs(HOST_IDLE_GAP, ctx.services.random ?? Math.random));
   }
-  if (picked.id === ctx.host?.id) return { kind: "wait", reason: "same_host" };
+  const retry = picked.status === "dead" && picked.statusReason === "no_open_thread";
+  if (picked.id === ctx.host?.id && !retry) return { kind: "wait", reason: "same_host" };
   const visited = await prisma.lbRunStep.count({ where: { runId: ctx.run.id, hostId: picked.id } });
   const entry = ctx.pool();
   return {
     kind: "step",
-    lastAction: `Working on ${picked.registrableDomain}`,
+    lastAction: retry
+      ? `Looking again on ${picked.registrableDomain}`
+      : `Working on ${picked.registrableDomain}`,
     hostId: picked.id,
     outcome: { hostStatus: picked.status },
     run: {
@@ -551,6 +560,15 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
       currentUrl: picked.homepageUrl,
       counters: recordHostVisited(ctx.run.counters, { firstVisitToday: visited === 0 }),
     },
+    apply: retry
+      ? async (tx) => {
+          const updated = await tx.lbHost.updateMany({
+            where: { id: picked.id, status: "dead", statusReason: "no_open_thread" },
+            data: { status: "ready", statusReason: null },
+          });
+          if (updated.count !== 1) throw new StaleState(`Host ${picked.id} moved during the step`);
+        }
+      : undefined,
     afterCommit: () => {
       if (entry && entry.hostId !== picked.id) {
         Object.assign(entry, {
@@ -2157,14 +2175,17 @@ async function threadsForReply(
 }
 
 const PAGE_ANCHOR_SELECTORS = [
+  "a[href*='thread-']",
   "a[href*='thread']",
   "a[href*='viewtopic']",
   "a[href*='showthread']",
+  "a[href*='forum-']",
   "a[href*='board']",
   "a[href*='viewforum']",
   "a[href*='forum']",
   "a",
 ];
+const FIRST_ANCHOR_SELECTORS = ["a[href*='thread-']", "a[href*='forum-']", "a[href*='viewtopic']"];
 
 async function noteAction(ctx: StepContext, lastAction: string): Promise<void> {
   await ctx.services.prisma.lbRun
@@ -2175,16 +2196,48 @@ async function noteAction(ctx: StepContext, lastAction: string): Promise<void> {
 async function collectPageAnchors(
   session: BrowserSession,
 ): Promise<Array<{ text: string; href: string }>> {
-  if (!session.listAnchors) return [];
   const found: Array<{ text: string; href: string }> = [];
-  for (const selector of PAGE_ANCHOR_SELECTORS) {
-    try {
-      found.push(...(await session.listAnchors(selector)));
-    } catch {
-      // The open runner may not know this read yet.
+  if (session.listAnchors) {
+    for (const selector of PAGE_ANCHOR_SELECTORS) {
+      try {
+        found.push(...(await session.listAnchors(selector)));
+      } catch {
+        // The open runner may not know this read yet.
+      }
     }
   }
+  if (
+    !found.some((link) => /thread-\d+|forum-\d+|viewtopic|viewforum|showthread/i.test(link.href))
+  ) {
+    if (session.clickables) {
+      try {
+        for (const control of await session.clickables()) {
+          if (control.href) found.push({ text: control.text, href: control.href });
+        }
+      } catch {
+        // An older runner may not list clickable links.
+      }
+    }
+    const one = await firstAnchor(session);
+    if (one) found.push(one);
+  }
   return found;
+}
+
+async function firstAnchor(
+  session: BrowserSession,
+): Promise<{ text: string; href: string } | null> {
+  for (const selector of FIRST_ANCHOR_SELECTORS) {
+    try {
+      if (!(await session.exists(selector))) continue;
+      const href = await session.attribute(selector, "href");
+      if (!href) continue;
+      return { text: (await session.text(selector)) ?? "", href };
+    } catch {
+      // Keep looking with the next selector.
+    }
+  }
+  return null;
 }
 
 function topicWords(project: ProjectConfig): string[] {
@@ -2357,7 +2410,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       lastAction: "No thread here, moving on",
       hostId: host.id,
       outcome: { rejected: [] },
-      apply: (tx) => moveHost(tx, host, "failed", { statusReason: "no_open_thread" }),
+      apply: (tx) => moveHost(tx, host, "failed", { statusReason: "no_thread_after_look" }),
     };
   }
   const selectionBudget = found.searched ? 4 : 1;
@@ -2607,7 +2660,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       apply: async (tx) => {
         await upsertRejected(tx);
         if (threads.length === 0)
-          await moveHost(tx, host, "failed", { statusReason: "no_open_thread" });
+          await moveHost(tx, host, "failed", { statusReason: "no_thread_after_look" });
       },
     };
   }

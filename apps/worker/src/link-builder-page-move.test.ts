@@ -35,6 +35,25 @@ describe("page move when rules find no thread", () => {
     expect(boardLink(links, ["excel", "office"])?.text).toBe("Excel");
   });
 
+  it("reads the thread and board links this forum actually uses", () => {
+    const links = usablePageLinks(
+      [
+        { text: "Portal", href: "/" },
+        { text: "Excel", href: "forum-2.html" },
+        {
+          text: "Falsche Darstellung von Datum und Uhrzeit",
+          href: "thread-29336-lastpost.html",
+        },
+      ],
+      page,
+      domain,
+    );
+    expect(threadsFromLinks(links).map((thread) => thread.url)).toEqual([
+      "https://www.office-fragen.de/thread-29336-lastpost.html",
+    ]);
+    expect(boardLink(links, ["excel"])?.url).toBe("https://www.office-fragen.de/forum-2.html");
+  });
+
   it("accepts only an index from the list shown to the model", () => {
     const links = usablePageLinks([{ text: "Excel", href: "/board/12-excel/" }], page, domain);
     expect(chosenLink(links, "open", 0)?.url).toContain("/board/12-excel/");
