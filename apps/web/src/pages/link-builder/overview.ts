@@ -445,6 +445,24 @@ export function overviewFeed(input: {
   return items;
 }
 
+/** Newest check or X first. The live step stays above older rows. */
+export function latestFirst(items: readonly OverviewFeedItem[]): OverviewFeedItem[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      if (left.item.status === "working" && right.item.status !== "working") return -1;
+      if (right.item.status === "working" && left.item.status !== "working") return 1;
+      const leftAt = left.item.at ? Date.parse(left.item.at) : Number.NaN;
+      const rightAt = right.item.at ? Date.parse(right.item.at) : Number.NaN;
+      const leftOk = Number.isFinite(leftAt);
+      const rightOk = Number.isFinite(rightAt);
+      if (leftOk && rightOk && leftAt !== rightAt) return rightAt - leftAt;
+      if (leftOk !== rightOk) return leftOk ? -1 : 1;
+      return right.index - left.index;
+    })
+    .map((row) => row.item);
+}
+
 function formatSpan(minutes: number): string {
   const whole = Math.max(0, Math.round(minutes));
   if (whole < 1) return "under a minute";
