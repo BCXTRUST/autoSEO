@@ -16,8 +16,8 @@ export interface PageLink {
 const UTILITY_TEXT =
   /^(abmelden|logout|log ?out|anmelden|login|sign in|register|registrieren|suche|search|hilfe|help|portal|impressum|datenschutz|privacy|kontakt|contact|home|startseite)$/i;
 const UTILITY_HREF = /logout|logoff|mode=login|mode=register|search\.php|ucp\.php/i;
-const THREAD_HREF = /viewtopic|showthread|[?&/]thread[/=]|\/topic\/|\/t\/\d+/i;
-const BOARD_HREF = /viewforum|forumdisplay|[?&/]board[/=]|\/forum\/|f=\d+/i;
+const THREAD_HREF = /viewtopic|showthread|thread-\d+|[?&/]thread[/=]|\/topic\/|\/t\/\d+/i;
+const BOARD_HREF = /viewforum|forumdisplay|forum-\d+|[?&/]board[/=]|\/forum\/|f=\d+/i;
 
 export function sameSiteUrl(href: string, pageUrl: string, domain: string): string | null {
   try {
