@@ -26,7 +26,7 @@ const structuredData = {
       url: SITE_URL,
       description: SITE_DESCRIPTION,
       applicationCategory: "BusinessApplication",
-      applicationSubCategory: "Content automation and link building for SEO and GEO",
+      applicationSubCategory: "Forum link building",
       operatingSystem: "Web",
       offers: {
         "@type": "Offer",
@@ -36,18 +36,9 @@ const structuredData = {
     },
   ],
 };
-
-const SURFACES = [
-  "Google",
-  "AI Overviews",
-  "ChatGPT",
-  "Perplexity",
-  "Gemini",
-  "Copilot",
-];
 ---
 
-<BaseLayout title="AutoSEO.run — content automation & link building for SEO and GEO" description={SITE_DESCRIPTION} {structuredData}>
+<BaseLayout title="AutoSEO.run — the link building tool that posts on the forum" description={SITE_DESCRIPTION} {structuredData}>
   <div class="container">
     <Header />
 
@@ -55,13 +46,13 @@ const SURFACES = [
       <section class="hero">
         <p class="pill">
           <span class="pill__badge">Early access</span>
-          <span>Built for SEO <span class="pill__plus">+</span> GEO</span>
+          <span>Forum links. You watch the computer.</span>
         </p>
-        <h1>Content and links that rank in <span class="accent">search and AI</span>.</h1>
+        <h1>The link building tool that <span class="accent">posts on the forum</span>.</h1>
         <p class="lead">
-          AutoSEO runs two plays for SEO and GEO. It researches, writes, and publishes content — and
-          prospects, drafts, and lands the links that make it stick. Every piece and every send waits
-          for your approval.
+          Most tools find an email and wait for a reply. This one opens a real forum, registers, and
+          posts. You can watch the screen. If the site admin has to approve, it waits. It does not
+          call the link live until the post is up.
         </p>
         <div class="hero__actions">
           <button class="button button--primary" type="button" data-get-started-open data-apply-intent="apply">
@@ -71,181 +62,103 @@ const SURFACES = [
             Book a fit call
           </button>
         </div>
-        <p class="hero__note">No AI slop. No marketplace links. You hold publish and send.</p>
+        <p class="hero__note">Not an outreach inbox. Not a guest-post marketplace. Not an article writer.</p>
 
         <div class="console" aria-hidden="true">
           <div class="console__bar">
-            <span class="console__dots"><i></i><i></i><i></i></span>
-            <span class="console__url">autoseo.run · workspace</span>
-            <span class="console__flag">approval required</span>
+            <span class="console__url">autoseo.run · link builder</span>
+            <span class="console__flag">you can watch</span>
           </div>
           <div class="console__body">
             <article class="lane">
               <header class="lane__head">
-                <span class="lane__tag lane__tag--content">Content</span>
-                <span class="lane__title">Research → publish</span>
+                <span class="lane__tag lane__tag--links">Today</span>
+                <span class="lane__title">0/1 links placed</span>
               </header>
               <ol class="lane__steps">
-                <li><span>Research</span><b>36</b></li>
-                <li><span>Drafting</span><b>7</b></li>
-                <li class="is-active"><span>In review</span><b>3</b></li>
-                <li><span>Published</span><b>18</b></li>
+                <li><span>Find</span><b>done</b></li>
+                <li class="is-active"><span>Register</span><b>now</b></li>
+                <li><span>Wait</span><b>—</b></li>
+                <li><span>Post</span><b>—</b></li>
               </ol>
               <div class="lane__card">
-                <p class="lane__card-kicker">Draft · waiting on you</p>
-                <p class="lane__card-title">“Best RAG evaluation tools (2026)”</p>
-                <p class="lane__card-meta">Structured for the Google snippet <em>and</em> the AI Overview. 6 cited sources.</p>
-              </div>
-            </article>
-
-            <article class="lane">
-              <header class="lane__head">
-                <span class="lane__tag lane__tag--links">Links</span>
-                <span class="lane__title">Prospect → live</span>
-              </header>
-              <ol class="lane__steps">
-                <li><span>Prospect</span><b>42</b></li>
-                <li><span>Qualify</span><b>11</b></li>
-                <li class="is-active"><span>Outreach</span><b>4</b></li>
-                <li><span>Live</span><b>8</b></li>
-              </ol>
-              <div class="lane__card">
-                <p class="lane__card-kicker">Pitch · waiting on you</p>
-                <p class="lane__card-title">Editor at Operations Weekly</p>
-                <p class="lane__card-meta">A data note tied to their last three features — not a guest-post package.</p>
+                <p class="lane__card-kicker">All time</p>
+                <p class="lane__card-title">6 registered · 0 posted · 3 skipped</p>
+                <p class="lane__card-meta">Those counts are every forum so far. The 0/1 is today. It is not a week.</p>
               </div>
             </article>
           </div>
         </div>
       </section>
 
-      <section class="surfaces" aria-label="Optimized surfaces">
-        <p class="surfaces__label">Optimized for the surfaces buyers actually use</p>
-        <ul class="surfaces__list">
-          {SURFACES.map((surface) => (
-            <li>{surface}</li>
-          ))}
-        </ul>
-      </section>
-
-      <section id="offers" class="section">
-        <div class="section-intro section-intro--center">
-          <div class="eyebrow">Two offers</div>
-          <h2 class="section-heading">One operator. Two ways to grow.</h2>
-          <p class="section-copy">
-            Run them together or start with one. Both are built for SEO and GEO, and both stop for a
-            human when judgment is required.
-          </p>
-        </div>
-        <div class="offers-grid">
-          <article class="offer-card">
-            <div class="offer-card__icon offer-card__icon--content" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="M5 4h9l5 5v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z"/><path d="M14 4v5h5"/><path d="M8 13h7M8 17h7"/></svg>
-            </div>
-            <p class="offer-card__kicker">Offer 01</p>
-            <h3>Content automation</h3>
-            <p class="offer-card__flow">Research → generation → publishing</p>
-            <p class="offer-card__copy">
-              Turn a keyword and an audience brief into researched, on-brand articles — structured to
-              rank in Google and to be quotable by AI answer engines — then publish to your CMS on a
-              schedule you set.
-            </p>
-            <ul class="chips">
-              <li>Topic &amp; keyword research</li>
-              <li>SEO + GEO briefs</li>
-              <li>Drafting in your voice</li>
-              <li>Fact &amp; source checks</li>
-              <li>Scheduled publishing</li>
-            </ul>
-          </article>
-
-          <article class="offer-card">
-            <div class="offer-card__icon offer-card__icon--links" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="M9.5 14.5 14.5 9.5"/><path d="M8 12l-2 2a3.5 3.5 0 0 0 5 5l2-2"/><path d="M16 12l2-2a3.5 3.5 0 0 0-5-5l-2 2"/></svg>
-            </div>
-            <p class="offer-card__kicker">Offer 02</p>
-            <h3>Link building optimization</h3>
-            <p class="offer-card__flow">Prospect → qualify → outreach → placements</p>
-            <p class="offer-card__copy">
-              Find relevant sites with real audiences, research each prospect against live pages, draft
-              outreach with a reason to exist, and track every placement to live. Marketplace inventory
-              stays off the table.
-            </p>
-            <ul class="chips">
-              <li>Prospecting</li>
-              <li>Qualification</li>
-              <li>1:1 outreach drafts</li>
-              <li>Follow-ups</li>
-              <li>Live tracking</li>
-            </ul>
-          </article>
-        </div>
-      </section>
-
-      <section id="geo" class="section">
+      <section id="different" class="section">
         <div class="section-intro">
-          <div class="eyebrow">Why GEO now</div>
-          <h2 class="section-heading">Search is splitting in two.</h2>
+          <div class="eyebrow">Why this is a different tool</div>
+          <h2 class="section-heading">Three jobs get called “link building.” Only one of them posts.</h2>
           <p class="section-copy">
-            Buyers still open Google — and increasingly ask ChatGPT, Perplexity, and AI Overviews.
-            Generative engine optimization is how you become the source those answers cite. AutoSEO
-            optimizes for both from the same work, so you are not choosing between the ten blue links
-            and the one AI answer.
+            The category is crowded. The work is not the same. Pitch software, marketplaces, and a
+            browser that joins the forum are three different products.
           </p>
         </div>
-        <div class="split-grid">
-          <article class="lane-card">
-            <p class="lane-card__eyebrow">Classic search · SEO</p>
-            <h3>Rankings on the results page</h3>
-            <ul>
-              <li>Intent-matched pages, not word count</li>
-              <li>Internal links and clean structure</li>
-              <li>Authority earned with real placements</li>
-              <li>Snippets and rich results that win the click</li>
-            </ul>
+        <div class="offers-grid offers-grid--three">
+          <article class="offer-card">
+            <p class="offer-card__kicker">Outreach inboxes</p>
+            <h3>They send a pitch.</h3>
+            <p class="offer-card__copy">
+              Pitchbox, BuzzStream, and Respona find a person and help you email them. The link
+              exists only if that person replies and publishes. Useful for guest posts. Useless if
+              the plan is to post on the forum yourself.
+            </p>
           </article>
-          <article class="lane-card">
-            <p class="lane-card__eyebrow">Answer engines · GEO</p>
-            <h3>Citations inside the answer</h3>
-            <ul>
-              <li>Clear, extractable claims a model can quote</li>
-              <li>Sourced facts and up-to-date figures</li>
-              <li>Coverage of the questions people actually ask</li>
-              <li>Presence across ChatGPT, Perplexity, and AI Overviews</li>
-            </ul>
+          <article class="offer-card">
+            <p class="offer-card__kicker">Marketplaces</p>
+            <h3>They sell a URL.</h3>
+            <p class="offer-card__copy">
+              You pay for a placement on someone else’s site. You do not see the post being made.
+              Google tells sites not to pass ranking credit for links that were paid for. We do not
+              sell that inventory, and we do not buy it.
+            </p>
+          </article>
+          <article class="offer-card">
+            <p class="offer-card__kicker">This tool</p>
+            <h3>It posts on the forum.</h3>
+            <p class="offer-card__copy">
+              A computer opens the site, registers, and writes the post. You watch. One live link
+              per site. A daily cap, so it does not flood one community. A captcha it cannot solve
+              is skipped, not forced.
+            </p>
           </article>
         </div>
       </section>
 
       <section id="work" class="section">
         <div class="section-intro">
-          <div class="eyebrow">How it works</div>
-          <h2 class="section-heading">A researcher, a writer, and an outreach desk — with your rules.</h2>
+          <div class="eyebrow">How a placement happens</div>
+          <h2 class="section-heading">Find. Register. Wait. Post.</h2>
           <p class="section-copy">
-            Brief it once. It works the web with a real browser and a real mailbox, then stops when a
-            human should decide.
+            Nothing is counted as live while it is still waiting on a person or a site admin.
           </p>
         </div>
         <ol class="steps">
           <li>
             <span>01</span>
-            <h3>Brief the bar</h3>
-            <p>Audience, niche, brand voice, what a good page and a good link look like, what is banned.</p>
+            <h3>Find a real forum</h3>
+            <p>It searches for communities about the topic. A parked domain or a site it cannot join is skipped.</p>
           </li>
           <li>
             <span>02</span>
-            <h3>It researches</h3>
-            <p>Keywords, questions, and live prospects — mapped for both the results page and the AI answer.</p>
+            <h3>Register</h3>
+            <p>It fills the form on the site. If a confirmation email is required, it waits for that email.</p>
           </li>
           <li>
             <span>03</span>
-            <h3>You approve</h3>
-            <p>Drafts and pitches wait. Anything off-brief, captcha, or 2FA comes back to you. Nothing ships unsupervised.</p>
+            <h3>Wait for the site admin</h3>
+            <p>Some forums approve the account or the post by hand. It checks again later. It does not pretend the link is up.</p>
           </li>
           <li>
             <span>04</span>
-            <h3>Publish &amp; measure</h3>
-            <p>Approved content goes live on schedule; links get tracked to live. One view across SEO and GEO.</p>
+            <h3>Post, while you watch</h3>
+            <p>You can open the computer and see the page. You approve a draft when one is waiting. Then it posts.</p>
           </li>
         </ol>
       </section>
@@ -253,23 +166,23 @@ const SURFACES = [
       <section class="section">
         <div class="not-grid">
           <article>
-            <h2>What this is</h2>
+            <h2>What you get</h2>
             <ul>
-              <li>Content researched for intent and built to be cited</li>
-              <li>Drafts in your brand voice, with sources you can check</li>
-              <li>Links with a real reason to exist on that site, this week</li>
-              <li>A human gate on every publish and every send</li>
-              <li>One workspace across SEO and GEO</li>
+              <li>A link on a real forum, placed by the tool</li>
+              <li>A screen you can watch while it works</li>
+              <li>A clear wait when a site admin has to approve</li>
+              <li>All-time counts, and a separate number for today</li>
+              <li>One live link per site, inside a daily cap</li>
             </ul>
           </article>
           <article>
             <h2>What this is not</h2>
             <ul>
-              <li>An AI-slop content mill or spun articles</li>
-              <li>A guest-post marketplace or DA/DR package</li>
-              <li>Blast-and-pray sequences that train spam filters on your domain</li>
-              <li>Unsupervised send or auto-publish</li>
-              <li>A promise that volume alone moves rankings</li>
+              <li>An article writer or a content calendar</li>
+              <li>An email sequence that hopes an editor replies</li>
+              <li>A guest-post package sold by domain rating</li>
+              <li>A promise that a waiting post is already live</li>
+              <li>A flood of the same forum</li>
             </ul>
           </article>
         </div>
@@ -278,29 +191,29 @@ const SURFACES = [
       <section id="match" class="section">
         <div class="section-intro">
           <div class="eyebrow">Who we take</div>
-          <h2 class="section-heading">Early access is a filter, not a waitlist costume.</h2>
+          <h2 class="section-heading">Early access is for desks that want the post, not a pitch.</h2>
           <p class="section-copy">
-            We will not onboard every applicant. If the work is “publish 50 AI articles” or “buy 50
-            links and send a screenshot,” we are the wrong room.
+            If the job is “publish 50 articles” or “buy 50 links and send a screenshot,” this is the
+            wrong tool.
           </p>
         </div>
         <div class="match-grid">
           <article class="match-card match-card--yes">
             <h3>A match</h3>
             <ul>
-              <li>Agencies running content and/or link retainers</li>
-              <li>Operators who edit before they ship</li>
-              <li>Teams that want to be cited by AI, not just ranked</li>
-              <li>Desks that already reject thin marketplace inventory</li>
+              <li>Agencies that need forum links a client can open</li>
+              <li>Operators who will watch the first posts</li>
+              <li>Desks that already refuse marketplace inventory</li>
+              <li>Teams that want a daily cap, not a blast</li>
             </ul>
           </article>
           <article class="match-card match-card--no">
             <h3>Not a match</h3>
             <ul>
-              <li>Shopping $50 “DR40” placements</li>
-              <li>Want unedited AI articles at scale</li>
-              <li>Need it live tomorrow with no brief and no constraints</li>
-              <li>Measuring success only as link or word count</li>
+              <li>Shopping a DR package</li>
+              <li>Wanting an AI blog instead of links</li>
+              <li>Needing it live tomorrow with no site and no rules</li>
+              <li>Measuring success only as a link count</li>
             </ul>
           </article>
         </div>
@@ -310,8 +223,8 @@ const SURFACES = [
         <div>
           <h2>Apply. If we match, we talk.</h2>
           <p>
-            Twenty minutes. No deck. We look at how you work, what you refuse to publish, and whether
-            AutoSEO belongs on your desk.
+            Twenty minutes. No deck. We look at the forums you want, what you will not post, and
+            whether this desk should run it.
           </p>
           <div class="cta-actions">
             <a class="button button--primary" href="/apply/">Open the application</a>
@@ -322,20 +235,20 @@ const SURFACES = [
         </div>
         <div class="stats-grid">
           <div>
-            <div class="stat-value">Content</div>
-            <div class="stat-label">Research, write, publish — for SEO + GEO</div>
+            <div class="stat-value">Forum</div>
+            <div class="stat-label">It joins the site and posts</div>
           </div>
           <div>
-            <div class="stat-value">Links</div>
-            <div class="stat-label">Prospect, draft, and land placements</div>
+            <div class="stat-value">Watch</div>
+            <div class="stat-label">The computer is on screen</div>
           </div>
           <div>
-            <div class="stat-value">Approval</div>
-            <div class="stat-label">You hold publish and send</div>
+            <div class="stat-value">Wait</div>
+            <div class="stat-label">Admin approval stays a wait</div>
           </div>
           <div>
-            <div class="stat-value">By fit</div>
-            <div class="stat-label">Early access is not open signup</div>
+            <div class="stat-value">Today</div>
+            <div class="stat-label">A daily cap, not a hidden week</div>
           </div>
         </div>
       </section>

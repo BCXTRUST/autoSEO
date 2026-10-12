@@ -89,7 +89,7 @@ export function SuccessPop({ label }: { label: string }) {
   return (
     <span className="flex items-center gap-2">
       <span
-        className="flex h-6 w-6 items-center justify-center rounded-full text-white"
+        className="flex h-6 w-6 items-center justify-center text-white"
         style={{
           background: "var(--bui-green)",
           animation: "bui-pop-in 300ms cubic-bezier(0.23,1,0.32,1) both",
@@ -132,8 +132,12 @@ export function BuiCard({
   return (
     <div
       {...props}
-      className={`rounded-[16px] ${className}`}
-      style={{ background: "var(--bui-surface)", boxShadow: "var(--bui-shadow-card)", ...style }}
+      className={`border-2 border-[#3A382F] ${className}`}
+      style={{
+        background: "var(--bui-surface)",
+        boxShadow: "3px 3px 0 #2A2820",
+        ...style,
+      }}
     >
       {children}
     </div>
@@ -183,7 +187,7 @@ function TaskMark({ status }: { status: "working" | "done" | "blocked" }) {
   const blocked = status === "blocked";
   return (
     <span
-      className="flex h-5 w-5 items-center justify-center rounded-full text-white"
+      className="flex h-5 w-5 items-center justify-center text-white"
       style={{
         background: blocked ? "#e5484d" : "var(--bui-green)",
         animation: "bui-pop-in 300ms cubic-bezier(0.23,1,0.32,1) both",

@@ -1,12 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
-  <title id="title">autoSEO mark</title>
-  <defs>
-    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2965EC" />
-      <stop offset="1" stop-color="#5C89F8" />
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" rx="148" fill="url(#blue)" />
-  <rect x="157" y="196" width="62" height="120" rx="31" fill="#F2F2F0" />
-  <rect x="293" y="196" width="62" height="120" rx="31" fill="#F2F2F0" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="AutoSEO">
+  <rect width="32" height="32" fill="#1C1B16"/>
+  <polygon points="32,0 18,0 32,14" fill="#FFE14A"/>
+  <rect x="6" y="12" width="8" height="8" fill="none" stroke="#E8E4D8" stroke-width="2"/>
+  <rect x="14" y="16" width="8" height="8" fill="none" stroke="#E8E4D8" stroke-width="2"/>
+  <rect x="12" y="15" width="4" height="2" fill="#E8E4D8"/>
 </svg>
