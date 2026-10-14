@@ -142,12 +142,54 @@ function startDesktopWatchShell(): string {
   ].join("\n");
 }
 
+/**
+ * The desktop SDK starts Xvfb with `-nolisten unix`. Chrome and x11vnc then
+ * exit 1 and noVNC stays on Reconnecting. A display clients can already open
+ * is left alone. A silent display, or one started with `-nolisten`, is
+ * replaced. A signup browser that is already up is left on its form.
+ */
+export function repairDesktopDisplayCommand(display: string): string {
+  const quotedDisplay = posixShellQuote(display);
+  const number = display.replace(/^:/, "") || "0";
+  const xvfbPattern = posixShellQuote(`^Xvfb ${display} `);
+  return [
+    `export DISPLAY=${quotedDisplay}`,
+    "persona=0",
+    "if pgrep -f '[r]akazo-lb-browser' >/dev/null 2>&1; then persona=1; fi",
+    "if pgrep -af -- '--user-data-dir=' 2>/dev/null | grep -F '/.browser-profiles/' >/dev/null 2>&1; then persona=1; fi",
+    "nolisten=0",
+    `pid=$(pgrep -f ${xvfbPattern} | awk 'NR==1{print; exit}')`,
+    'if [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ] && tr "\\0" " " < "/proc/$pid/cmdline" | grep -F -- "-nolisten" >/dev/null 2>&1; then nolisten=1; fi',
+    `if xdpyinfo -display ${quotedDisplay} >/dev/null 2>&1 && { [ "$persona" = 1 ] || [ "$nolisten" = 0 ]; }; then exit 0; fi`,
+    `pkill -f ${posixShellQuote(`Xvfb ${display} `)} || true`,
+    "sleep 0.2",
+    `rm -f /tmp/.X${number}-lock /tmp/.X11-unix/X${number}`,
+    "mkdir -p /tmp/.X11-unix",
+    `Xvfb ${quotedDisplay} -ac -screen 0 1280x800x24 +extension RANDR +render -noreset >/tmp/rakazo-xvfb.log 2>&1 &`,
+    "for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do",
+    `  xdpyinfo -display ${quotedDisplay} >/dev/null 2>&1 && break`,
+    "  sleep 0.25",
+    "done",
+    `xdpyinfo -display ${quotedDisplay} >/dev/null 2>&1 || { printf 'RAKAZO_SCREEN_ERROR=no_display\\n' >&2; exit 1; }`,
+    "if ! pgrep -x fluxbox >/dev/null 2>&1 && ! pgrep -x xfce4-session >/dev/null 2>&1; then",
+    "  if command -v fluxbox >/dev/null 2>&1; then fluxbox >/tmp/rakazo-fluxbox.log 2>&1 &",
+    "  elif command -v startxfce4 >/dev/null 2>&1; then startxfce4 >/tmp/rakazo-xfce.log 2>&1 &",
+    "  fi",
+    "fi",
+    "exit 0",
+  ].join("\n");
+}
+
 export function prepareKioskDesktopCommand(display: string): string {
   const quotedDisplay = posixShellQuote(display);
   return [
     `export DISPLAY=${quotedDisplay}`,
     "export LANG=de_DE.UTF-8",
     "export LANGUAGE=de_DE:de",
+    // The persona browser is the signup form. killall would exit that Chrome
+    // with status 1 before the form is submitted.
+    "if pgrep -f '[r]akazo-lb-browser' >/dev/null 2>&1; then exit 0; fi",
+    "if pgrep -af -- '--user-data-dir=' 2>/dev/null | grep -F '/.browser-profiles/' >/dev/null 2>&1; then exit 0; fi",
     "killall -q chrome chromium chromium-browser google-chrome google-chrome-stable >/dev/null 2>&1 || true",
     installChromeTranslatePolicyShell(),
     hideDesktopChromeShell(),
@@ -173,14 +215,16 @@ export function detachedBrowserCommand(display: string, url: string): string {
     'flags="--user-data-dir=$dir --kiosk --start-fullscreen --no-first-run --disable-fre --no-default-browser-check --disable-search-engine-choice-screen --disable-translate --disable-infobars --noerrdialogs --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-component-update --disable-background-networking --lang=de --accept-lang=de-DE,de --disable-features=Translate,TranslateUI,InfiniteSessionRestore,ChromeWhatsNewUI,OutdatedBuildDetector --password-store=basic --disable-sync --disable-dev-shm-usage --no-sandbox --window-position=0,0 --window-size=1280,800"',
     `printf '%s\\n' translate-off > ${posixShellQuote(CHROME_KIOSK_STAMP)}`,
     startDesktopWatchShell(),
-    'if [ -x /usr/bin/google-chrome ]; then exec /usr/bin/google-chrome $flags "$url"; fi',
-    'if [ -x /usr/bin/google-chrome-stable ]; then exec /usr/bin/google-chrome-stable $flags "$url"; fi',
-    'if [ -x /usr/bin/chromium ]; then exec /usr/bin/chromium $flags "$url"; fi',
-    'if [ -x /usr/bin/chromium-browser ]; then exec /usr/bin/chromium-browser $flags "$url"; fi',
-    'if command -v google-chrome >/dev/null 2>&1; then exec google-chrome $flags "$url"; fi',
-    'if command -v chromium >/dev/null 2>&1; then exec chromium $flags "$url"; fi',
-    'if command -v firefox >/dev/null 2>&1; then exec firefox --kiosk "$url"; fi',
-    'exec xdg-open "$url"',
+    // stdin from /dev/null: the sandbox closes the command stdin on disconnect,
+    // and Chrome treats that EOF as a quit and exits 1 on the first page.
+    'if [ -x /usr/bin/google-chrome ]; then exec /usr/bin/google-chrome $flags "$url" </dev/null; fi',
+    'if [ -x /usr/bin/google-chrome-stable ]; then exec /usr/bin/google-chrome-stable $flags "$url" </dev/null; fi',
+    'if [ -x /usr/bin/chromium ]; then exec /usr/bin/chromium $flags "$url" </dev/null; fi',
+    'if [ -x /usr/bin/chromium-browser ]; then exec /usr/bin/chromium-browser $flags "$url" </dev/null; fi',
+    'if command -v google-chrome >/dev/null 2>&1; then exec google-chrome $flags "$url" </dev/null; fi',
+    'if command -v chromium >/dev/null 2>&1; then exec chromium $flags "$url" </dev/null; fi',
+    'if command -v firefox >/dev/null 2>&1; then exec firefox --kiosk "$url" </dev/null; fi',
+    'exec xdg-open "$url" </dev/null',
   ];
   return [`# ${DETACHED_BROWSER_MARKER}`, ...launch].join("\n");
 }
@@ -229,7 +273,8 @@ export function raiseBrowserWindowCommand(display: string): string {
     "  fi",
     "  sleep 0.4",
     "done",
-    "exit 1",
+    "printf '%s\\n' window-pending",
+    "exit 0",
   ].join("\n");
 }
 

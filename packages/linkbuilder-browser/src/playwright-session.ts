@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import type { BrowserSession, ClickableControl, FormFieldInfo } from "@rakazo/adapter-kit";
 import {
   assertPacing,
@@ -990,6 +991,7 @@ export async function launchPlaywrightSession(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<PlaywrightBrowserSession> {
   const engine = options.engine ?? browserEngineFromEnv(env);
+  await mkdir(options.profileDir, { recursive: true }).catch(() => undefined);
   const helperDirs = engine === "camoufox" ? [] : (options.helperDirs ?? []);
   const args = [
     ...(helperDirs.length > 0

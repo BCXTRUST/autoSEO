@@ -10,8 +10,10 @@ import {
   openHttpUrlCommand,
   openPathDesktopCommand,
   parseVisibleWindows,
+  prepareKioskDesktopCommand,
   raiseBrowserWindowCommand,
   refuseBrowserHuntShell,
+  repairDesktopDisplayCommand,
 } from "./computer-desktop.js";
 
 describe("computer desktop window helpers", () => {
@@ -70,6 +72,7 @@ describe("computer desktop window helpers", () => {
     );
     expect(command).toContain("RAKAZO_DETACH_BROWSER");
     expect(command).toContain("exec /usr/bin/google-chrome");
+    expect(command).toContain("</dev/null");
     expect(command).toContain("--kiosk");
     expect(command).toContain("--disable-fre");
     expect(command).toContain("--no-first-run");
@@ -106,6 +109,14 @@ describe("computer desktop window helpers", () => {
     expect(raised).toContain("Translate this page");
     expect(raised).not.toContain("key --window");
     expect(raised).not.toContain("key Escape");
+    expect(raised.trimEnd().endsWith("exit 0")).toBe(true);
+    const kiosk = prepareKioskDesktopCommand(":0");
+    expect(kiosk.indexOf("[r]akazo-lb-browser")).toBeLessThan(kiosk.indexOf("killall -q chrome"));
+    const repair = repairDesktopDisplayCommand(":0");
+    expect(repair).toContain("xdpyinfo -display ':0'");
+    expect(repair).toContain("Xvfb ':0'");
+    expect(repair).toContain("[r]akazo-lb-browser");
+    expect(repair).not.toMatch(/Xvfb ':0' -ac[^\n]*-nolisten/);
     expect(command).not.toContain("nohup");
   });
 

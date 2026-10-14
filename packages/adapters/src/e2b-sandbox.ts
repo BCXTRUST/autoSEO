@@ -26,6 +26,7 @@ import {
   listVisibleWindowsCommand,
   looksLikeDesktopBrowserApp,
   parseVisibleWindows,
+  repairDesktopDisplayCommand,
 } from "@rakazo/core";
 import { sandboxIdleMs } from "./computer-idle.js";
 import { ComputerScreenUnavailableError, screenSessionKey } from "./computer-screens.js";
@@ -243,7 +244,8 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   async prepare(computer: ComputerRef, _context: AdapterContext): Promise<void> {
     const desktop = await this.box(computer);
-    if (computer.fresh) await desktop.files.makeDir(E2B_WORKSPACE);
+    await ensureE2BWorkspace(desktop);
+    await keepDesktopDisplay(desktop);
     const profilesChanged = await configurePortableBrowserProfiles(desktop);
     if (!computer.fresh && profilesChanged) await openDesktopBrowser(desktop);
     await exposeBrowserDesktop(desktop);
@@ -257,19 +259,22 @@ export class E2BSandboxProvider implements SandboxProvider {
     const desktop = await this.box(computer);
     const cmd = request.argv.map(shellQuote).join(" ");
     if (cmd.includes("RAKAZO_DETACH_BROWSER")) {
-      const handle = await desktop.commands.run(cmd, {
+      await ensureE2BWorkspace(desktop);
+      await keepDesktopDisplay(desktop);
+      const handle = await runDesktopCommand(desktop, cmd, {
         cwd: e2bCwd(request.cwd),
         background: true,
         timeoutMs: 0,
         signal: context.signal,
       });
+      if (!("disconnect" in handle)) throw new Error("detached browser did not stay up");
       await handle.disconnect();
       yield { type: "exit", code: 0 };
       return;
     }
     const timeoutMs = boundedSandboxCommandTimeoutMs(request.timeoutMs);
     try {
-      const result = await desktop.commands.run(cmd, {
+      const result = await runDesktopCommand(desktop, cmd, {
         cwd: e2bCwd(request.cwd),
         envs: request.env,
         signal: context.signal,
@@ -304,6 +309,8 @@ export class E2BSandboxProvider implements SandboxProvider {
     context: AdapterContext,
   ): Promise<ScreenSession> {
     const desktop = await this.box(computer);
+    await ensureE2BWorkspace(desktop);
+    await keepDesktopDisplay(desktop);
     const screenKey = screenSessionKey(context);
     const layout = await this.resolveLayout(
       desktop,
@@ -647,13 +654,39 @@ export class E2BSandboxProvider implements SandboxProvider {
     leaseId?: string,
     signal?: AbortSignal,
   ) {
-    const allocation = await desktop.commands.run(allocateExtraDisplayCommand(screenKey, leaseId), {
-      timeoutMs: 15_000,
-      ...(signal ? { signal } : {}),
-    });
-    if (allocation.exitCode !== 0) throw new ComputerScreenUnavailableError();
-    const index = parseAllocatedExtraDisplay(allocation.stdout);
-    return extraDisplayLayout(index, desktop.display ?? ":0");
+    let allocation: { exitCode?: number; stdout?: string; stderr?: string } = {
+      exitCode: 1,
+      stdout: "",
+      stderr: "",
+    };
+    try {
+      allocation = await desktop.commands.run(allocateExtraDisplayCommand(screenKey, leaseId), {
+        timeoutMs: 15_000,
+        ...(signal ? { signal } : {}),
+      });
+    } catch (error) {
+      const failed = commandFailure(error);
+      const message = error instanceof Error ? error.message : "";
+      // A slot script that exits 1 used to surface as "exit status 1" and
+      // replace the live browser. The primary display is still there.
+      if ((failed && failed.exitCode === 1) || /exit status 1\b/.test(message)) {
+        return extraDisplayLayout(0, desktop.display ?? ":0");
+      }
+      if (!failed) throw error;
+      allocation = failed;
+    }
+    if ((allocation.exitCode ?? 0) === 0 && allocation.stdout) {
+      try {
+        return extraDisplayLayout(
+          parseAllocatedExtraDisplay(allocation.stdout),
+          desktop.display ?? ":0",
+        );
+      } catch (error) {
+        if (!(error instanceof ComputerScreenUnavailableError)) throw error;
+      }
+    }
+    if (allocation.exitCode === 75) throw new ComputerScreenUnavailableError();
+    return extraDisplayLayout(0, desktop.display ?? ":0");
   }
 
   /** The vendor desktop stream (E2B noVNC). Falls back to the local watcher when it is down. */
@@ -676,6 +709,9 @@ export class E2BSandboxProvider implements SandboxProvider {
       const message = error instanceof Error ? error.message : "";
       // The SDK only keeps the URL in memory. A live x11vnc from an older
       // connection still serves the desktop on the standard noVNC port.
+      if (/already running|exit status \d+/i.test(message) && (await tcpOpen(desktop, 6080))) {
+        return watchUrl(`https://${desktop.getHost(6080)}/vnc.html`);
+      }
       if (!/already running/i.test(message)) return null;
       if (await tcpOpen(desktop, 6080))
         return watchUrl(`https://${desktop.getHost(6080)}/vnc.html`);
@@ -694,26 +730,35 @@ export class E2BSandboxProvider implements SandboxProvider {
     layout: ReturnType<typeof extraDisplayLayout>,
     context: AdapterContext,
   ): Promise<string> {
-    try {
-      const result = await desktop.commands.run(
-        ensurePrimaryViewCommand(layout, randomBytes(9).toString("base64url")),
-        { timeoutMs: 20_000, signal: context.signal },
-      );
-      if (result.exitCode !== 0) {
-        throw new ComputerScreenUnavailableError(screenFailureDetail(result.stderr, result.stdout));
+    let last = new ComputerScreenUnavailableError("primary view failed");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result = await desktop.commands.run(
+          ensurePrimaryViewCommand(layout, randomBytes(9).toString("base64url")),
+          { timeoutMs: 20_000, signal: context.signal },
+        );
+        if (result.exitCode === 0) return parseExtraDisplayViewPassword(result.stdout);
+        last = new ComputerScreenUnavailableError(
+          screenFailureDetail(result.stderr, result.stdout),
+        );
+      } catch (error) {
+        if (error instanceof ComputerScreenUnavailableError) {
+          last = error;
+        } else {
+          const failed = commandFailure(error);
+          const record = error as { stderr?: string; stdout?: string };
+          last = new ComputerScreenUnavailableError(
+            screenFailureDetail(
+              failed?.stderr ?? record?.stderr,
+              failed?.stdout ?? record?.stdout,
+              error instanceof Error ? error.message : "",
+            ),
+          );
+        }
       }
-      return parseExtraDisplayViewPassword(result.stdout);
-    } catch (error) {
-      if (error instanceof ComputerScreenUnavailableError) throw error;
-      const record = error as { stderr?: string; stdout?: string };
-      throw new ComputerScreenUnavailableError(
-        screenFailureDetail(
-          record?.stderr,
-          record?.stdout,
-          error instanceof Error ? error.message : "",
-        ),
-      );
+      if (attempt === 0) await keepDesktopDisplay(desktop);
     }
+    throw last;
   }
 
   private async ensureExtraDisplay(
@@ -1023,6 +1068,46 @@ async function* walkE2BWorkspace(
     }
   }
   for (const relative of directories) yield* walkE2BWorkspace(desktop, relative, context);
+}
+
+function isMissingWorkspaceCwd(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /invalid_argument/i.test(message) && /cwd/i.test(message) && /does not exist/i.test(message)
+  );
+}
+
+/** The folder is created on a fresh boot only. A resumed sandbox can lose it, and every command then dies. */
+async function ensureE2BWorkspace(desktop: Sandbox): Promise<void> {
+  if (!desktop.files?.makeDir) return;
+  await desktop.files.makeDir(E2B_WORKSPACE).catch(() => undefined);
+}
+
+async function keepDesktopDisplay(desktop: Sandbox): Promise<void> {
+  if (!desktop.commands?.run) return;
+  await desktop.commands
+    .run(repairDesktopDisplayCommand(desktop.display ?? ":0"), { timeoutMs: 20_000 })
+    .catch(() => undefined);
+}
+
+async function runDesktopCommand(
+  desktop: Sandbox,
+  cmd: string,
+  options: {
+    cwd?: string;
+    background?: boolean;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    envs?: Record<string, string>;
+  },
+) {
+  try {
+    return await desktop.commands.run(cmd, options);
+  } catch (error) {
+    if (!isMissingWorkspaceCwd(error)) throw error;
+    await ensureE2BWorkspace(desktop);
+    return await desktop.commands.run(cmd, options);
+  }
 }
 
 function e2bCwd(cwd: string | undefined): string {

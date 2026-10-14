@@ -33,6 +33,7 @@ export * from "./real-pipeline.js";
 export * from "./redact.js";
 export * from "./run-phrase.js";
 export * from "./run-state.js";
+export * from "./sandbox-workspace.js";
 export * from "./schedule.js";
 export * from "./spam.js";
 export * from "./verification-link.js";

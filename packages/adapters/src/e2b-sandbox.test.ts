@@ -229,9 +229,9 @@ describe("E2B computer backend", () => {
     expect(screen.url).toMatch(/^https:\/\/desktop\.test\/vnc\.html\?/);
     expect(screen.url).toContain("view_only=true");
     expect(screen.url).not.toContain("password=");
-    expect(command.mock.calls.some(([value]) => String(value).includes("screen-primary.lock"))).toBe(
-      false,
-    );
+    expect(
+      command.mock.calls.some(([value]) => String(value).includes("screen-primary.lock")),
+    ).toBe(false);
 
     const control = await provider.connectScreen(
       computer,
@@ -352,9 +352,9 @@ describe("E2B computer backend", () => {
     expect(screen.url).toContain("view_only=true");
     expect(screen.url).not.toContain("password=");
     expect(desktop.stream.stop).not.toHaveBeenCalled();
-    expect(command.mock.calls.some(([value]) => String(value).includes("screen-primary.lock"))).toBe(
-      false,
-    );
+    expect(
+      command.mock.calls.some(([value]) => String(value).includes("screen-primary.lock")),
+    ).toBe(false);
   });
 
   it("gives Team bots distinct E2B screens and shared files", async () => {
@@ -640,21 +640,23 @@ describe("E2B computer backend", () => {
     const observation = await provider.observe(computer, { ...context, operationId: "preview" });
     expect(screenshot).toHaveBeenCalledOnce();
     expect(observation.image.byteLength).toBeGreaterThan(0);
-    expect(command.mock.calls.some(([value]) => String(value).includes("RAKAZO_SCREEN_INDEX"))).toBe(
-      false,
-    );
+    expect(
+      command.mock.calls.some(([value]) => String(value).includes("RAKAZO_SCREEN_INDEX")),
+    ).toBe(false);
   });
 
   it("keeps a detached browser after the command handle disconnects", async () => {
     const disconnect = vi.fn(async () => undefined);
-    const command = vi.fn(async (value: string, opts?: { background?: boolean; timeoutMs?: number }) => {
-      if (opts?.background) {
-        expect(value).toContain("RAKAZO_DETACH_BROWSER");
-        expect(opts.timeoutMs).toBe(0);
-        return { disconnect };
-      }
-      return { stdout: "", stderr: "", exitCode: 0 };
-    });
+    const command = vi.fn(
+      async (value: string, opts?: { background?: boolean; timeoutMs?: number }) => {
+        if (opts?.background) {
+          expect(value).toContain("RAKAZO_DETACH_BROWSER");
+          expect(opts.timeoutMs).toBe(0);
+          return { disconnect };
+        }
+        return { stdout: "", stderr: "", exitCode: 0 };
+      },
+    );
     const desktop = {
       sandboxId: "e2b-detach-browser",
       display: ":0",
@@ -709,12 +711,93 @@ describe("E2B computer backend", () => {
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const events = [];
-    for await (const event of provider.execute(computer, { argv: ["rakazo-lb-browser", "call"] }, context)) {
+    for await (const event of provider.execute(
+      computer,
+      { argv: ["rakazo-lb-browser", "call"] },
+      context,
+    )) {
       events.push(event);
     }
     expect(events).toEqual([
       { type: "stdout", data: '{"ok":false,"error":"runner not running"}\n' },
       { type: "exit", code: 3 },
     ]);
+  });
+
+  it("keeps the primary screen when the slot command exits 1", async () => {
+    const command = vi.fn(async (value: string) => {
+      if (value.includes("RAKAZO_SCREEN_INDEX=")) {
+        const error = new Error("exit status 1") as Error & {
+          result: { exitCode: number; stdout: string; stderr: string };
+        };
+        error.result = { exitCode: 1, stdout: "", stderr: "" };
+        throw error;
+      }
+      if (value.includes("127.0.0.1")) return { stdout: "", stderr: "", exitCode: 0 };
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const desktop = {
+      sandboxId: "e2b-exit-screen",
+      display: ":0",
+      getHost: (port: number) => `${port}-desktop.test`,
+      commands: { run: command },
+      files: { makeDir: vi.fn(async () => undefined) },
+      stream: {
+        start: vi.fn(async () => {
+          throw new Error("exit status 1");
+        }),
+        stop: vi.fn(async () => undefined),
+        getUrl: () => {
+          throw new Error("Server is not running");
+        },
+      },
+      setTimeout: vi.fn(async () => undefined),
+    } as unknown as Sandbox;
+    const provider = new E2BSandboxProvider("test-key", {
+      create: vi.fn(async () => desktop),
+      connect: vi.fn(async () => desktop),
+      pause: vi.fn(async () => undefined),
+    });
+    const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
+    const screen = await provider.connectScreen(computer, { view: "stream" }, context);
+    expect(screen.url).toMatch(/^https:\/\/6080-desktop\.test\/vnc\.html\?/);
+    expect(screen.url).not.toContain("exit status");
+  });
+
+  it("recreates a missing workspace directory and retries the command", async () => {
+    let directories = 0;
+    const command = vi.fn(async (value: string) => {
+      if (value === "'echo'" && directories < 2) {
+        throw new Error("[invalid_argument] cwd '/home/user/rakazo-home' does not exist");
+      }
+      return { stdout: "ok\n", stderr: "", exitCode: 0, disconnect: async () => undefined };
+    });
+    const desktop = {
+      sandboxId: "e2b-missing-home",
+      display: ":0",
+      commands: { run: command },
+      files: {
+        makeDir: vi.fn(async () => {
+          directories += 1;
+        }),
+      },
+      setTimeout: vi.fn(async () => undefined),
+    } as unknown as Sandbox;
+    const provider = new E2BSandboxProvider("test-key", {
+      create: vi.fn(async () => desktop),
+      connect: vi.fn(async () => desktop),
+      pause: vi.fn(async () => undefined),
+    });
+    const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
+    await provider.prepare(computer, context);
+    const events = [];
+    for await (const event of provider.execute(computer, { argv: ["echo"] }, context)) {
+      events.push(event);
+    }
+    expect(events).toEqual([
+      { type: "stdout", data: "ok\n" },
+      { type: "exit", code: 0 },
+    ]);
+    expect(directories).toBeGreaterThanOrEqual(2);
   });
 });

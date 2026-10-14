@@ -61,6 +61,7 @@ import {
   isHardEdgeBlock,
   isHostTerminal,
   isMailSendFailure,
+  isMissingSandboxWorkspace,
   isWarmupMet,
   MAIL_SKIP_STATUS,
   marketForHost,
@@ -80,6 +81,7 @@ import {
   shouldSkipDesktopPage,
   skippedHostLine,
   spamRetryDecision,
+  statusAfterMissingWorkspace,
   stepCountsTowardPageGiveUp,
   transitionHost,
   transitionPlacement,
@@ -466,6 +468,24 @@ function hostOrder(status: string): number {
   return (WORKABLE_HOST_ORDER as readonly string[]).indexOf(status);
 }
 
+function hostSortRank(row: {
+  status: string;
+  statusReason: string | null;
+  accounts: ReadonlyArray<{ emailVerifiedAt: Date | null; adminApprovedAt: Date | null }>;
+}): number {
+  if (row.status === "dead" && isMissingSandboxWorkspace(row.statusReason)) {
+    const account = row.accounts[0] ?? null;
+    return hostOrder(
+      statusAfterMissingWorkspace(
+        account
+          ? { emailVerifiedAt: account.emailVerifiedAt, adminApprovedAt: account.adminApprovedAt }
+          : null,
+      ),
+    );
+  }
+  return hostOrder(row.status);
+}
+
 async function selectHost(ctx: StepContext): Promise<StepResult> {
   const { prisma } = ctx.services;
   const rows = await prisma.lbHost.findMany({
@@ -475,6 +495,8 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
       OR: [
         { status: { in: [...WORKABLE_HOST_ORDER] } },
         { status: "dead", statusReason: "no_open_thread" },
+        { status: "dead", statusReason: { contains: "rakazo-home" } },
+        { status: "dead", statusReason: { contains: "sandbox workspace" } },
       ],
     },
     include: { accounts: true, placements: { select: { status: true } } },
@@ -511,7 +533,8 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     if (row.status === "ready") return !row.placements.some((p) => p.status !== "pending");
     if (row.status === "pending_admin") return dueAdmin.has(row.id);
     if (row.status === "dead") {
-      return row.statusReason === "no_open_thread" && row.accounts.length > 0;
+      if (row.statusReason === "no_open_thread" && row.accounts.length > 0) return true;
+      return isMissingSandboxWorkspace(row.statusReason);
     }
     return true;
   });
@@ -522,7 +545,7 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
   }
   eligible.sort(
     (a, b) =>
-      hostOrder(a.status) - hostOrder(b.status) ||
+      hostSortRank(a) - hostSortRank(b) ||
       Number(prefer.has(b.registrableDomain)) - Number(prefer.has(a.registrableDomain)) ||
       b.qualityScore - a.qualityScore,
   );
@@ -550,15 +573,19 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
   if (ctx.services.sleep && ctx.host && ctx.host.id !== picked.id) {
     await ctx.services.sleep(pacedDelayMs(HOST_IDLE_GAP, ctx.services.random ?? Math.random));
   }
-  const retry = picked.status === "dead" && picked.statusReason === "no_open_thread";
+  const threadRetry = picked.status === "dead" && picked.statusReason === "no_open_thread";
+  const workspaceRetry = picked.status === "dead" && isMissingSandboxWorkspace(picked.statusReason);
+  const retry = threadRetry || workspaceRetry;
   if (picked.id === ctx.host?.id && !retry) return { kind: "wait", reason: "same_host" };
   const visited = await prisma.lbRunStep.count({ where: { runId: ctx.run.id, hostId: picked.id } });
   const entry = ctx.pool();
   return {
     kind: "step",
-    lastAction: retry
+    lastAction: threadRetry
       ? `Looking again on ${picked.registrableDomain}`
-      : `Working on ${picked.registrableDomain}`,
+      : workspaceRetry
+        ? `Trying ${picked.registrableDomain} again`
+        : `Working on ${picked.registrableDomain}`,
     hostId: picked.id,
     outcome: { hostStatus: picked.status },
     run: {
@@ -566,7 +593,7 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
       currentUrl: picked.homepageUrl,
       counters: recordHostVisited(ctx.run.counters, { firstVisitToday: visited === 0 }),
     },
-    apply: retry
+    apply: threadRetry
       ? async (tx) => {
           const updated = await tx.lbHost.updateMany({
             where: { id: picked.id, status: "dead", statusReason: "no_open_thread" },
@@ -574,7 +601,27 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
           });
           if (updated.count !== 1) throw new StaleState(`Host ${picked.id} moved during the step`);
         }
-      : undefined,
+      : workspaceRetry
+        ? async (tx) => {
+            const account = picked.accounts[0] ?? null;
+            const updated = await tx.lbHost.updateMany({
+              where: { id: picked.id, status: "dead", statusReason: picked.statusReason },
+              data: {
+                status: statusAfterMissingWorkspace(
+                  account
+                    ? {
+                        emailVerifiedAt: account.emailVerifiedAt,
+                        adminApprovedAt: account.adminApprovedAt,
+                      }
+                    : null,
+                ),
+                statusReason: null,
+              },
+            });
+            if (updated.count !== 1)
+              throw new StaleState(`Host ${picked.id} moved during the step`);
+          }
+        : undefined,
     afterCommit: () => {
       if (entry && entry.hostId !== picked.id) {
         Object.assign(entry, {

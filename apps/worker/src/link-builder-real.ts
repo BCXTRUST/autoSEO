@@ -39,6 +39,7 @@ import {
   adminRecheckDue,
   type HostnameResolver,
   isHostTerminal,
+  isInfrastructureFailure,
   isLiveMet,
   isRunActive,
   isWarmupMet,
@@ -573,7 +574,7 @@ export class LinkBuilderRealRunner {
     const repeated =
       recent.length === MAX_CONSECUTIVE_ERRORS - 1 &&
       recent.every((step) => step.error && step.hostId === host?.id);
-    const infra = /no computer|did not become ready|runner not running/i.test(message);
+    const infra = isInfrastructureFailure(message);
     const giveUp =
       host !== null &&
       !infra &&
