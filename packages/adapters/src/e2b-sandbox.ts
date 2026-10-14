@@ -72,6 +72,14 @@ export interface E2BSandboxSdk {
 }
 
 /** The desktop SDK throws on a non-zero exit. Callers still need that stdout, for example a runner ping. */
+function recoverableScreenFailure(error: unknown): boolean {
+  if (error instanceof ComputerScreenUnavailableError) return true;
+  const failed = commandFailure(error);
+  if (failed?.exitCode === 1) return true;
+  const message = error instanceof Error ? error.message : "";
+  return /exit status 1\b/.test(message);
+}
+
 function commandFailure(
   error: unknown,
 ): { exitCode: number; stdout?: string; stderr?: string } | null {
@@ -332,22 +340,52 @@ export class E2BSandboxProvider implements SandboxProvider {
           close: async () => undefined,
         };
       }
-      const vendor = await this.vendorWatchUrl(desktop);
-      if (vendor) {
-        return { url: vendor, mimeType: "text/html", close: async () => undefined };
-      }
-      const viewPassword = await this.ensurePrimaryView(desktop, layout, context);
-      const url = new URL(`https://${desktop.getHost(PRIMARY_WATCH_VIEW_PORT)}/vnc.html`);
-      url.searchParams.set("autoconnect", "true");
-      url.searchParams.set("resize", "scale");
-      url.searchParams.set("view_only", "true");
-      url.searchParams.set("password", viewPassword);
-      return {
-        url: url.toString(),
-        mimeType: "text/html",
-        close: async () => undefined,
-      };
+      return this.primaryWatchSession(desktop, layout, context);
     }
+    try {
+      return await this.extraWatchSession(desktop, layout, request, screenKey, context);
+    } catch (error) {
+      // A saved slot above the primary display exits 1 and used to replace
+      // the browser. The signup page is on the primary display.
+      if (request.interactive || !recoverableScreenFailure(error)) throw error;
+      await keepDesktopDisplay(desktop);
+      return this.primaryWatchSession(
+        desktop,
+        extraDisplayLayout(0, desktop.display ?? ":0"),
+        context,
+      );
+    }
+  }
+
+  private async primaryWatchSession(
+    desktop: Sandbox,
+    layout: ReturnType<typeof extraDisplayLayout>,
+    context: AdapterContext,
+  ): Promise<ScreenSession> {
+    const vendor = await this.vendorWatchUrl(desktop);
+    if (vendor) {
+      return { url: vendor, mimeType: "text/html", close: async () => undefined };
+    }
+    const viewPassword = await this.ensurePrimaryView(desktop, layout, context);
+    const url = new URL(`https://${desktop.getHost(PRIMARY_WATCH_VIEW_PORT)}/vnc.html`);
+    url.searchParams.set("autoconnect", "true");
+    url.searchParams.set("resize", "scale");
+    url.searchParams.set("view_only", "true");
+    url.searchParams.set("password", viewPassword);
+    return {
+      url: url.toString(),
+      mimeType: "text/html",
+      close: async () => undefined,
+    };
+  }
+
+  private async extraWatchSession(
+    desktop: Sandbox,
+    layout: ReturnType<typeof extraDisplayLayout>,
+    request: ScreenRequest,
+    screenKey: string,
+    context: AdapterContext,
+  ): Promise<ScreenSession> {
     const viewPassword = await this.ensureExtraDisplay(desktop, layout, context);
     if (request.interactive) {
       if (!request.controlToken) throw new Error("interactive screen requires a control token");

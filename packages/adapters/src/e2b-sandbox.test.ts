@@ -764,6 +764,49 @@ describe("E2B computer backend", () => {
     expect(screen.url).not.toContain("exit status");
   });
 
+  it("uses the primary screen when a saved extra display exits 1", async () => {
+    const command = vi.fn(async (value: string) => {
+      if (value.includes("RAKAZO_SCREEN_INDEX=")) {
+        return { stdout: "RAKAZO_SCREEN_INDEX=1\n", stderr: "", exitCode: 0 };
+      }
+      if (value.includes("chromium-screen-")) {
+        const error = new Error("exit status 1") as Error & {
+          result: { exitCode: number; stdout: string; stderr: string };
+        };
+        error.result = { exitCode: 1, stdout: "", stderr: "" };
+        throw error;
+      }
+      if (value.includes("127.0.0.1")) return { stdout: "", stderr: "", exitCode: 0 };
+      return { stdout: "", stderr: "", exitCode: 0 };
+    });
+    const desktop = {
+      sandboxId: "e2b-extra-exit",
+      display: ":0",
+      getHost: (port: number) => `${port}-desktop.test`,
+      commands: { run: command },
+      files: { makeDir: vi.fn(async () => undefined) },
+      stream: {
+        start: vi.fn(async () => {
+          throw new Error("exit status 1");
+        }),
+        stop: vi.fn(async () => undefined),
+        getUrl: () => {
+          throw new Error("Server is not running");
+        },
+      },
+      setTimeout: vi.fn(async () => undefined),
+    } as unknown as Sandbox;
+    const provider = new E2BSandboxProvider("test-key", {
+      create: vi.fn(async () => desktop),
+      connect: vi.fn(async () => desktop),
+      pause: vi.fn(async () => undefined),
+    });
+    const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
+    const screen = await provider.connectScreen(computer, { view: "stream" }, context);
+    expect(screen.url).toMatch(/^https:\/\/6080-desktop\.test\/vnc\.html\?/);
+    expect(screen.url).not.toContain("exit status");
+  });
+
   it("recreates a missing workspace directory and retries the command", async () => {
     let directories = 0;
     const command = vi.fn(async (value: string) => {
