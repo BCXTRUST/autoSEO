@@ -19,7 +19,6 @@ import {
   AgentMailEmulator,
   AgentMailMailbox,
   agentMailLiveClient,
-  ResendMailbox,
   createBackgroundJobHandlers,
   createConnectorStack,
   createJobReconciler,
@@ -44,6 +43,7 @@ import {
   PipedreamConnector,
   PostgresRealtimeFanout,
   pipedreamConfigFromEnv,
+  ResendMailbox,
   ScriptedAgentRuntime,
   WorkspaceMemoryProviderResolver,
 } from "@rakazo/adapters";
@@ -194,9 +194,15 @@ async function main() {
           ensureInbox: (projectId, context) => {
             const domain = process.env.RESEND_INBOUND_DOMAIN?.trim();
             const key = process.env.RESEND_API_KEY?.trim();
-            if (domain && key) return new ResendMailbox({ domain, apiKey: key, prisma }).ensureInbox(projectId, context);
+            if (domain && key) {
+              return new ResendMailbox({ domain, apiKey: key, prisma }).ensureInbox(
+                projectId,
+                context,
+              );
+            }
+            // Old AgentMail inboxes are only listed. A new address is a person on Resend.
             if (process.env.AGENTMAIL_API_KEY) {
-              return new AgentMailMailbox(agentMailLiveClient(process.env.AGENTMAIL_API_KEY), prisma).ensureInbox(projectId, context);
+              return Promise.reject(new Error("New mailboxes are person addresses on Resend"));
             }
             return new AgentMailEmulator().ensureInbox(projectId, context);
           },
@@ -205,10 +211,16 @@ async function main() {
             const key = process.env.RESEND_API_KEY?.trim();
             const host = inboxId.split("@")[1]?.toLowerCase();
             if (domain && key && host === domain) {
-              return new ResendMailbox({ domain, apiKey: key, prisma }).listMessages(inboxId, options);
+              return new ResendMailbox({ domain, apiKey: key, prisma }).listMessages(
+                inboxId,
+                options,
+              );
             }
             if (process.env.AGENTMAIL_API_KEY) {
-              return new AgentMailMailbox(agentMailLiveClient(process.env.AGENTMAIL_API_KEY), prisma).listMessages(inboxId, options, context);
+              return new AgentMailMailbox(
+                agentMailLiveClient(process.env.AGENTMAIL_API_KEY),
+                prisma,
+              ).listMessages(inboxId, options, context);
             }
             return new AgentMailEmulator().listMessages(inboxId, options, context);
           },

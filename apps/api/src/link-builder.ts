@@ -1,7 +1,12 @@
 import { lookup } from "node:dns/promises";
 import { ORPCError } from "@orpc/server";
 import { CaptchaSolverError } from "@rakazo/adapter-kit";
-import { CaptellHttpSolver, StaticPlanProvider, stripeCheckoutConfigured } from "@rakazo/adapters";
+import {
+  CaptellHttpSolver,
+  personMailboxAddress,
+  StaticPlanProvider,
+  stripeCheckoutConfigured,
+} from "@rakazo/adapters";
 import type { Actor } from "@rakazo/contracts";
 import {
   EMPTY_COST_SUMMARY,
@@ -56,7 +61,6 @@ import {
   applyRunPhrase,
   assertStartWithinPlan,
   brandNameSources,
-  resolvePersonaDisplayName,
   buildWhyNot,
   CHECKOUT_NOT_CONNECTED_REASON,
   CREDIT_PACKAGES,
@@ -67,14 +71,15 @@ import {
   isWithinWindow,
   linkBuilderTopic,
   localDateKey,
-  operatorHelpFor,
   mayCreateLinkBuilderProject,
   mentionsExampleDomain,
   mentionsFixtureHost,
+  operatorHelpFor,
   PAGE_HELPER_VERSION,
   PlanLimitError,
   projectActivity,
   quoteCreditPurchase,
+  resolvePersonaDisplayName,
   type ScheduleState,
   settleCreditPurchase,
   showHostToCustomer,
@@ -259,7 +264,9 @@ export async function listLbProjects(deps: RouterDeps, actor: Actor) {
     const quotas = readQuotas(project.quotas);
     const help =
       tickets
-        .filter((ticket) => ticket.projectId === project.id && shownToCustomer(ticket, project.slug))
+        .filter(
+          (ticket) => ticket.projectId === project.id && shownToCustomer(ticket, project.slug),
+        )
         .map((ticket) => helpForTicket(ticket))
         .find((item) => item !== null) ?? null;
     const runStatus = todayRun ? readRunStatus(todayRun.status) : null;
@@ -1439,7 +1446,12 @@ async function provisionProjectInbox(deps: RouterDeps, actor: Actor, projectId: 
       signal: new AbortController().signal,
     });
   }
-  const local = `lb-${projectId.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.slice(0, 48);
+  const domain = process.env.RESEND_INBOUND_DOMAIN?.trim();
+  if (domain) {
+    const address = personMailboxAddress(`${projectId}:0`, domain);
+    return { inboxId: address, address };
+  }
+  const local = `offline-${projectId.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.slice(0, 48);
   return { inboxId: `${local}@inbox.example`, address: `${local}@inbox.example` };
 }
 

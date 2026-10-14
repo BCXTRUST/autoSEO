@@ -6,12 +6,45 @@ import {
   type AlertEvent,
   type AlertSink,
   type HostnameResolver,
+  STUCK_ALERT_RECIPIENT,
   webhookNextAttempt,
   webhookSignatureHeader,
   webhookUrlAllowed,
 } from "@rakazo/linkbuilder-core";
 
 const TICKET_ROUTE = "/link-builder-ticket";
+
+const STUCK_ALERT_KINDS = new Set<AlertEvent["kind"]>(["project.paused", "captcha.needs_operator"]);
+
+/** Sends a stuck alert from the Resend domain. The recipient stays ht@tbs.one. */
+export async function deliverStuckAlertEmail(input: {
+  kind: AlertEvent["kind"];
+  message: string;
+  apiKey: string;
+  domain: string;
+  fetchImpl?: typeof fetch;
+}): Promise<boolean> {
+  if (!STUCK_ALERT_KINDS.has(input.kind)) return false;
+  const domain = input.domain.trim().toLowerCase();
+  const apiKey = input.apiKey.trim();
+  if (!domain || !apiKey) return false;
+  const response = await (input.fetchImpl ?? fetch)("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      from: `autoSEO <alerts@${domain}>`,
+      to: [STUCK_ALERT_RECIPIENT],
+      subject: input.message.slice(0, 140),
+      text: input.message,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  return response.ok;
+}
 
 export function createAlertSink(deps: {
   prisma: PrismaClient;
@@ -66,6 +99,14 @@ async function notify(
   const channels = operator.success ? operator.data.channels : ["push"];
   const ticketId = typeof event.payload.ticketId === "string" ? event.payload.ticketId : "";
   const url = `${TICKET_ROUTE}?projectId=${encodeURIComponent(event.projectId)}${ticketId ? `&ticketId=${encodeURIComponent(ticketId)}` : ""}`;
+  if (channels.includes("email")) {
+    await deliverStuckAlertEmail({
+      kind: event.kind,
+      message: event.message,
+      apiKey: process.env.RESEND_API_KEY ?? "",
+      domain: process.env.RESEND_INBOUND_DOMAIN ?? "",
+    }).catch(() => false);
+  }
   if (channels.includes("push") && deps.notifications) {
     await deps.notifications
       .send(

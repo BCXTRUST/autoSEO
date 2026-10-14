@@ -537,6 +537,43 @@ describe("CaptellHttpSolver", () => {
     ).rejects.toMatchObject({ code: "error", retryable: true });
   });
 
+  it("aborts the solve POST at 20s and does not wait out the poll budget", async () => {
+    let posts = 0;
+    const fetchImpl: typeof fetch = (url, init) => {
+      const href = String(url);
+      if (href.endsWith("/solve")) {
+        posts += 1;
+        return new Promise((_, reject) => {
+          const signal = init?.signal;
+          if (!signal) {
+            reject(new Error("missing abort signal"));
+            return;
+          }
+          const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
+          if (signal.aborted) fail();
+          else signal.addEventListener("abort", fail, { once: true });
+        });
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    };
+    const started = Date.now();
+    await expect(
+      new CaptellHttpSolver({
+        token: async () => TOKEN,
+        fetch: fetchImpl,
+        baseUrl: "https://captell.example",
+        timeoutMs: 30,
+        solveTimeoutMs: 5_000,
+        maxRetries: 0,
+      }).solve(
+        { type: "hcaptcha", websiteURL: "https://board.example/register", websiteKey: "k" },
+        context,
+      ),
+    ).rejects.toBeInstanceOf(CaptchaSolverError);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(posts).toBe(1);
+  });
+
   it("reads a live balance body that names the field balance and sends it as a string", async () => {
     const emulator = new CaptellEmulator([
       { op: "balance", body: { balance: "0", name: "autoseo" } },

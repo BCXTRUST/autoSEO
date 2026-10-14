@@ -137,13 +137,17 @@ export class CaptellHttpSolver implements CaptchaSolver {
       context,
       "/api/v1/solve",
       { method: "POST", body: JSON.stringify(payload) },
-      this.solveTimeoutMs,
+      this.timeoutMs,
     );
     assertNoSandbox(json);
     const jobId = jobIdFrom(json);
-    if (isProcessing(json)) {
+    if (status === 202 || isProcessing(json)) {
       if (!jobId) throw failure(status >= 400 ? status : 422, json);
-      const polled = await this.pollTask(context, jobId, this.solveTimeoutMs - (Date.now() - started));
+      const polled = await this.pollTask(
+        context,
+        jobId,
+        this.solveTimeoutMs - (Date.now() - started),
+      );
       status = polled.status;
       json = polled.json;
     }
@@ -235,12 +239,16 @@ export class CaptellHttpSolver implements CaptchaSolver {
         throw new CaptchaSolverError("error", "error", { retryable: false });
       }
       try {
+        const postCap = path.endsWith("/solve") && init.method === "POST" ? 20_000 : timeoutMs;
         const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
           method: init.method,
           headers,
           body: init.body,
           redirect: "error",
-          signal: AbortSignal.any([context.signal, AbortSignal.timeout(timeoutMs)]),
+          signal: AbortSignal.any([
+            context.signal,
+            AbortSignal.timeout(Math.min(timeoutMs, postCap)),
+          ]),
         });
         const json = await readJson(response);
         if (response.status >= 500 || isTransientSolveFailure(path, response.status, json)) {

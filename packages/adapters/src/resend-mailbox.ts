@@ -8,6 +8,7 @@ import type {
   MailboxProviderCapabilities,
 } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
+import { personMailboxAddress } from "./person-mailbox.js";
 
 /**
  * Resend inbound. Any address at `domain` is received. The webhook carries an id;
@@ -33,11 +34,7 @@ export class ResendMailbox implements MailboxProvider {
   }
 
   ensureInbox(projectId: string, _context: AdapterContext): Promise<MailboxInbox> {
-    const local = `lb-${projectId
-      .replace(/[^a-z0-9]/gi, "")
-      .slice(0, 24)
-      .toLowerCase()}`;
-    const address = `${local}@${this.options.domain}`;
+    const address = personMailboxAddress(`${projectId}:0`, this.options.domain);
     return Promise.resolve({ inboxId: address, address });
   }
 
