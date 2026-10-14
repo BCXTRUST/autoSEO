@@ -6,6 +6,7 @@ import {
   classifyRegistration,
   formErrorFixable,
   postAwaitingAdmin,
+  splitFormContinues,
   usernameFormatRejected,
 } from "./messages.js";
 
@@ -113,5 +114,18 @@ describe("registration notices", () => {
       adminHoldOnVerify("An administrator must activate your account before you can log in."),
     ).toBe("registration");
     expect(adminHoldOnVerify("Topic not found")).toBeNull();
+  });
+
+  it("continues a split signup when the next step has no error", () => {
+    expect(splitFormContinues({ kind: "form_error", messages: [] })).toBe(true);
+    expect(splitFormContinues({ kind: "form_error", messages: ["Step 2"] })).toBe(true);
+    expect(splitFormContinues({ kind: "form_error", messages: ["Schritt 2"] })).toBe(true);
+    expect(
+      splitFormContinues({
+        kind: "form_error",
+        messages: ["The username you entered is already in use."],
+      }),
+    ).toBe(false);
+    expect(splitFormContinues({ kind: "pending_email" })).toBe(false);
   });
 });

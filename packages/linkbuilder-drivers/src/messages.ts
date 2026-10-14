@@ -84,6 +84,20 @@ export function usernameFormatRejected(messages: readonly string[]): boolean {
   return USERNAME_FORMAT.test(messages.join("\n"));
 }
 
+const SPLIT_STEP = /^(?:step|schritt)\s*\d|\b(?:next step|weiter)\b/i;
+
+/**
+ * The signup form is still open and the board did not name an error.
+ * That page is the next step of a split form, so the fill continues.
+ */
+export function splitFormContinues(result: RegistrationResult): boolean {
+  if (result.kind !== "form_error") return false;
+  return result.messages.every((message) => {
+    const text = message.trim();
+    return text.length === 0 || SPLIT_STEP.test(text);
+  });
+}
+
 export function classifyRegistration(text: string, formStillOpen: boolean): RegistrationResult {
   if (CAPTCHA_REJECTED.test(text)) return { kind: "captcha_rejected" };
   if (PENDING_ADMIN.test(text)) return { kind: "pending_admin" };

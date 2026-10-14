@@ -9,7 +9,7 @@ import {
   rateLimitWaitMs,
 } from "@rakazo/linkbuilder-core";
 import type { BrowserContext, BrowserType, Page, Request } from "playwright";
-import { clickControl } from "./page-click.js";
+import { clickControl, clickControlHeld } from "./page-click.js";
 
 /** Playwright resets its own action timeout when a page navigates, so a reloading board can wait forever. */
 const ACTION_DEADLINE_MS = 12_000;
@@ -131,6 +131,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
   private readonly now: () => number;
   private readonly actions: number[] = [];
   private closed = false;
+  private formHeld = false;
   private lastNavigation: { status: number | null; headers: Record<string, string> } | null = null;
 
   constructor(
@@ -159,6 +160,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
   }
 
   async goto(url: string): Promise<void> {
+    if (this.formHeld) return;
     await this.paceAction();
     const response = await deadline(
       this.page.goto(url, { waitUntil: "domcontentloaded", timeout: 12_000 }),
@@ -190,8 +192,63 @@ export class PlaywrightBrowserSession implements BrowserSession {
     return this.page.url();
   }
 
+  async holdForm(): Promise<void> {
+    this.formHeld = true;
+    await this.page
+      .evaluate(() => {
+        const view = globalThis as {
+          scrollX: number;
+          scrollY: number;
+          scrollTo: (x: number, y: number) => void;
+          addEventListener: (type: string, listener: () => void, capture?: boolean) => void;
+          removeEventListener: (type: string, listener: () => void, capture?: boolean) => void;
+          Element?: { prototype: { scrollIntoView: (...args: unknown[]) => void } };
+          __rakazoFormHold?: { restore: () => void };
+        };
+        if (view.__rakazoFormHold) return;
+        const x = view.scrollX;
+        const y = view.scrollY;
+        const prototype = view.Element?.prototype;
+        const original = prototype?.scrollIntoView;
+        if (prototype) prototype.scrollIntoView = () => undefined;
+        let restoring = false;
+        const onScroll = () => {
+          if (restoring) return;
+          if (view.scrollX === x && view.scrollY === y) return;
+          restoring = true;
+          view.scrollTo(x, y);
+          restoring = false;
+        };
+        view.addEventListener("scroll", onScroll, true);
+        view.__rakazoFormHold = {
+          restore: () => {
+            if (prototype && original) prototype.scrollIntoView = original;
+            view.removeEventListener("scroll", onScroll, true);
+            delete view.__rakazoFormHold;
+          },
+        };
+      })
+      .catch(() => undefined);
+  }
+
+  async releaseForm(): Promise<void> {
+    this.formHeld = false;
+    await this.page
+      .evaluate(() => {
+        const view = globalThis as { __rakazoFormHold?: { restore: () => void } };
+        view.__rakazoFormHold?.restore();
+        delete view.__rakazoFormHold;
+      })
+      .catch(() => undefined);
+  }
+
   async fill(selector: string, text: string, options: { secret?: boolean } = {}): Promise<void> {
     await this.paceAction();
+    if (this.formHeld) {
+      const wrote = await this.writeWithoutScroll(selector, text);
+      if (!wrote) throw new Error(`Could not fill ${selector}`);
+      return;
+    }
     const visible = this.page.locator(selector).locator("visible=true");
     const field = (await visible.count()) > 0 ? visible.first() : this.first(selector);
     try {
@@ -205,6 +262,93 @@ export class PlaywrightBrowserSession implements BrowserSession {
         throw error;
       }
     }
+  }
+
+  /** Crops the element from the current viewport. locator.screenshot scrolls it into view. */
+  private async cropWithoutScroll(
+    locator: ReturnType<PlaywrightBrowserSession["first"]>,
+    selector: string,
+    padding: number,
+    inset: number,
+  ): Promise<Uint8Array> {
+    const box = await locator.boundingBox();
+    if (!box) throw new Error(`Could not crop ${selector}`);
+    const viewport = this.page.viewportSize() ?? { width: 1280, height: 720 };
+    const x = Math.max(0, Math.floor(inset > 0 ? box.x + inset : box.x - padding));
+    const y = Math.max(0, Math.floor(inset > 0 ? box.y + inset : box.y - padding));
+    const right = Math.min(
+      viewport.width,
+      Math.ceil(inset > 0 ? box.x + box.width - inset : box.x + box.width + padding),
+    );
+    const bottom = Math.min(
+      viewport.height,
+      Math.ceil(inset > 0 ? box.y + box.height - inset : box.y + box.height + padding),
+    );
+    if (right <= x || bottom <= y) throw new Error(`Could not crop ${selector}`);
+    return new Uint8Array(
+      await this.page.screenshot({
+        type: "png",
+        clip: { x, y, width: right - x, height: bottom - y },
+      }),
+    );
+  }
+
+  /** Sets the control value in place. Playwright's locator.fill scrolls the field into view. */
+  private async writeWithoutScroll(selector: string, text: string): Promise<boolean> {
+    return this.page
+      .locator(selector)
+      .first()
+      .evaluate((element, value) => {
+        const node = element as {
+          focus?: (options?: { preventScroll?: boolean }) => void;
+          tagName?: string;
+          value?: string;
+          isContentEditable?: boolean;
+          textContent?: string | null;
+          setAttribute?: (name: string, value: string) => void;
+          dispatchEvent?: (event: object) => boolean;
+        };
+        const tag = (node.tagName ?? "").toUpperCase();
+        if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT" && !node.isContentEditable) {
+          return false;
+        }
+        node.focus?.({ preventScroll: true });
+        const events = globalThis as {
+          Event?: new (type: string, init?: { bubbles?: boolean }) => object;
+          HTMLInputElement?: { prototype: object };
+          HTMLTextAreaElement?: { prototype: object };
+        };
+        const fire = (name: string) => {
+          if (!events.Event || !node.dispatchEvent) return;
+          node.dispatchEvent(new events.Event(name, { bubbles: true }));
+        };
+        if (tag === "SELECT") {
+          node.value = value;
+          fire("input");
+          fire("change");
+          return true;
+        }
+        if (node.isContentEditable) {
+          node.textContent = value;
+          fire("input");
+          fire("change");
+          return true;
+        }
+        const prototype =
+          tag === "TEXTAREA"
+            ? events.HTMLTextAreaElement?.prototype
+            : events.HTMLInputElement?.prototype;
+        const setter = prototype
+          ? Object.getOwnPropertyDescriptor(prototype, "value")?.set
+          : undefined;
+        if (setter) setter.call(element, value);
+        else node.value = value;
+        if (tag === "INPUT") node.setAttribute?.("value", value);
+        fire("input");
+        fire("change");
+        return true;
+      }, text)
+      .catch(() => false);
   }
 
   private watchNavigation(): Promise<Request | null> {
@@ -232,7 +376,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
     const navigation = this.watchNavigation();
     // Click in the page. Playwright's actionability check waits until a captcha iframe stops
     // moving, which it does not, so a submit that already landed is reported as a timeout.
-    const clicked = this.page.evaluate(clickControl, selector)
+    const clicked = this.page.evaluate(this.formHeld ? clickControlHeld : clickControl, selector)
       // A rejected evaluate here means the click started a navigation that destroyed the page
       // context; the click itself has already landed, so it must not be sent again.
       .catch(() => true);
@@ -242,7 +386,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
       clicked,
       new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 1_500)),
     ]);
-    if (ok === false) {
+    if (ok === false && !this.formHeld) {
       await deadline(
         this.first(selector).click({ timeout: 4_000, noWaitAfter: true, force: true }),
       );
@@ -286,6 +430,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
     const padding = options?.paddingPx ?? 0;
     const inset = options?.insetPx ?? 0;
     const locator = this.first(selector);
+    if (this.formHeld) return this.cropWithoutScroll(locator, selector, padding, inset);
     if (padding <= 0 && inset <= 0)
       return new Uint8Array(await locator.screenshot({ type: "png" }));
     const box = await locator.boundingBox();

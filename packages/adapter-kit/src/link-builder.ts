@@ -95,6 +95,13 @@ export interface BrowserSession {
   goto(url: string): Promise<void>;
   url(): Promise<string>;
   fill(selector: string, text: string, options?: { secret?: boolean }): Promise<void>;
+  /**
+   * The signup form is the current step. Fill must not scroll a field into view, and
+   * navigation waits until that step is submitted.
+   */
+  holdForm?(): Promise<void>;
+  /** The current signup step was submitted. Scrolling and navigation work again. */
+  releaseForm?(): Promise<void>;
   click(selector: string): Promise<void>;
   /** Visible text of the first match, or null when nothing matches. */
   text(selector: string): Promise<string | null>;

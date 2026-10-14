@@ -14,6 +14,7 @@ import type {
   RegistrationResult,
   ReplyResult,
 } from "./driver.js";
+import { holdSignupForm, releaseSignupForm } from "./driver.js";
 import {
   classifyRegistration,
   postedSuccessfully,
@@ -191,6 +192,7 @@ export class MarkupBoardDriver implements BoardDriver {
   }
 
   async openRegistration(session: BrowserSession, homepageUrl: string): Promise<RegistrationPage> {
+    await releaseSignupForm(session);
     await session.goto(this.registerUrl(homepageUrl));
     const username = `#${this.config.fields.username.id}`;
     if (await session.waitFor(username, { timeoutMs: 10_000 })) return "form";
@@ -198,6 +200,7 @@ export class MarkupBoardDriver implements BoardDriver {
   }
 
   async fillRegistration(session: BrowserSession, account: BoardAccount): Promise<void> {
+    await holdSignupForm(session);
     const fields = this.config.fields;
     await session.fill(`#${fields.username.id}`, account.username);
     await session.fill(`#${fields.email.id}`, account.email);
@@ -227,6 +230,7 @@ export class MarkupBoardDriver implements BoardDriver {
 
   async submitRegistration(session: BrowserSession): Promise<RegistrationResult> {
     await session.click(this.registerSubmitSelector);
+    await releaseSignupForm(session);
     return this.readRegistrationResult(session, { waitMs: 15_000 });
   }
 

@@ -14,7 +14,7 @@ import { placeCaptchaToken, solveImageCaptcha } from "./captcha.js";
 import type { BoardAccount, CaptchaChallenge, RegistrationResult } from "./driver.js";
 import type { RegistrationProfile } from "./generic.js";
 import { GenericFormDriver } from "./generic.js";
-import { formErrorFixable, usernameFormatRejected } from "./messages.js";
+import { formErrorFixable, splitFormContinues, usernameFormatRejected } from "./messages.js";
 
 const SUBMIT_BUDGET = 3;
 
@@ -144,6 +144,7 @@ export async function runGenericRegistrationJourney(
     }
     if (latest.kind === "captcha_rejected") continue;
     if (latest.kind === "form_error" && formErrorFixable(latest.messages)) continue;
+    if (splitFormContinues(latest)) continue;
     break;
   }
 
@@ -180,7 +181,6 @@ export async function runGenericRegistrationJourney(
     if (!link) {
       const after = await session.pageText();
       if (isMailSendFailure(page) || isMailSendFailure(after)) {
-        await session.goto("about:blank").catch(() => undefined);
         return noteName(parked("mail_send_failed", null, registration, detected, solved));
       }
       return noteName(parked("verification_mail_missing", null, registration, detected, solved));

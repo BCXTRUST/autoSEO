@@ -14,7 +14,7 @@ import type {
   RegistrationResult,
   ReplyResult,
 } from "./driver.js";
-import { UnmappedFormError } from "./driver.js";
+import { holdSignupForm, releaseSignupForm, UnmappedFormError } from "./driver.js";
 import {
   adminActivationNotice,
   classifyRegistration,
@@ -763,6 +763,7 @@ export class GenericFormDriver implements BoardDriver {
 
   async openRegistration(session: BrowserSession, homepageUrl: string): Promise<RegistrationPage> {
     this.lastPark = null;
+    await releaseSignupForm(session);
     await ensureOnSite(session, homepageUrl);
     // Same shape as the computer agent: look at this page, take one step, look again.
     // The words and the path differ on every board, so there is no fixed click sequence.
@@ -845,6 +846,7 @@ export class GenericFormDriver implements BoardDriver {
   }
 
   async fillRegistration(session: BrowserSession, account: BoardAccount): Promise<void> {
+    await holdSignupForm(session);
     const fields = await fieldsIn(session, "form");
     const plan = fields ? planRegistration(fields, registrationProfile(account)) : null;
     if (!plan?.ok) throw new UnmappedFormError("register");
@@ -888,6 +890,7 @@ export class GenericFormDriver implements BoardDriver {
     await arrangeSortableCaptcha(session);
     await waitForRegisterTimer(session);
     await session.click(this.submitSelector);
+    await releaseSignupForm(session);
     return this.readRegistrationResult(session, { waitMs: 15_000 });
   }
 

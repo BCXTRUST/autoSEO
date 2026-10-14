@@ -249,6 +249,12 @@ describe.skipIf(!gate.available)(
           );
           return;
         }
+        if (request.url?.startsWith("/stay")) {
+          response.end(
+            `<!doctype html><form id="register"><p id="max">0</p><input id="low" name="username" style="margin-top:2400px"><input type="submit" name="submit" value="Absenden"></form><script>let max=0;addEventListener("scroll",()=>{max=Math.max(max,scrollY);document.getElementById("max").textContent=String(max);});</script>`,
+          );
+          return;
+        }
         if (request.url?.startsWith("/covered")) {
           response.end(
             `<!doctype html><form><div style="position:fixed;inset:0;z-index:5"></div><input id="name" name="name" oninput="document.getElementById('out').textContent=this.value"><p id="out"></p></form>`,
@@ -319,6 +325,31 @@ describe.skipIf(!gate.available)(
         expect(await again.text("#visits")).toBe("2");
       } finally {
         await again.close();
+      }
+    });
+
+    it("stays on the signup form and does not scroll a field into view", async () => {
+      const factory = new LocalBrowserSessionFactory({
+        profileRoot: root,
+        helperDirs: [FIXTURE_PAGE_HELPER_DIR],
+        headless: true,
+        pacing: TEST_PACING,
+        env: { LINK_BUILDER_BROWSER: "local" },
+      });
+      const session = await factory.open(persona("profile-stay"), context);
+      try {
+        await session.goto(`${origin}/stay`);
+        await session.holdForm?.();
+        await session.fill("#low", "mira_sol42");
+        expect(await session.attribute("#low", "value")).toBe("mira_sol42");
+        expect(await session.text("#max")).toBe("0");
+        await session.goto(`${origin}/`);
+        expect(await session.url()).toContain("/stay");
+        await session.releaseForm?.();
+        await session.goto(`${origin}/`);
+        expect(await session.url()).not.toContain("/stay");
+      } finally {
+        await session.close();
       }
     });
 

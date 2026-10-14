@@ -12,6 +12,7 @@ import type {
   RegistrationResult,
   ReplyResult,
 } from "./driver.js";
+import { holdSignupForm, releaseSignupForm } from "./driver.js";
 import { captchaRejected } from "./messages.js";
 import { detectWidget } from "./widgets.js";
 
@@ -160,6 +161,7 @@ export class PhpbbDriver implements BoardDriver {
   }
 
   async openRegistration(session: BrowserSession, homepageUrl: string): Promise<RegistrationPage> {
+    await releaseSignupForm(session);
     await session.goto(this.registerUrl(homepageUrl));
     if (await session.exists(PHPBB_SELECTORS.agreeButton)) {
       await session.click(PHPBB_SELECTORS.agreeButton);
@@ -169,6 +171,7 @@ export class PhpbbDriver implements BoardDriver {
   }
 
   async fillRegistration(session: BrowserSession, account: BoardAccount): Promise<void> {
+    await holdSignupForm(session);
     await session.fill(PHPBB_SELECTORS.username, account.username);
     await session.fill(PHPBB_SELECTORS.email, account.email);
     await session.fill(PHPBB_SELECTORS.password, account.password, { secret: true });
@@ -195,6 +198,7 @@ export class PhpbbDriver implements BoardDriver {
 
   async submitRegistration(session: BrowserSession): Promise<RegistrationResult> {
     await session.click(PHPBB_SELECTORS.registerSubmit);
+    await releaseSignupForm(session);
     return this.readRegistrationResult(session, { waitMs: 15_000 });
   }
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { clickControl } from "./page-click.js";
+import { clickControl, clickControlHeld } from "./page-click.js";
 
 afterEach(() => {
   delete (globalThis as { document?: unknown }).document;
@@ -39,5 +39,28 @@ describe("clickControl", () => {
     };
     expect(clickControl("a.register")).toBe(true);
     expect(calls).toEqual(["click"]);
+  });
+
+  it("checks a consent box without the click that scrolls it into view", () => {
+    const calls: string[] = [];
+    const box = {
+      tagName: "INPUT",
+      checked: false,
+      getAttribute: (name: string) => (name === "type" ? "checkbox" : null),
+      closest: () => null,
+      focus: () => calls.push("focus"),
+      click: () => calls.push("click"),
+      dispatchEvent: () => {
+        calls.push("event");
+        return true;
+      },
+    };
+    (globalThis as { document?: unknown }).document = {
+      querySelector: () => box,
+    };
+    expect(clickControlHeld("#agree")).toBe(true);
+    expect(box.checked).toBe(true);
+    expect(calls).toContain("focus");
+    expect(calls).not.toContain("click");
   });
 });

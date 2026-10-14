@@ -21,6 +21,8 @@ export const BrowserRpcRequestSchema = z.discriminatedUnion("method", [
       secret: z.boolean().optional(),
     })
     .strict(),
+  z.object({ method: z.literal("holdForm") }).strict(),
+  z.object({ method: z.literal("releaseForm") }).strict(),
   z.object({ method: z.literal("click"), selector }).strict(),
   z.object({ method: z.literal("text"), selector }).strict(),
   z.object({ method: z.literal("exists"), selector }).strict(),
@@ -115,6 +117,12 @@ export class BrowserRpcServer {
         return session.url();
       case "fill":
         return session.fill(request.selector, request.text, { secret: request.secret });
+      case "holdForm":
+        if (!session.holdForm) return null;
+        return session.holdForm();
+      case "releaseForm":
+        if (!session.releaseForm) return null;
+        return session.releaseForm();
       case "click":
         return session.click(request.selector);
       case "text":
@@ -210,6 +218,14 @@ export class RpcBrowserSession implements BrowserSession {
 
   async fill(selector: string, text: string, options: { secret?: boolean } = {}): Promise<void> {
     await this.call({ method: "fill", selector, text, secret: options.secret });
+  }
+
+  async holdForm(): Promise<void> {
+    await this.call({ method: "holdForm" });
+  }
+
+  async releaseForm(): Promise<void> {
+    await this.call({ method: "releaseForm" });
   }
 
   async click(selector: string): Promise<void> {

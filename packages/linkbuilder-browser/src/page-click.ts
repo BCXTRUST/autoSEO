@@ -32,11 +32,63 @@ export function clickControl(selector: string): boolean {
   return true;
 }
 
+/**
+ * Clicks without scrolling the field into view. Used while a signup step is open.
+ * A real `element.click()` scrolls the target; this path does not.
+ */
+export function clickControlHeld(selector: string): boolean {
+  const doc = (globalThis as { document?: ClickDocument }).document;
+  if (!doc) return false;
+  let node: ClickNode | null = null;
+  try {
+    node = doc.querySelector(selector);
+  } catch {
+    return false;
+  }
+  if (!node) return false;
+  const tag = (node.tagName ?? "").toUpperCase();
+  const type = (node.getAttribute?.("type") ?? (tag === "BUTTON" ? "submit" : "")).toLowerCase();
+  const form = node.closest?.("form") ?? null;
+  node.focus?.({ preventScroll: true });
+  if (
+    form &&
+    typeof form.requestSubmit === "function" &&
+    (type === "submit" || type === "image")
+  ) {
+    try {
+      form.requestSubmit(node);
+      return true;
+    } catch {
+      // The control is not a submitter of this form.
+    }
+  }
+  const events = globalThis as {
+    Event?: new (type: string, init?: { bubbles?: boolean; cancelable?: boolean }) => object;
+  };
+  const fire = (name: string) => {
+    if (!events.Event || !node?.dispatchEvent) return;
+    node.dispatchEvent(new events.Event(name, { bubbles: true, cancelable: true }));
+  };
+  if (type === "checkbox" || type === "radio") {
+    if (node.checked !== true) {
+      node.checked = true;
+      fire("input");
+      fire("change");
+    }
+    return true;
+  }
+  fire("click");
+  return true;
+}
+
 interface ClickNode {
   tagName?: string;
   click?: () => void;
+  checked?: boolean;
   getAttribute?: (name: string) => string | null;
   closest?: (selector: string) => ClickForm | null;
+  focus?: (options?: { preventScroll?: boolean }) => void;
+  dispatchEvent?: (event: object) => boolean;
 }
 
 interface ClickForm {

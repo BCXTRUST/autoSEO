@@ -98,6 +98,7 @@ import {
   clickResendMail,
   enrichCaptchaChallenge,
   formErrorFixable,
+  splitFormContinues,
   GenericFormDriver,
   type GenericJourneyResult,
   instructionClickSelector,
@@ -173,6 +174,8 @@ export interface PoolEntry {
   registrationRetried: boolean;
   /** Spam-protection retries already used on this registration. */
   spamRetries: number;
+  /** Split signup steps filled after a submit left the next form open. */
+  splitSteps?: number;
   profileSet: boolean;
   engine: "chromium" | "camoufox";
   /** Kept for the open session so a mapped form survives the next step. */
@@ -1943,6 +1946,27 @@ async function finishRegistration(
       credits,
     );
   }
+  if (splitFormContinues(result)) {
+    const used = entry.splitSteps ?? 0;
+    if (used < 3) {
+      entry.splitSteps = used + 1;
+      const credentials = await ensureCredentials(ctx, host);
+      await driver.fillRegistration(entry.session, credentials);
+      entry.registerFormReady = true;
+      entry.captchaAttempts = 0;
+      return withEvent(
+        {
+          kind: "step",
+          lastAction: "Filled the next registration step",
+          hostId: host.id,
+          artifactIds,
+          outcome: { registration: "next_step" },
+        },
+        event,
+        credits,
+      );
+    }
+  }
   if (
     result.kind === "form_error" &&
     formErrorFixable(result.messages) &&
@@ -2106,14 +2130,14 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
     link = linkFrom(await readInbox());
   }
   if (!link) {
-    await entry.session.goto("about:blank").catch(() => undefined);
     return {
       kind: "step",
       hostId: host.id,
-      lastAction: MAIL_SKIP_STATUS,
-      apply: (tx) => moveHost(tx, host, "failed", { statusReason: "mail_send_failed" }),
+      lastAction: "Confirmation not in inbox",
+      outcome: { mail: "not_in_inbox" },
     };
   }
+  await entry.session.releaseForm?.();
   await entry.session.goto(link);
   const activation = await driver.activationResult(entry.session);
   const artifactIds = await screenshot(ctx, entry, "activated");

@@ -26,6 +26,16 @@ export interface BoardThread {
 
 export type RegistrationPage = "form" | "closed" | "unknown" | "unmapped";
 
+/** Stay on the open signup form: no scrolling a field into view, no navigation. */
+export async function holdSignupForm(session: BrowserSession): Promise<void> {
+  await session.holdForm?.();
+}
+
+/** The current signup step was submitted, so the next page can load. */
+export async function releaseSignupForm(session: BrowserSession): Promise<void> {
+  await session.releaseForm?.();
+}
+
 /** The generic driver refused to guess a form. The runner parks the host with this reason. */
 export class UnmappedFormError extends Error {
   readonly reason = "unmapped_form" as const;
