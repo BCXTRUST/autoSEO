@@ -335,9 +335,7 @@ export class RpcBrowserSession implements BrowserSession {
           group: z.string().nullable().optional(),
           hidden: z.boolean().optional(),
           value: z.string().nullable().optional(),
-          options: z
-            .array(z.object({ value: z.string(), label: z.string() }).strict())
-            .optional(),
+          options: z.array(z.object({ value: z.string(), label: z.string() }).strict()).optional(),
         }),
       )
       .parse(await this.call({ method: "formFields", selector }));

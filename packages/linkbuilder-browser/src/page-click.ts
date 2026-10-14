@@ -16,11 +16,7 @@ export function clickControl(selector: string): boolean {
   const tag = (node.tagName ?? "").toUpperCase();
   const type = (node.getAttribute?.("type") ?? (tag === "BUTTON" ? "submit" : "")).toLowerCase();
   const form = node.closest?.("form") ?? null;
-  if (
-    form &&
-    typeof form.requestSubmit === "function" &&
-    (type === "submit" || type === "image")
-  ) {
+  if (form && typeof form.requestSubmit === "function" && (type === "submit" || type === "image")) {
     try {
       form.requestSubmit(node);
       return true;
@@ -50,11 +46,7 @@ export function clickControlHeld(selector: string): boolean {
   const type = (node.getAttribute?.("type") ?? (tag === "BUTTON" ? "submit" : "")).toLowerCase();
   const form = node.closest?.("form") ?? null;
   node.focus?.({ preventScroll: true });
-  if (
-    form &&
-    typeof form.requestSubmit === "function" &&
-    (type === "submit" || type === "image")
-  ) {
+  if (form && typeof form.requestSubmit === "function" && (type === "submit" || type === "image")) {
     try {
       form.requestSubmit(node);
       return true;

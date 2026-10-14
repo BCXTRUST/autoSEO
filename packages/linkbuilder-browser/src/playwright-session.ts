@@ -376,7 +376,8 @@ export class PlaywrightBrowserSession implements BrowserSession {
     const navigation = this.watchNavigation();
     // Click in the page. Playwright's actionability check waits until a captcha iframe stops
     // moving, which it does not, so a submit that already landed is reported as a timeout.
-    const clicked = this.page.evaluate(this.formHeld ? clickControlHeld : clickControl, selector)
+    const clicked = this.page
+      .evaluate(this.formHeld ? clickControlHeld : clickControl, selector)
       // A rejected evaluate here means the click started a navigation that destroyed the page
       // context; the click itself has already landed, so it must not be sent again.
       .catch(() => true);
@@ -619,11 +620,10 @@ export class PlaywrightBrowserSession implements BrowserSession {
       for (const el of root.document.querySelectorAll(
         "a, button, [role='link'], [role='button'], [role='menuitem']",
       )) {
-        const text = (
+        const text =
           (el.textContent ?? "").replace(/\s+/g, " ").trim() ||
           (el.getAttribute("aria-label") ?? "").replace(/\s+/g, " ").trim() ||
-          (el.getAttribute("title") ?? "").replace(/\s+/g, " ").trim()
-        );
+          (el.getAttribute("title") ?? "").replace(/\s+/g, " ").trim();
         if (!text || text.length > 80) continue;
         const view = el.ownerDocument.defaultView;
         const style = view ? view.getComputedStyle(el) : null;
@@ -726,7 +726,10 @@ export class PlaywrightBrowserSession implements BrowserSession {
           ) {
             score = 95;
           } else if (
-            hasControl(candidate, "input[name*='_Check'], input[name*='_two'], input[name*='_check']")
+            hasControl(
+              candidate,
+              "input[name*='_Check'], input[name*='_two'], input[name*='_check']",
+            )
           ) {
             score = 92;
           } else if (hasControl(candidate, "input[type='password']")) {
@@ -861,7 +864,9 @@ export class PlaywrightBrowserSession implements BrowserSession {
               getClientRects: () => { length: number };
               click: () => void;
               ownerDocument: {
-                defaultView: { getComputedStyle: (el: NodeLike) => { display: string; visibility: string } } | null;
+                defaultView: {
+                  getComputedStyle: (el: NodeLike) => { display: string; visibility: string };
+                } | null;
               };
             }
             interface ParentLike {
@@ -878,10 +883,16 @@ export class PlaywrightBrowserSession implements BrowserSession {
               )) {
                 if (seen.has(el)) continue;
                 seen.add(el);
-                const text = (el.innerText || el.getAttribute("value") || el.getAttribute("aria-label") || "")
+                const text = (
+                  el.innerText ||
+                  el.getAttribute("value") ||
+                  el.getAttribute("aria-label") ||
+                  ""
+                )
                   .replace(/\s+/g, " ")
                   .trim();
-                if (!text || text.length > 80 || rejectRe.test(text) || !acceptRe.test(text)) continue;
+                if (!text || text.length > 80 || rejectRe.test(text) || !acceptRe.test(text))
+                  continue;
                 const style = el.ownerDocument.defaultView?.getComputedStyle(el);
                 if (
                   el.hasAttribute("hidden") ||
