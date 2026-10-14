@@ -1,3 +1,6 @@
+/** Stuck-alert mail stays on this address. */
+export const STUCK_ALERT_RECIPIENT = "ht@tbs.one";
+
 export const LB_ALERT_KINDS = [
   "project.paused",
   "captcha.needs_operator",

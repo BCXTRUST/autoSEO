@@ -12,7 +12,13 @@ import {
   type ProxyProvider,
   type TextModel,
 } from "@rakazo/adapter-kit";
-import { type EncryptedSecretStore, loadSiteLoginForFill, upsertSiteLogin } from "@rakazo/adapters";
+import {
+  type EncryptedSecretStore,
+  loadSiteLoginForFill,
+  mailboxAddressesToRead,
+  signupMailboxAddress,
+  upsertSiteLogin,
+} from "@rakazo/adapters";
 import type {
   LbCaptchaDoor,
   LbCaptchaOutcome,
@@ -966,9 +972,16 @@ interface Credentials {
  */
 async function ensureCredentials(ctx: StepContext, host: HostRow): Promise<Credentials> {
   const { prisma, secrets } = ctx.services;
-  const email = ctx.project.mailboxAddress;
-  if (!email) throw new StepFailure("Project has no mailbox");
   const existing = await prisma.lbHostAccount.findUnique({ where: { hostId: host.id } });
+  const priorSignups = await prisma.lbHostAccount.count({ where: { projectId: ctx.project.id } });
+  const email = signupMailboxAddress({
+    existingAccount: Boolean(existing),
+    storedAddress: ctx.project.mailboxAddress,
+    seed: ctx.project.id,
+    domain: process.env.RESEND_INBOUND_DOMAIN,
+    priorSignups,
+  });
+  if (!email) throw new StepFailure("Project has no mailbox");
   if (existing?.siteLoginId) {
     const password = await loadPassword(ctx, existing.siteLoginId);
     return { username: existing.username, password, email, accountId: existing.id };
@@ -2152,15 +2165,29 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
   const account = ctx.account;
   if (!account) throw new StepFailure("Host has no account");
   const since = { since: new Date(account.createdAt.getTime() - 5 * 60_000) };
+  const priorSignups = await ctx.services.prisma.lbHostAccount.count({
+    where: { projectId: ctx.project.id },
+  });
+  const inboxIds = mailboxAddressesToRead({
+    seed: ctx.project.id,
+    domain: process.env.RESEND_INBOUND_DOMAIN,
+    priorSignups,
+    storedIds: [ctx.project.mailboxId, ctx.project.mailboxAddress],
+  });
   const readInbox = async () => {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        return await mailbox.listMessages?.(ctx.project.mailboxId ?? "", since, ctx.adapter);
-      } catch {
-        if (attempt === 1) return [];
+    const mails = [];
+    for (const inboxId of inboxIds) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const batch = await mailbox.listMessages?.(inboxId, since, ctx.adapter);
+          if (batch) mails.push(...batch);
+          break;
+        } catch {
+          if (attempt === 1) break;
+        }
       }
     }
-    return [];
+    return mails;
   };
   const linkFrom = (mails: Awaited<ReturnType<typeof readInbox>>) => {
     let found: string | null = null;

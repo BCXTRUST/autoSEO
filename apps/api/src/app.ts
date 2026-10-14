@@ -36,6 +36,7 @@ import {
   pipedreamConfigFromEnv,
   pushTokenPath,
   type RemoteConnectorDependencies,
+  ResendMailbox,
   ScriptedAgentRuntime,
   WorkspaceMemoryProviderResolver,
 } from "@rakazo/adapters";
@@ -44,7 +45,7 @@ import { createDb, createThreadEvents, type PrismaClient, requireMembership } fr
 import { MarkdownMemoryStore } from "@rakazo/memory";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { createAgentMailInbox, listAgentMailInboxes } from "./agentmail.js";
+import { listAgentMailInboxes } from "./agentmail.js";
 import { type AppEnv, loadEnv } from "./env.js";
 import { ingestInboundMail, verifyInboundMailSignature } from "./link-builder-mail.js";
 import {
@@ -235,23 +236,29 @@ export async function createApp(
   const reconciler = inMemoryJobs ? createJobReconciler({ prisma, jobs }) : undefined;
   reconciler?.start();
 
-  const mailbox = env.agentMailApiKey
-    ? new AgentMailMailbox(
-        {
-          listInboxes: async () => {
-            const rows = await listAgentMailInboxes(env.agentMailApiKey ?? "");
-            return rows.map((row) => ({
-              inboxId: row.inboxId,
-              email: row.email,
-              projectId: row.projectId,
-              workspaceId: null,
-            }));
-          },
-          createInbox: (input) => createAgentMailInbox(env.agentMailApiKey ?? "", input),
-        },
-        prisma,
-      )
-    : undefined;
+  const resendDomain = process.env.RESEND_INBOUND_DOMAIN?.trim();
+  const resendKey = process.env.RESEND_API_KEY?.trim();
+  const mailbox =
+    resendDomain && resendKey
+      ? new ResendMailbox({ domain: resendDomain, apiKey: resendKey, prisma })
+      : env.agentMailApiKey
+        ? new AgentMailMailbox(
+            {
+              listInboxes: async () => {
+                const rows = await listAgentMailInboxes(env.agentMailApiKey ?? "");
+                return rows.map((row) => ({
+                  inboxId: row.inboxId,
+                  email: row.email,
+                  projectId: row.projectId,
+                  workspaceId: null,
+                }));
+              },
+              createInbox: () =>
+                Promise.reject(new Error("New mailboxes are person addresses on Resend")),
+            },
+            prisma,
+          )
+        : undefined;
 
   const router = createRouter({
     prisma,
