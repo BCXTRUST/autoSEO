@@ -35,7 +35,12 @@ export interface OpsState {
     template: string | null;
     idleMs: number;
   };
-  hosts?: Array<{ domain: string; status: string; logins: number }>;
+  hosts?: Array<{
+    domain: string;
+    status: string;
+    logins: number;
+    currentUrl: string | null;
+  }>;
 }
 
 export function opsAuthorized(
@@ -154,6 +159,11 @@ export async function opsState(
     where: { projectId },
     select: { id: true, registrableDomain: true, status: true },
   });
+  const run = await deps.prisma.lbRun.findFirst({
+    where: { projectId },
+    orderBy: { updatedAt: "desc" },
+    select: { currentHostId: true, currentUrl: true },
+  });
   state.hosts = await Promise.all(
     hosts.map(async (host) => ({
       domain: host.registrableDomain,
@@ -161,6 +171,7 @@ export async function opsState(
       logins: await deps.prisma.siteLogin.count({
         where: { lbHostAccounts: { some: { hostId: host.id } } },
       }),
+      currentUrl: run?.currentHostId === host.id ? (run.currentUrl ?? null) : null,
     })),
   );
   return state;

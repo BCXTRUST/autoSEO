@@ -111,4 +111,65 @@ describe("recoverStuckStep", () => {
     );
     expect(again).toEqual({ kind: "wait", reason: "already_paused" });
   });
+
+  it("does not open a thread while the host is registering", async () => {
+    const gotos: string[] = [];
+    const thread = "https://forum.nordlicht.test/thread-1";
+    const session = {
+      url: async () => "https://forum.nordlicht.test/register",
+      formFields: async () => [],
+      listAnchors: async () => [
+        { text: "Vitamin question", href: thread },
+        { text: "Registrieren", href: "https://forum.nordlicht.test/register" },
+      ],
+      goto: async (url: string) => {
+        gotos.push(url);
+      },
+      holdForm: async () => undefined,
+      releaseForm: async () => undefined,
+      exists: async () => false,
+    };
+    const looked = await recoverStuckStep({
+      ...ctx({
+        steps: [
+          {
+            outcome: { lastAction: "The page did not finish, trying again" },
+            error: null,
+            createdAt: new Date("2026-10-15T11:00:00Z"),
+            kind: "register",
+          },
+        ],
+      }),
+      host: {
+        id: "host-1",
+        status: "registering",
+        registrableDomain: "forum.nordlicht.test",
+        homepageUrl: "https://forum.nordlicht.test/",
+      },
+      pool: () => ({ session }),
+      services: {
+        prisma: {
+          lbRunStep: {
+            findMany: async () => [
+              {
+                outcome: { lastAction: "The page did not finish, trying again" },
+                error: null,
+                createdAt: new Date("2026-10-15T11:00:00Z"),
+                kind: "register",
+              },
+            ],
+          },
+          lbProject: { findUnique: async () => ({ status: "active" }) },
+          computer: { findMany: async () => [] },
+        },
+        textModel: {
+          complete: async () => ({ ok: true, value: { action: "other_thread", index: 0 } }),
+        },
+      },
+    } as unknown as StepContext);
+    expect(looked?.kind).toBe("step");
+    if (looked?.kind !== "step") return;
+    expect(looked.outcome).toMatchObject({ looked: true, choice: "find_form" });
+    expect(gotos.some((url) => url.includes("thread"))).toBe(false);
+  });
 });

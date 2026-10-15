@@ -35,6 +35,10 @@ function recordingPrisma(calls: Recorded[]) {
         calls.push({ name: "lbRun.updateMany", args });
         return { count: 1 };
       },
+      findFirst: async () => ({
+        currentHostId: "host-1",
+        currentUrl: "https://forum.example/register",
+      }),
     },
     computer: {
       updateMany: async (args: unknown) => {
@@ -215,7 +219,14 @@ describe("ops routes", () => {
         template: "desktop",
         idleMs: 120000,
       });
-      expect(json.hosts).toEqual([{ domain: "forum.example", status: "active", logins: 1 }]);
+      expect(json.hosts).toEqual([
+        {
+          domain: "forum.example",
+          status: "active",
+          logins: 1,
+          currentUrl: "https://forum.example/register",
+        },
+      ]);
       expect(json.computers[0]?.browserSeenAt).toBeNull();
 
       const stopped = await app.request("/api/ops/stop-all", {

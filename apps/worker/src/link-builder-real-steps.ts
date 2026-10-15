@@ -3139,13 +3139,13 @@ const PAUSED_STUCK = "Paused, the browser step is stuck";
  * After that look, a still-stuck step pauses the project.
  */
 export async function recoverStuckStep(ctx: StepContext): Promise<StepResult | null> {
-  let rows: Array<{ outcome: unknown; error: string | null; createdAt: Date }> = [];
+  let rows: Array<{ outcome: unknown; error: string | null; createdAt: Date; kind?: string }> = [];
   try {
     rows = await ctx.services.prisma.lbRunStep.findMany({
       where: { runId: ctx.run.id },
       orderBy: { stepIndex: "desc" },
       take: 4,
-      select: { outcome: true, error: true, createdAt: true },
+      select: { outcome: true, error: true, createdAt: true, kind: true },
     });
   } catch {
     return null;
@@ -3158,7 +3158,8 @@ export async function recoverStuckStep(ctx: StepContext): Promise<StepResult | n
     return null;
   }
   if (decision === "pause") return pauseStuckProject(ctx);
-  return lookAtStuckPage(ctx);
+  const latestKind = rows[0]?.kind ?? "";
+  return lookAtStuckPage(ctx, latestKind);
 }
 
 function stuckRecordFromStep(step: { outcome: unknown; error: string | null }): StuckRecord {
@@ -3212,7 +3213,14 @@ async function pauseStuckProject(ctx: StepContext): Promise<StepResult> {
   };
 }
 
-async function lookAtStuckPage(ctx: StepContext): Promise<StepResult> {
+const REGISTER_LOOK_KINDS = new Set(["register", "captcha", "finish_registration"]);
+
+function stayOnRegistration(ctx: StepContext, stepKind: string): boolean {
+  if (ctx.host?.status === "registering") return true;
+  return REGISTER_LOOK_KINDS.has(stepKind);
+}
+
+async function lookAtStuckPage(ctx: StepContext, stepKind = ""): Promise<StepResult> {
   try {
     const entry = await sessionForLook(ctx);
     if (!entry) return pauseStuckProject(ctx);
@@ -3225,13 +3233,17 @@ async function lookAtStuckPage(ctx: StepContext): Promise<StepResult> {
       domain ? usablePageLinks(await collectPageAnchors(entry.session), pageUrl, domain) : []
     ).filter((link) => !bannedPage(link.url));
     const labels = emptyFieldLabels(fields);
-    const choice =
+    const stay = stayOnRegistration(ctx, stepKind);
+    const asked =
       (await askStuckLook(
         ctx,
         pageUrl,
         labels,
         links.map((link) => link.text),
+        stay,
       )) ?? localStuckChoice({ emptyFillable: labels.length, threadCount: links.length });
+    const choice =
+      stay && asked.action === "other_thread" ? { action: "find_form" as const } : asked;
     if (choice.action === "fill_fields") {
       await entry.session.holdForm?.();
       if (ctx.host) await fillEmptyAccountFields(ctx, entry.session, fields);
@@ -3293,18 +3305,20 @@ async function askStuckLook(
   url: string,
   fields: readonly string[],
   links: readonly string[],
+  stayOnForm = false,
 ): Promise<StuckLookAction | null> {
   const model = ctx.services.textModel;
   if (!model) return null;
+  const linkCount = stayOnForm ? 0 : links.length;
   const request = {
     lane: "classify" as const,
     modelId: PAGE_LOOK_MODEL,
     system: STUCK_LOOK_SYSTEM,
-    user: stuckLookPrompt({ url, fields, links }),
+    user: stuckLookPrompt({ url, fields, links, allowOtherThread: !stayOnForm }),
     maxTokens: 120,
     schema: {
       safeParse(value: unknown) {
-        const parsed = parseStuckLook(value, links.length);
+        const parsed = parseStuckLook(value, linkCount);
         if (!parsed) return { success: false as const };
         return { success: true as const, data: parsed };
       },
@@ -3318,7 +3332,7 @@ async function askStuckLook(
       }),
     ]);
     if (!result.ok || !("value" in result) || !result.value) return null;
-    return parseStuckLook(result.value, links.length);
+    return parseStuckLook(result.value, linkCount);
   } catch {
     return null;
   }
