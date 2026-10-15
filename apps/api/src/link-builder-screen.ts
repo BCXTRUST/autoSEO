@@ -15,6 +15,7 @@ import {
 } from "@rakazo/adapters";
 import type { Actor } from "@rakazo/contracts";
 import {
+  attachBrowserWindowStreamCommand,
   browserProcessCommand,
   browserWindowPresentCommand,
   detachedBrowserCommand,
@@ -22,9 +23,7 @@ import {
   parseVisibleWindows,
   prepareKioskDesktopCommand,
   raiseBrowserWindowCommand,
-  refreshVendorStreamCommand,
-  repaintBlackKioskCommand,
-  repairBlackStreamCommand,
+  signupFormHeldCommand,
   streamedDisplayCommand,
 } from "@rakazo/core";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
@@ -179,24 +178,32 @@ async function openScreen(
     if (computer?.state !== "running" || !computer?.providerRef) {
       return { url: null, error: null };
     }
-    const cached = liveCachedUrl(computer);
-    if (cached) {
-      void showForumSearchOnce(deps, actor, project, computer);
-      return { url: cached, error: null };
-    }
     let machine = computer;
-    let url: string | null;
-    try {
-      url = await connectTeamScreen(deps, actor, machine);
-    } catch (error) {
-      if (!isDeadSandboxError(error)) throw error;
-      const replaced = await replaceDeadTeamSandbox(deps, actor, machine);
-      if (!replaced) return { url: null, error: null };
-      machine = replaced;
-      url = await connectTeamScreen(deps, actor, machine);
+    let url = liveCachedUrl(machine);
+    if (url && typeof deps.sandbox.execute === "function") {
+      try {
+        await runDesktop(deps, actor, machine, "printf '%s\\n' ok");
+      } catch (error) {
+        if (!isDeadSandboxError(error)) throw error;
+        url = null;
+        const replaced = await replaceDeadTeamSandbox(deps, actor, machine);
+        if (!replaced) return { url: null, error: null };
+        machine = replaced;
+      }
+    }
+    if (!url) {
+      try {
+        url = await connectTeamScreen(deps, actor, machine);
+      } catch (error) {
+        if (!isDeadSandboxError(error)) throw error;
+        const replaced = await replaceDeadTeamSandbox(deps, actor, machine);
+        if (!replaced) return { url: null, error: null };
+        machine = replaced;
+        url = await connectTeamScreen(deps, actor, machine);
+      }
     }
     if (!url) return { url: null, error: null };
-    void showForumSearchOnce(deps, actor, project, machine);
+    await showForumSearchOnce(deps, actor, project, machine);
     return { url, error: null };
   } catch (error) {
     if (error instanceof ORPCError) throw error;
@@ -324,10 +331,13 @@ async function replaceDeadTeamSandbox(
     if (created?.providerRef) {
       await deps.sandbox.destroy(created, context).catch(() => undefined);
     }
+    await deps.sandbox
+      .destroy(toComputerRef({ ...computer, providerRef: deadRef }), context)
+      .catch(() => undefined);
     await deps.prisma.computer
       .updateMany({
         where: { id: computer.id, state: "booting", providerRef: null },
-        data: { state: "running", providerRef: deadRef },
+        data: { state: "stopped", providerRef: null, screenUrl: null },
       })
       .catch(() => undefined);
     throw error;
@@ -424,55 +434,46 @@ async function showForumSearch(
   const onProblem = (titles: readonly string[]) =>
     query ? desktopShowsProblemSearch(titles, query, shops) : desktopShowsForumSearch(titles);
   try {
+    const held = await runDesktop(deps, actor, computer, signupFormHeldCommand()).catch(() => "");
     let titles = await visibleTitles(deps, actor, computer, display);
     const persona = await personaBrowserOwnsDesktop(deps, actor, computer);
     const present = await runDesktop(deps, actor, computer, browserWindowPresentCommand(display)).catch(
       () => "",
     );
     const browserUp = present.includes("browser");
+    const formOnScreen = held.includes("held") || titlesShowSignupForm(titles);
+    if (browserUp && (formOnScreen || persona)) {
+      await runDesktop(deps, actor, computer, attachBrowserWindowStreamCommand(display)).catch(
+        () => undefined,
+      );
+      return;
+    }
     const starting = await runDesktop(deps, actor, computer, browserProcessCommand()).catch(
       () => "",
     );
+    const processUp = starting.trim() === "up" || starting.includes("\nup\n") || starting.startsWith("up");
     let launched = false;
-    // A headless persona process has no window on the stream. Still open
-    // Firefox there. prepareKiosk killalls Chromium, which is that persona.
-    if (!browserUp) {
-      if (starting.includes("ff-up")) {
-        await runDesktop(
-          deps,
-          actor,
-          computer,
-          "pkill -x firefox-esr >/dev/null 2>&1 || true; pkill -x firefox >/dev/null 2>&1 || true; sleep 0.3",
-        ).catch(() => undefined);
-      }
-      if (!persona) {
-        await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
-      }
+    if (!browserUp && !processUp && !formOnScreen) {
+      if (!persona) await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
       await runDesktop(deps, actor, computer, detachedBrowserCommand(display, url));
       launched = true;
       titles = await visibleTitles(deps, actor, computer, display);
-      if (!onProblem(titles)) {
+      if (!persona && !titlesShowSignupForm(titles) && !onProblem(titles)) {
         await runDesktop(deps, actor, computer, typeSearchUrlCommand(display, url));
         titles = await visibleTitles(deps, actor, computer, display);
       }
-    } else if (!persona && !onProblem(titles)) {
+    } else if (!persona && browserUp && !titlesShowSignupForm(titles) && !onProblem(titles)) {
       await runDesktop(deps, actor, computer, typeSearchUrlCommand(display, url));
       titles = await visibleTitles(deps, actor, computer, display);
     }
-    try {
-      await runDesktop(deps, actor, computer, raiseBrowserWindowCommand(display));
-    } catch {
-      // The kiosk window can still be opening. The next screen open tries again.
+    if (!persona && !titlesShowSignupForm(titles)) {
+      try {
+        await runDesktop(deps, actor, computer, raiseBrowserWindowCommand(display));
+      } catch {
+        // The window can still be mapping. The stream attach waits for it.
+      }
     }
-    if (!persona && (launched || !onProblem(titles))) {
-      await runDesktop(deps, actor, computer, repaintBlackKioskCommand(display, url)).catch(
-        () => undefined,
-      );
-    }
-    await runDesktop(deps, actor, computer, repairBlackStreamCommand(display)).catch(
-      () => undefined,
-    );
-    await runDesktop(deps, actor, computer, refreshVendorStreamCommand(display, launched)).catch(
+    await runDesktop(deps, actor, computer, attachBrowserWindowStreamCommand(display)).catch(
       () => undefined,
     );
     titles = await visibleTitles(deps, actor, computer, display);
@@ -498,13 +499,10 @@ async function showForumSearch(
   }
 }
 
-/** Wallpaper, icons, and panels are the desktop shell, not the browser window. */
-function isDesktopShellTitle(title: string): boolean {
-  const text = title.trim();
-  if (!text) return true;
-  return (
-    /^(home|trash|file system|desktop|xfce4-panel|xfdesktop)$/i.test(text) ||
-    /fluxbox|xfce|e2b/i.test(text)
+/** The signup form is the active page. Do not type a URL, resize, or relaunch over it. */
+function titlesShowSignupForm(titles: readonly string[]): boolean {
+  return titles.some((title) =>
+    /registrier|anmeld|sign[\s-]*up|create account|konto erstellen/i.test(title),
   );
 }
 

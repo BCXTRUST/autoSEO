@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import type { BrowserSession, ClickableControl, FormFieldInfo } from "@rakazo/adapter-kit";
 import {
   assertPacing,
@@ -195,14 +195,24 @@ export class PlaywrightBrowserSession implements BrowserSession {
 
   async holdForm(): Promise<void> {
     this.formHeld = true;
+    await writeFile("/tmp/rakazo-form-hold", "held").catch(() => undefined);
     await this.page
       .evaluate(() => {
         const view = globalThis as {
           scrollX: number;
           scrollY: number;
           scrollTo: (x: number, y: number) => void;
-          addEventListener: (type: string, listener: () => void, capture?: boolean) => void;
+          scrollBy: (x: number, y: number) => void;
+          addEventListener: (
+            type: string,
+            listener: (event?: { preventDefault?: () => void; target?: { scrollTop?: number; scrollLeft?: number } }) => void,
+            capture?: boolean | { capture?: boolean; passive?: boolean },
+          ) => void;
           removeEventListener: (type: string, listener: () => void, capture?: boolean) => void;
+          document?: {
+            documentElement?: { scrollTop: number; scrollLeft: number };
+            body?: { scrollTop: number; scrollLeft: number };
+          };
           Element?: { prototype: { scrollIntoView: (...args: unknown[]) => void } };
           __rakazoFormHold?: { restore: () => void };
         };
@@ -211,20 +221,45 @@ export class PlaywrightBrowserSession implements BrowserSession {
         const y = view.scrollY;
         const prototype = view.Element?.prototype;
         const original = prototype?.scrollIntoView;
+        const originalTo = view.scrollTo;
+        const originalBy = view.scrollBy;
         if (prototype) prototype.scrollIntoView = () => undefined;
-        let restoring = false;
-        const onScroll = () => {
-          if (restoring) return;
-          if (view.scrollX === x && view.scrollY === y) return;
-          restoring = true;
-          view.scrollTo(x, y);
-          restoring = false;
+        const pin = () => {
+          const root = view.document?.documentElement;
+          const body = view.document?.body;
+          if (root) {
+            root.scrollTop = y;
+            root.scrollLeft = x;
+          }
+          if (body) {
+            body.scrollTop = y;
+            body.scrollLeft = x;
+          }
+        };
+        view.scrollTo = () => pin();
+        view.scrollBy = () => pin();
+        const onScroll = (event?: { target?: { scrollTop?: number; scrollLeft?: number } }) => {
+          const target = event?.target;
+          if (target && target !== view.document?.documentElement && target !== view.document?.body) {
+            if (typeof target.scrollTop === "number") target.scrollTop = 0;
+            if (typeof target.scrollLeft === "number") target.scrollLeft = 0;
+          }
+          pin();
+        };
+        const onWheel = (event?: { preventDefault?: () => void }) => {
+          event?.preventDefault?.();
+          pin();
         };
         view.addEventListener("scroll", onScroll, true);
+        view.addEventListener("wheel", onWheel, { capture: true, passive: false });
+        pin();
         view.__rakazoFormHold = {
           restore: () => {
             if (prototype && original) prototype.scrollIntoView = original;
-            view.removeEventListener("scroll", onScroll, true);
+            view.scrollTo = originalTo;
+            view.scrollBy = originalBy;
+            view.removeEventListener("scroll", onScroll as () => void, true);
+            view.removeEventListener("wheel", onWheel as () => void, true);
             delete view.__rakazoFormHold;
           },
         };
@@ -234,6 +269,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
 
   async releaseForm(): Promise<void> {
     this.formHeld = false;
+    await rm("/tmp/rakazo-form-hold", { force: true }).catch(() => undefined);
     await this.page
       .evaluate(() => {
         const view = globalThis as { __rakazoFormHold?: { restore: () => void } };
@@ -587,6 +623,16 @@ export class PlaywrightBrowserSession implements BrowserSession {
 
   async drag(sourceSelector: string, targetSelector: string): Promise<void> {
     await this.paceAction();
+    if (this.formHeld) {
+      const source = await this.page.locator(sourceSelector).first().boundingBox();
+      const target = await this.page.locator(targetSelector).first().boundingBox();
+      if (!source || !target) return;
+      await this.page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+      await this.page.mouse.down();
+      await this.page.mouse.move(target.x + target.width / 2, target.y + target.height / 2);
+      await this.page.mouse.up();
+      return;
+    }
     await deadline(
       this.page.locator(sourceSelector).first().dragTo(this.page.locator(targetSelector).first(), {
         timeout: 4_000,

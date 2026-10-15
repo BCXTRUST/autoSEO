@@ -24,14 +24,14 @@ interface RecordedCall {
 
 /**
  * Fake SDK clients. They record the command and env the provider forwards and return the
- * shell's exit immediately, which is what a detached `nohup … &` start must do.
+ * shell's exit immediately, which is what a detached `setsid -f` start must do.
  */
 function scripted(options: { startExit?: number; answerPing?: boolean } = {}) {
   const calls: RecordedCall[] = [];
   let started = false;
   const answer = (command: string, env?: Record<string, string>) => {
     calls.push({ command, env });
-    if (command.includes("nohup")) {
+    if (command.includes("setsid -f")) {
       started = (options.startExit ?? 0) === 0;
       return { exitCode: options.startExit ?? 0, stdout: "" };
     }
@@ -112,10 +112,11 @@ async function open(
 }
 
 function expectServeContract(calls: RecordedCall[]) {
-  const start = calls.find((call) => call.command.includes("nohup"));
+  const start = calls.find((call) => call.command.includes("setsid -f"));
   expect(start?.command).toContain("rakazo-lb-browser");
   expect(start?.command).toContain("/tmp/rakazo-lb/project-1.json");
   expect(start?.command).toContain("chmod 700");
+  expect(start?.command).toContain('DISPLAY="${DISPLAY:-:0}"');
   const launch = JSON.parse(
     Buffer.from(start?.env?.[LAUNCH_ENV] ?? "", "base64").toString("utf8"),
   ) as { profileDir: string; executablePath: string };
@@ -144,7 +145,7 @@ describe("Daytona and E2B honor the browser serve contract", () => {
   ] as const)("%s fails when the start script exits non-zero", async (_name, build) => {
     const script = scripted({ startExit: 7 });
     await expect(open(build(script))).rejects.toThrow(/exit 7/);
-    expect(script.calls.some((call) => call.command.includes("nohup"))).toBe(true);
+    expect(script.calls.some((call) => call.command.includes("setsid -f"))).toBe(true);
   });
 
   it.each([

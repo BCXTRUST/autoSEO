@@ -22,13 +22,11 @@ export interface LivePaneView {
 
 export function livePaneView(connection: string | null, crop: BrowserCrop | null): LivePaneView {
   if (connection) return { cover: true, showingBrowser: false, status: connection };
-  if (!crop || crop.kind === "desktop") {
-    return { cover: true, showingBrowser: false, status: "Opening the browser" };
-  }
-  if (crop.kind === "blank") {
-    return { cover: false, showingBrowser: true, status: "Opening the browser" };
-  }
-  return { cover: false, showingBrowser: true, status: null };
+  if (crop?.kind === "browser") return { cover: false, showingBrowser: true, status: null };
+  // Wallpaper and a black framebuffer stay covered. No status here: a search
+  // in progress is not a chip, and the strip only speaks when the computer
+  // is off or reconnecting.
+  return { cover: true, showingBrowser: false, status: null };
 }
 
 /**

@@ -59,12 +59,12 @@ describe("live pane status", () => {
     expect(livePaneView(null, { kind: "desktop" })).toEqual({
       cover: true,
       showingBrowser: false,
-      status: "Opening the browser",
+      status: null,
     });
     expect(livePaneView(null, { kind: "blank" })).toEqual({
-      cover: false,
-      showingBrowser: true,
-      status: "Opening the browser",
+      cover: true,
+      showingBrowser: false,
+      status: null,
     });
     expect(
       livePaneView(null, { kind: "browser", rect: { x: 0, y: 0, width: 80, height: 50 } }),

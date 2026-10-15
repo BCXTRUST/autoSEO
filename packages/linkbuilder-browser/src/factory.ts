@@ -155,7 +155,8 @@ export const SANDBOX_CHROMIUM = "/usr/bin/chromium";
 
 const START_SCRIPT =
   'state="$1"; shift; mkdir -p "$(dirname "$state")" && chmod 700 "$(dirname "$state")" && ' +
-  'nohup "$@" serve --state "$state" >"$state.log" 2>&1 </dev/null &';
+  'export DISPLAY="${DISPLAY:-:0}" && ' +
+  'setsid -f "$@" serve --state "$state" </dev/null >"$state.log" 2>&1';
 
 async function collect(
   events: AsyncIterable<{ type: string; data?: string; code?: number }>,

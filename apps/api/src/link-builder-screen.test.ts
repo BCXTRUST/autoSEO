@@ -168,6 +168,80 @@ describe("project computer screen", () => {
     expect(result.url).toContain("/novnc/remote/view/");
   });
 
+  it("drops a fresh screen url when that sandbox is already gone", async () => {
+    const expires = Date.now() + 60 * 60_000;
+    const stale = `https://app.autoseo.run/novnc/remote/view/${expires}.capability/vnc.html`;
+    const dead = new Error("Sandbox is probably not running anymore");
+    dead.name = "SandboxNotFoundError";
+    const provision = vi.fn(async () => ({
+      id: "sandbox-2",
+      botId: "team-workspace-1",
+      kind: "e2b" as const,
+      providerRef: "sandbox-2",
+      fresh: true,
+    }));
+    const prisma = {
+      lbProject: { findFirst: vi.fn(async () => ({ id: "project-1" })) },
+      computer: {
+        findMany: vi.fn(async () => [computer({ screenUrl: stale })]),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+        update: vi.fn(async () => computer()),
+      },
+      bot: { findFirst: vi.fn(async () => ({ id: "bot-1" })) },
+    } as unknown as PrismaClient;
+    const result = await openProjectComputerScreen(
+      deps(prisma, {
+        connectScreen: vi.fn(async () => ({
+          url: "https://49982-user.e2b.app/vnc.html?autoconnect=true",
+        })),
+        provision,
+        destroy: vi.fn(async () => undefined),
+        execute: async function* () {
+          throw dead;
+        },
+      }),
+      actor,
+      "project-1",
+    );
+    expect(provision).toHaveBeenCalledTimes(1);
+    expect(result.url).toContain("/novnc/remote/view/");
+    expect(result.url).not.toBe(stale);
+  });
+
+  it("does not write a dead sandbox id back when replacement fails", async () => {
+    const dead = new Error("Sandbox is probably not running anymore");
+    dead.name = "SandboxNotFoundError";
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    const prisma = {
+      lbProject: { findFirst: vi.fn(async () => ({ id: "project-1" })) },
+      computer: {
+        findMany: vi.fn(async () => [computer()]),
+        updateMany,
+      },
+      bot: { findFirst: vi.fn(async () => null) },
+    } as unknown as PrismaClient;
+    const result = await openProjectComputerScreen(
+      deps(prisma, {
+        connectScreen: vi.fn(async () => {
+          throw dead;
+        }),
+        provision: vi.fn(async () => {
+          throw new Error("create failed");
+        }),
+        destroy: vi.fn(async () => undefined),
+      }),
+      actor,
+      "project-1",
+    );
+    expect(result.url).toBeNull();
+    expect(result.error).toContain("create failed");
+    const restored = updateMany.mock.calls.some((call) => {
+      const data = (call[0] as { data?: { providerRef?: string | null } }).data;
+      return data?.providerRef === "sandbox-1";
+    });
+    expect(restored).toBe(false);
+  });
+
   it("does not start a second sandbox when another request already claimed the computer", async () => {
     const dead = new Error("Sandbox is probably not running anymore");
     dead.name = "SandboxNotFoundError";

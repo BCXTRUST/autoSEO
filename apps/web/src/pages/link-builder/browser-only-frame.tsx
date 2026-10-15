@@ -54,6 +54,7 @@ export function BrowserOnlyFrame({
         if (!doc) {
           publish(livePaneView("Reconnecting", null));
         } else {
+          hideNovncChrome(doc);
           const stated = livePaneStatus(
             connectionStatusText(
               doc.querySelector("#noVNC_status")?.textContent ?? "",
@@ -126,6 +127,22 @@ export function BrowserOnlyFrame({
       ) : null}
     </div>
   );
+}
+
+function hideNovncChrome(doc: Document) {
+  for (const id of [
+    "noVNC_status",
+    "noVNC_status_bar",
+    "noVNC_transition",
+    "noVNC_control_bar",
+    "noVNC_control_bar_anchor",
+    "noVNC_popup_status_panel",
+  ]) {
+    const node = doc.getElementById(id);
+    if (!(node instanceof HTMLElement)) continue;
+    node.style.setProperty("display", "none", "important");
+    if (id === "noVNC_status" || id === "noVNC_transition") node.textContent = "";
+  }
 }
 
 function writeStyle(
