@@ -396,6 +396,66 @@ describe("computer provisioning", () => {
       await rm(dataDir, { recursive: true, force: true });
     }
   });
+
+  it("saves a replacement sandbox and destroys the dead id", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "rakazo-provision-replace-"));
+    const replacement = {
+      id: "provider-2",
+      botId: "bot-1",
+      kind: "e2b" as const,
+      providerRef: "provider-2",
+      fresh: true,
+    };
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    const destroy = vi.fn(async () => undefined);
+    const prisma = {
+      computer: {
+        findUniqueOrThrow: vi.fn().mockResolvedValue({
+          id: "computer-1",
+          homeKey: "bot-1",
+          providerRef: "provider-1",
+          kind: "e2b",
+          scope: "dedicated",
+          state: "running",
+          controlLeaseId: null,
+        }),
+        updateMany,
+      },
+    } as unknown as PrismaClient;
+    const sandbox = {
+      provision: vi.fn().mockResolvedValue(replacement),
+      prepare: vi.fn().mockResolvedValue(undefined),
+      destroy,
+    } as unknown as SandboxProvider;
+    try {
+      await expect(
+        provisionComputer(
+          {
+            prisma,
+            sandbox,
+            home: {} as AgentHomeStore,
+            jobs: {} as JobPublisher,
+            events: {} as ThreadEvents,
+            dataDir,
+          },
+          "computer-1",
+          context,
+        ),
+      ).resolves.toEqual(replacement);
+      expect(updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "computer-1", providerRef: "provider-1" },
+          data: expect.objectContaining({ providerRef: "provider-2", state: "running" }),
+        }),
+      );
+      expect(destroy).toHaveBeenCalledWith(
+        expect.objectContaining({ providerRef: "provider-1" }),
+        context,
+      );
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("computer execution leases", () => {

@@ -1,11 +1,18 @@
+import { join } from "node:path";
 import { ORPCError } from "@orpc/server";
 import type {
   AdapterContext,
   AgentHomeStore,
+  ComputerRef,
   JobPublisher,
   SandboxProvider,
 } from "@rakazo/adapter-kit";
-import { ComputerBusyError, provisionComputer, toComputerRef } from "@rakazo/adapters";
+import {
+  ComputerBusyError,
+  isUnrecoverableSandboxError,
+  provisionComputer,
+  toComputerRef,
+} from "@rakazo/adapters";
 import type { Actor } from "@rakazo/contracts";
 import {
   chromeKioskStampCommand,
@@ -172,9 +179,19 @@ async function openScreen(
       void showForumSearch(deps, actor, project, computer);
       return { url: cached, error: null };
     }
-    const url = await connectTeamScreen(deps, actor, computer);
+    let machine = computer;
+    let url: string | null;
+    try {
+      url = await connectTeamScreen(deps, actor, machine);
+    } catch (error) {
+      if (!isDeadSandboxError(error)) throw error;
+      const replaced = await replaceDeadTeamSandbox(deps, actor, machine);
+      if (!replaced) return { url: null, error: null };
+      machine = replaced;
+      url = await connectTeamScreen(deps, actor, machine);
+    }
     if (!url) return { url: null, error: null };
-    void showForumSearch(deps, actor, project, computer);
+    void showForumSearch(deps, actor, project, machine);
     return { url, error: null };
   } catch (error) {
     if (error instanceof ORPCError) throw error;
@@ -192,6 +209,12 @@ function quietScreenFailure(error: unknown): { url: null; error: string | null }
 
 function isStillStarting(error: unknown): boolean {
   return error instanceof Error && error.message === "The computer took too long to start";
+}
+
+/** E2B's missing-sandbox error. The message does not always say "not found". */
+export function isDeadSandboxError(error: unknown): boolean {
+  if (isUnrecoverableSandboxError(error)) return true;
+  return error instanceof Error && error.name === "SandboxNotFoundError";
 }
 
 function liveCachedUrl(computer: TeamComputer): string | null {
@@ -239,6 +262,71 @@ async function connectTeamScreen(
     data: { screenUrl: published },
   });
   return published;
+}
+
+/**
+ * The stored id is gone. Start one fresh sandbox, save it, then destroy the
+ * dead id. A second caller that loses the claim does not create another.
+ */
+async function replaceDeadTeamSandbox(
+  deps: ProjectScreenDeps,
+  actor: Actor,
+  computer: TeamComputer,
+): Promise<TeamComputer | null> {
+  const deadRef = computer.providerRef;
+  if (!deadRef) return null;
+  const claimed = await deps.prisma.computer.updateMany({
+    where: { id: computer.id, state: "running", providerRef: deadRef },
+    data: { state: "booting", providerRef: null, screenUrl: null },
+  });
+  if (claimed.count !== 1) return null;
+  const context = screenContext(actor, undefined, new AbortController().signal);
+  let created: ComputerRef | null = null;
+  try {
+    created = await deps.sandbox.provision(
+      {
+        botId: computer.homeKey,
+        homePath: join(deps.dataDir, "computer-home", computer.homeKey),
+      },
+      context,
+    );
+    if (!created.providerRef) throw new Error("replacement sandbox has no id");
+    const saved = await deps.prisma.computer.updateMany({
+      where: { id: computer.id, state: "booting", providerRef: null },
+      data: {
+        state: "running",
+        providerRef: created.providerRef,
+        kind: created.kind,
+        screenUrl: null,
+      },
+    });
+    if (saved.count !== 1) {
+      await deps.sandbox.destroy(created, context).catch(() => undefined);
+      return null;
+    }
+    await deps.sandbox
+      .destroy(toComputerRef({ ...computer, providerRef: deadRef }), context)
+      .catch(() => undefined);
+    console.info("link builder screen replaced dead sandbox");
+    return {
+      ...computer,
+      state: "running",
+      providerRef: created.providerRef,
+      kind: created.kind,
+      screenUrl: null,
+    };
+  } catch (error) {
+    if (created?.providerRef) {
+      await deps.sandbox.destroy(created, context).catch(() => undefined);
+    }
+    await deps.prisma.computer
+      .updateMany({
+        where: { id: computer.id, state: "booting", providerRef: null },
+        data: { state: "running", providerRef: deadRef },
+      })
+      .catch(() => undefined);
+    throw error;
+  }
 }
 
 function publishableScreenUrl(url: string): string | null {

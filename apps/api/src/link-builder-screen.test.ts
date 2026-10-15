@@ -124,6 +124,102 @@ describe("project computer screen", () => {
     expect(result.url).not.toBe(stale);
   });
 
+  it("replaces one dead sandbox and does not leave the old id running", async () => {
+    const dead = new Error("Sandbox is probably not running anymore");
+    dead.name = "SandboxNotFoundError";
+    const connectScreen = vi.fn().mockRejectedValueOnce(dead).mockResolvedValueOnce({
+      url: "https://49982-user.e2b.app/vnc.html?autoconnect=true",
+    });
+    const provision = vi.fn(async () => ({
+      id: "sandbox-2",
+      botId: "team-workspace-1",
+      kind: "e2b" as const,
+      providerRef: "sandbox-2",
+      fresh: true,
+    }));
+    const destroy = vi.fn(async () => undefined);
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    const prisma = {
+      lbProject: { findFirst: vi.fn(async () => ({ id: "project-1" })) },
+      computer: {
+        findMany: vi.fn(async () => [computer()]),
+        updateMany,
+        update: vi.fn(async () => computer()),
+      },
+      bot: { findFirst: vi.fn(async () => ({ id: "bot-1" })) },
+    } as unknown as PrismaClient;
+    const result = await openProjectComputerScreen(
+      deps(prisma, { connectScreen, provision, destroy }),
+      actor,
+      "project-1",
+    );
+    expect(provision).toHaveBeenCalledTimes(1);
+    expect(provision.mock.calls[0]?.[0]).toMatchObject({ botId: "team-workspace-1" });
+    expect(provision.mock.calls[0]?.[0]).not.toHaveProperty("providerRef");
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(destroy.mock.calls[0]?.[0]).toMatchObject({ providerRef: "sandbox-1" });
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "computer-1", state: "running", providerRef: "sandbox-1" },
+        data: { state: "booting", providerRef: null, screenUrl: null },
+      }),
+    );
+    expect(result.error).toBeNull();
+    expect(result.url).toContain("/novnc/remote/view/");
+  });
+
+  it("does not start a second sandbox when another request already claimed the computer", async () => {
+    const dead = new Error("Sandbox is probably not running anymore");
+    dead.name = "SandboxNotFoundError";
+    const provision = vi.fn();
+    const prisma = {
+      lbProject: { findFirst: vi.fn(async () => ({ id: "project-1" })) },
+      computer: {
+        findMany: vi.fn(async () => [computer()]),
+        updateMany: vi.fn(async () => ({ count: 0 })),
+      },
+      bot: { findFirst: vi.fn(async () => null) },
+    } as unknown as PrismaClient;
+    const result = await openProjectComputerScreen(
+      deps(prisma, {
+        connectScreen: vi.fn(async () => {
+          throw dead;
+        }),
+        provision,
+        destroy: vi.fn(),
+      }),
+      actor,
+      "project-1",
+    );
+    expect(result).toEqual({ url: null, error: null });
+    expect(provision).not.toHaveBeenCalled();
+  });
+
+  it("does not replace a sandbox when the stream error is transient", async () => {
+    const provision = vi.fn();
+    const prisma = {
+      lbProject: { findFirst: vi.fn(async () => ({ id: "project-1" })) },
+      computer: {
+        findMany: vi.fn(async () => [computer()]),
+        updateMany: vi.fn(),
+      },
+      bot: { findFirst: vi.fn(async () => null) },
+    } as unknown as PrismaClient;
+    const result = await openProjectComputerScreen(
+      deps(prisma, {
+        connectScreen: vi.fn(async () => {
+          throw new Error("ECONNRESET");
+        }),
+        provision,
+      }),
+      actor,
+      "project-1",
+    );
+    expect(provision).not.toHaveBeenCalled();
+    expect(result.url).toBeNull();
+    expect(result.error).toContain("ECONNRESET");
+  });
+
   it("does not start a computer just to show the dashboard", async () => {
     const connectScreen = vi.fn();
     const keepAlive = vi.fn();

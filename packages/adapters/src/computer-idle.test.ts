@@ -124,6 +124,12 @@ describe("e2b create options", () => {
 
   it("only recreates when the sandbox is actually gone", () => {
     expect(isUnrecoverableSandboxError(new Error("sandbox not found"))).toBe(true);
+    expect(isUnrecoverableSandboxError(new Error("Sandbox is probably not running anymore"))).toBe(
+      true,
+    );
+    const named = new Error("gone");
+    named.name = "SandboxNotFoundError";
+    expect(isUnrecoverableSandboxError(named)).toBe(true);
     expect(isUnrecoverableSandboxError(new Error("ECONNRESET"))).toBe(false);
   });
 

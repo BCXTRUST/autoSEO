@@ -175,11 +175,13 @@ export async function provisionComputer(
 
 async function reconnectComputer(
   deps: {
+    prisma: PrismaClient;
     sandbox: SandboxProvider;
     home: AgentHomeStore;
     dataDir?: string;
   },
   computer: {
+    id: string;
     homeKey: string;
     providerRef: string | null;
     kind: string;
@@ -188,15 +190,34 @@ async function reconnectComputer(
   homePath: string,
   context: AdapterContext,
 ): Promise<ComputerRef> {
+  const previous = computer.providerRef;
   const ref = await deps.sandbox.provision(
     {
       botId: computer.homeKey,
       homePath,
-      providerRef: computer.providerRef ?? undefined,
+      providerRef: previous ?? undefined,
       providerKind: computer.kind as ComputerRef["kind"],
     },
     context,
   );
+  if (previous && ref.providerRef && ref.providerRef !== previous) {
+    const saved = await deps.prisma.computer.updateMany({
+      where: { id: computer.id, providerRef: previous },
+      data: {
+        state: "running",
+        providerRef: ref.providerRef,
+        kind: ref.kind,
+        screenUrl: null,
+      },
+    });
+    if (saved.count !== 1) {
+      await deps.sandbox.destroy(ref, context).catch(() => undefined);
+      throw new ComputerBusyError();
+    }
+    await deps.sandbox
+      .destroy({ ...ref, id: previous, providerRef: previous }, context)
+      .catch(() => undefined);
+  }
   await deps.sandbox.prepare(ref, context);
   await ensureComputerWorkspaceLayout(
     deps.sandbox,

@@ -105,8 +105,10 @@ export function e2bCreateOptions(botId: string, apiKey: string) {
 }
 
 export function isUnrecoverableSandboxError(error: unknown): boolean {
+  const name = error && typeof error === "object" && "name" in error ? String(error.name) : "";
+  if (name === "SandboxNotFoundError") return true;
   const message = error instanceof Error ? error.message : String(error);
-  return /not found|does not exist|404|not_found|killed|doesn't exist|sandbox not found/i.test(
+  return /not found|does not exist|404|not_found|killed|doesn't exist|sandbox not found|not running anymore/i.test(
     message,
   );
 }
