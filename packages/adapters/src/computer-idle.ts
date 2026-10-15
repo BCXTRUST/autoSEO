@@ -15,7 +15,9 @@ export const DEFAULT_SANDBOX_HARD_TIMEOUT_MS = 300_000;
 
 export function sandboxIdleMs(): number {
   const raw = Number(process.env.SANDBOX_IDLE_MS ?? DEFAULT_SANDBOX_IDLE_MS);
-  return Number.isFinite(raw) && raw >= 30_000 ? raw : DEFAULT_SANDBOX_IDLE_MS;
+  const value = Number.isFinite(raw) && raw >= 30_000 ? raw : DEFAULT_SANDBOX_IDLE_MS;
+  if (process.env.SANDBOX_PROVIDER === "e2b") return Math.min(value, 120_000);
+  return value;
 }
 
 export function sandboxHardTimeoutMs(): number {

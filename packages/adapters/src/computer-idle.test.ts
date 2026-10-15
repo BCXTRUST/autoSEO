@@ -21,6 +21,21 @@ describe("sandbox idle", () => {
     }
   });
 
+  it("caps an e2b idle of ten minutes at two minutes", () => {
+    const previousIdle = process.env.SANDBOX_IDLE_MS;
+    const previousProvider = process.env.SANDBOX_PROVIDER;
+    process.env.SANDBOX_IDLE_MS = "600000";
+    process.env.SANDBOX_PROVIDER = "e2b";
+    try {
+      expect(sandboxIdleMs()).toBe(120_000);
+    } finally {
+      if (previousIdle === undefined) delete process.env.SANDBOX_IDLE_MS;
+      else process.env.SANDBOX_IDLE_MS = previousIdle;
+      if (previousProvider === undefined) delete process.env.SANDBOX_PROVIDER;
+      else process.env.SANDBOX_PROVIDER = previousProvider;
+    }
+  });
+
   it("does not suspend a computer while a run is active", async () => {
     const harness = idleHarness();
     harness.prisma.run.findFirst.mockResolvedValueOnce({ id: "run" });
