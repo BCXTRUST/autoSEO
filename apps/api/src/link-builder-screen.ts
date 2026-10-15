@@ -484,7 +484,13 @@ async function showForumSearch(
         await runDesktop(deps, actor, computer, typeSearchUrlCommand(display, url));
         titles = await visibleTitles(deps, actor, computer, display);
       }
-    } else if (!persona && browserUp && !titlesShowSignupForm(titles) && !onProblem(titles)) {
+    } else if (
+      !persona &&
+      browserUp &&
+      !titlesShowSignupForm(titles) &&
+      !onProblem(titles) &&
+      titlesLookLikeShell(titles)
+    ) {
       await runDesktop(deps, actor, computer, typeSearchUrlCommand(display, url));
       titles = await visibleTitles(deps, actor, computer, display);
     }
@@ -524,6 +530,16 @@ async function showForumSearch(
   } catch (error) {
     console.error("link builder screen", "forum search", publicScreenError(error));
   }
+}
+
+/** A blank desktop or a new tab. A forum page is not a shell, so the search URL stays out of the bar. */
+function titlesLookLikeShell(titles: readonly string[]): boolean {
+  if (titles.length === 0) return true;
+  return titles.every((title) =>
+    /xfce|xfwm|thunar|screensaver|desktop|^home$|^new tab$|^mozilla firefox$|^firefox$/i.test(
+      title.trim(),
+    ),
+  );
 }
 
 /** The signup form is the active page. Do not type a URL, resize, or relaunch over it. */
