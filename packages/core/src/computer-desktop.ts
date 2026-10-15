@@ -478,7 +478,7 @@ export function browserWindowPresentCommand(display: string): string {
   const quotedDisplay = posixShellQuote(display);
   return [
     `export DISPLAY=${quotedDisplay}`,
-    "for class in google-chrome Google-chrome Chromium chromium firefox Firefox Firefox-esr Navigator firefox-esr; do",
+    "for class in chromium Chromium; do",
     "  id=$(xdotool search --onlyvisible --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
     "  if [ -n \"$id\" ]; then printf '%s\\n' browser; exit 0; fi",
     "done",

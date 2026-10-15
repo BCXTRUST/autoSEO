@@ -73,25 +73,6 @@ function deps(
   };
 }
 
-function fleetInfo(info: { state: "running" | "paused" } | null): E2BFleet {
-  return {
-    listComputers: vi.fn(async () => []),
-    info: vi.fn(async () =>
-      info
-        ? {
-            id: "sandbox-1",
-            state: info.state,
-            startedAt: new Date("2026-10-15T14:00:00.000Z"),
-            template: "desktop",
-          }
-        : null,
-    ),
-    kill: vi.fn(async () => {
-      throw new Error("kill");
-    }),
-  };
-}
-
 function screenPrisma(row: ReturnType<typeof computer>) {
   return {
     lbProject: { findFirst: vi.fn(async () => ({ id: "project-1" })) },
@@ -133,81 +114,34 @@ describe("project computer screen", () => {
     );
   });
 
-  it("does not touch the sandbox when the stored id is gone", async () => {
+  it("reports off, starting, no browser, and live without calling the sandbox", async () => {
     const sandbox = throwingSandbox();
-    const fleet = fleetInfo(null);
-    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
-    try {
-      const first = await openProjectComputerScreen(
-        deps(screenPrisma(computer()), sandbox, fleet),
+    const seen = new Date();
+    const cases = [
+      { row: computer({ state: "stopped" }), state: "off" },
+      { row: computer({ state: "booting", browserSeenAt: null }), state: "starting" },
+      { row: computer({ state: "running", browserSeenAt: null }), state: "no_browser" },
+      {
+        row: computer({
+          state: "running",
+          browserSeenAt: new Date(Date.now() - 60_000),
+        }),
+        state: "no_browser",
+      },
+      { row: computer({ state: "running", browserSeenAt: seen }), state: "live" },
+    ] as const;
+    for (const item of cases) {
+      const result = await openProjectComputerScreen(
+        deps(screenPrisma(item.row), sandbox),
         actor,
         "project-1",
       );
-      const second = await openProjectComputerScreen(
-        deps(screenPrisma(computer()), sandbox, fleet),
-        actor,
-        "project-1",
-      );
-      expect(first).toEqual({ url: null, error: null, state: "off" });
-      expect(second).toEqual({ url: null, error: null, state: "off" });
-      expectSandboxUntouched(sandbox);
-      expect(sandbox.connectScreen).not.toHaveBeenCalled();
-      expect(fleet.kill).not.toHaveBeenCalled();
-      const gone = info.mock.calls.filter((call) =>
-        call.some((part) => String(part).includes("screen saw gone sandbox")),
-      );
-      expect(gone).toHaveLength(1);
-    } finally {
-      info.mockRestore();
+      expect(result.state).toBe(item.state);
+      expect(result.error).toBeNull();
+      if (item.state === "live") expect(result.url).toContain("/novnc/remote/view/");
+      else expect(result.url).toBeNull();
     }
-  });
-
-  it("does not touch the sandbox for a cached url on a running computer", async () => {
-    const expires = Date.now() + 60 * 60_000;
-    const url = `https://app.autoseo.run/novnc/remote/view/${expires}.capability/vnc.html`;
-    const sandbox = throwingSandbox();
-    const fleet = fleetInfo({ state: "running" });
-    const result = await openProjectComputerScreen(
-      deps(screenPrisma(computer({ screenUrl: url })), sandbox, fleet),
-      actor,
-      "project-1",
-    );
-    expectSandboxUntouched(sandbox);
-    expect(fleet.kill).not.toHaveBeenCalled();
-    expect(result.error).toBeNull();
-    expect(result.state).toBe("live");
-    expect(result.url).toContain("/novnc/remote/view/");
-  });
-
-  it("does not touch the sandbox when the row is stopped", async () => {
-    const sandbox = throwingSandbox();
-    const fleet = fleetInfo({ state: "running" });
-    const result = await openProjectComputerScreen(
-      deps(screenPrisma(computer({ state: "stopped", providerRef: "sandbox-1" })), sandbox, fleet),
-      actor,
-      "project-1",
-    );
-    expect(result).toEqual({ url: null, error: null, state: "off" });
     expectSandboxUntouched(sandbox);
     expect(sandbox.connectScreen).not.toHaveBeenCalled();
-    expect(fleet.info).not.toHaveBeenCalled();
-  });
-
-  it("does not touch the sandbox when the row is suspended", async () => {
-    const sandbox = throwingSandbox();
-    const fleet = fleetInfo({ state: "running" });
-    const result = await openProjectComputerScreen(
-      deps(
-        screenPrisma(computer({ state: "suspended", providerRef: "sandbox-1" })),
-        sandbox,
-        fleet,
-      ),
-      actor,
-      "project-1",
-    );
-    expect(result).toEqual({ url: null, error: null, state: "off" });
-    expectSandboxUntouched(sandbox);
-    expect(sandbox.connectScreen).not.toHaveBeenCalled();
-    expect(fleet.info).not.toHaveBeenCalled();
   });
 });

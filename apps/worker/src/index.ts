@@ -174,6 +174,7 @@ async function main() {
         }),
         proxies: linkBuilderProxies,
         revealedSecrets: linkBuilderProxySecrets,
+        sandbox,
         camoufoxAvailable: camoufoxAvailable(),
         resolveCaptcha: (project, redact) =>
           captchaSolverForProject({

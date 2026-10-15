@@ -11,10 +11,11 @@ import {
   type MailboxProvider,
   type ProxyProvider,
   type RealtimeFanout,
+  type SandboxProvider,
   type SearchProvider,
   type TextModel,
 } from "@rakazo/adapter-kit";
-import { type EncryptedSecretStore, STARTER_PLAN } from "@rakazo/adapters";
+import { type EncryptedSecretStore, STARTER_PLAN, toComputerRef } from "@rakazo/adapters";
 import {
   LB_DEFAULT_SPAM_SENTENCES,
   LbContentSchema,
@@ -34,9 +35,11 @@ import {
   LbTopicLaneSchema,
   LbWarmupSchema,
 } from "@rakazo/contracts";
+import { browserWindowPresentCommand } from "@rakazo/core";
 import type { Prisma, PrismaClient } from "@rakazo/db";
 import {
   adminRecheckDue,
+  choosePersonaComputer,
   type HostnameResolver,
   isHostTerminal,
   isInfrastructureFailure,
@@ -127,6 +130,8 @@ export interface LinkBuilderRealDeps {
   revealedSecrets?: string[];
   /** False when the Camoufox executable is not installed. The host then goes dead on a second edge block. */
   camoufoxAvailable?: boolean;
+  /** Runs the window check and keepAlive on the persona computer. */
+  sandbox?: SandboxProvider;
   /** Pause or destroy the persona desktop when a browser step is finished or stuck. */
   releaseDesktop?: (
     projectId: string,
@@ -320,6 +325,9 @@ export class LinkBuilderRealRunner {
     );
     if (!committed) return "skipped";
     await result.afterCommit?.();
+    if (this.pool.has(ctx.project.id)) {
+      await this.noteBrowser(ctx.project.workspaceId, ctx.adapter);
+    }
     const pausing = result.outcome?.pauseSandbox === true;
     if (pausing) {
       await deliverStuckAlertEmail({
@@ -710,6 +718,7 @@ export class LinkBuilderRealRunner {
       engine,
     };
     this.pool.set(ctx.project.id, entry);
+    await this.noteBrowser(ctx.project.workspaceId, ctx.adapter);
     return entry;
   }
 
@@ -746,6 +755,44 @@ export class LinkBuilderRealRunner {
     const entry = this.pool.get(projectId);
     this.pool.delete(projectId);
     await entry?.session.close().catch(() => undefined);
+    const project = await this.deps.prisma.lbProject
+      .findUnique({ where: { id: projectId }, select: { workspaceId: true } })
+      .catch(() => null);
+    if (!project) return;
+    await this.deps.prisma.computer
+      .updateMany({ where: { workspaceId: project.workspaceId }, data: { browserSeenAt: null } })
+      .catch(() => undefined);
+  }
+
+  /** Sets browserSeenAt when Chromium is mapped, then resets the sandbox timeout. */
+  private async noteBrowser(workspaceId: string, adapter: AdapterContext): Promise<void> {
+    const sandbox = this.deps.sandbox;
+    if (!sandbox?.execute) return;
+    const computers = await this.deps.prisma.computer.findMany({
+      where: { workspaceId },
+      orderBy: { updatedAt: "desc" },
+    });
+    const computer = choosePersonaComputer(computers);
+    if (!computer?.providerRef) return;
+    const ref = toComputerRef(computer);
+    let stdout = "";
+    try {
+      for await (const event of sandbox.execute(
+        ref,
+        { argv: ["sh", "-c", browserWindowPresentCommand(":0")], timeoutMs: 20_000 },
+        adapter,
+      )) {
+        if (event.type === "stdout") stdout += event.data;
+      }
+    } catch {
+      return;
+    }
+    if (stdout.split("\n").some((line) => line.trim() === "browser")) {
+      await this.deps.prisma.computer
+        .update({ where: { id: computer.id }, data: { browserSeenAt: this.now() } })
+        .catch(() => undefined);
+    }
+    await sandbox.keepAlive?.(ref).catch(() => undefined);
   }
 
   private async storeArtifact(

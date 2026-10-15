@@ -1,21 +1,15 @@
 import { ORPCError } from "@orpc/server";
-import type {
-  AdapterContext,
-  AgentHomeStore,
-  JobPublisher,
-  SandboxProvider,
-} from "@rakazo/adapter-kit";
+import type { AgentHomeStore, JobPublisher, SandboxProvider } from "@rakazo/adapter-kit";
 import {
   ComputerBusyError,
   type E2BFleet,
   isUnrecoverableSandboxError,
   provisionComputer,
-  toComputerRef,
 } from "@rakazo/adapters";
 import type { Actor } from "@rakazo/contracts";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
 import { choosePersonaComputer } from "@rakazo/linkbuilder-core";
-import { addScreenProxyCapability, shouldProxyComputerScreen } from "./screen-proxy.js";
+import { addScreenProxyCapability } from "./screen-proxy.js";
 
 /** Must match SCREEN_PROXY_TTL_MS in screen-proxy.ts. A stored URL older than this is dead. */
 const SCREEN_CAPABILITY_TTL_MS = 60 * 60_000;
@@ -55,9 +49,10 @@ type TeamComputer = {
   state: string;
   screenUrl: string | null;
   scope: string;
+  browserSeenAt: Date | null;
 };
 
-const goneSandboxLogs = new Set<string>();
+const BROWSER_SEEN_FRESH_MS = 30_000;
 
 /**
  * A proxied noVNC URL minted in the last few seconds. An older address can point
@@ -147,30 +142,33 @@ const screenFlights = new Map<string, Promise<ScreenResult>>();
 async function openScreen(deps: ProjectScreenDeps, actor: Actor): Promise<ScreenResult> {
   try {
     const computer = await teamComputer(deps, actor);
-    if (computer?.state !== "running" || !computer.providerRef) {
+    if (!computer || (computer.state !== "running" && computer.state !== "booting")) {
       return { url: null, error: null, state: "off" };
     }
-    if (deps.fleet) {
-      const info = await deps.fleet.info(computer.providerRef);
-      if (info?.state !== "running") {
-        noteGoneSandbox(computer.providerRef);
-        return { url: null, error: null, state: "off" };
-      }
+    const seenAt = computer.browserSeenAt?.getTime() ?? null;
+    const fresh = seenAt !== null && Date.now() - seenAt <= BROWSER_SEEN_FRESH_MS;
+    if (!fresh || !computer.providerRef) {
+      return {
+        url: null,
+        error: null,
+        state: computer.state === "booting" ? "starting" : "no_browser",
+      };
     }
-    const url = await connectTeamScreen(deps, actor, computer);
-    if (!url) return { url: null, error: null, state: "off" };
+    const domain = process.env.E2B_DOMAIN?.trim() || "e2b.app";
+    const raw = `https://6080-${computer.providerRef}.${domain}/vnc.html?autoconnect=true&view_only=true&resize=scale&reconnect=true`;
+    const url = addScreenProxyCapability(
+      raw,
+      deps.env.screenProxySecret,
+      deps.env.webOrigin,
+      undefined,
+      { proxyExternal: true },
+    );
     return { url, error: null, state: "live" };
   } catch (error) {
     if (error instanceof ORPCError) throw error;
     if (error instanceof ComputerBusyError) return { url: null, error: null, state: "off" };
     return quietScreenFailure(error);
   }
-}
-
-function noteGoneSandbox(id: string): void {
-  if (goneSandboxLogs.has(id)) return;
-  goneSandboxLogs.add(id);
-  console.info("screen saw gone sandbox");
 }
 
 function quietScreenFailure(error: unknown): ScreenResult {
@@ -196,73 +194,6 @@ async function teamComputer(deps: ProjectScreenDeps, actor: Actor): Promise<Team
     orderBy: { updatedAt: "desc" },
   });
   return choosePersonaComputer(rows) ?? rows.find((row) => row.scope === "team") ?? rows[0] ?? null;
-}
-
-async function connectTeamScreen(
-  deps: ProjectScreenDeps,
-  actor: Actor,
-  computer: TeamComputer,
-): Promise<string | null> {
-  if (!computer.providerRef) return null;
-  const bot = await deps.prisma.bot.findFirst({
-    where: { workspaceId: actor.workspaceId, computerId: computer.id, archivedAt: null },
-    orderBy: { createdAt: "asc" },
-    select: { id: true },
-  });
-  const session = await deps.sandbox.connectScreen(
-    toComputerRef(computer),
-    { view: "stream", interactive: false },
-    screenContext(actor, bot?.id, new AbortController().signal),
-  );
-  if (!session.url) return null;
-  const viewUrl = withViewOnly(session.url, true);
-  const proxied = addScreenProxyCapability(
-    viewUrl,
-    deps.env.screenProxySecret,
-    deps.env.webOrigin,
-    undefined,
-    { proxyExternal: shouldProxyComputerScreen(viewUrl, computer.kind) },
-  );
-  const published = publishableScreenUrl(proxied);
-  if (!published) return null;
-  await deps.prisma.computer.update({
-    where: { id: computer.id },
-    data: { screenUrl: published },
-  });
-  return published;
-}
-
-function publishableScreenUrl(url: string): string | null {
-  if (!url.startsWith("/novnc/") && !url.includes("/novnc/")) return null;
-  if (/password=|api[_-]?key=|token=/i.test(url)) return null;
-  if (url.startsWith("/novnc/") || url.startsWith("https://")) return url;
-  return null;
-}
-
-function screenContext(
-  actor: Actor,
-  botId: string | undefined,
-  signal: AbortSignal,
-): AdapterContext {
-  return {
-    operationId: "link-builder.screen",
-    traceId: "link-builder.screen",
-    workspaceId: actor.workspaceId,
-    userId: actor.userId,
-    ...(botId ? { botId } : {}),
-    signal,
-  };
-}
-
-function withViewOnly(url: string, viewOnly: boolean) {
-  try {
-    const parsed = new URL(url);
-    parsed.searchParams.set("view_only", viewOnly ? "true" : "false");
-    return parsed.toString();
-  } catch {
-    const join = url.includes("?") ? "&" : "?";
-    return `${url}${join}view_only=${viewOnly ? "true" : "false"}`;
-  }
 }
 
 function startDeadline(ms: number, message: string) {
