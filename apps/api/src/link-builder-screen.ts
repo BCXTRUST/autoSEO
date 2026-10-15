@@ -469,7 +469,7 @@ async function showForumSearch(
     );
     const processUp =
       starting.trim() === "up" || starting.includes("\nup\n") || starting.startsWith("up");
-    if (!browserUp && processUp && !formOnScreen && !persona) {
+    if (processUp && !formOnScreen && !persona) {
       await runDesktop(deps, actor, computer, recoverWindowlessBrowserCommand(display, url)).catch(
         () => undefined,
       );

@@ -63,6 +63,7 @@ describe("computer desktop window helpers", () => {
     expect(command).toContain("MOZ_HEADLESS=0");
     expect(command).not.toContain("pkill -f '[r]akazo-desktop-watch'");
     const recover = recoverWindowlessBrowserCommand(":0", "https://www.google.de/search?q=Kreatin");
+    expect(recover).toContain("search --pid");
     expect(recover).toContain("rakazo-ff-recover");
     expect(recover).toContain("firefox-esr");
     expect(recover).toContain("etimes=");
