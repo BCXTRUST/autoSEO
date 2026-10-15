@@ -73,6 +73,25 @@ export function chromeKioskStampCommand(): string {
 }
 
 /**
+ * The display x11vnc is already capturing. Chrome on another display leaves
+ * the streamed pane on the desktop wallpaper.
+ */
+export function streamedDisplayCommand(): string {
+  return [
+    "display=",
+    "for pid in $(pgrep -x x11vnc 2>/dev/null || true); do",
+    '  [ -r "/proc/$pid/cmdline" ] || continue',
+    "  found=$(tr '\\0' '\\n' < \"/proc/$pid/cmdline\" | awk 'prev==\"-display\"{print; exit} {prev=$0}')",
+    '  case "$found" in :*) display=$found; break ;; esac',
+    "done",
+    'if [ -z "$display" ] && [ -S /tmp/.X11-unix/X1 ]; then display=:1; fi',
+    'if [ -z "$display" ] && [ -n "${DISPLAY:-}" ]; then display=$DISPLAY; fi',
+    'if [ -z "$display" ]; then display=:0; fi',
+    "printf '%s\\n' \"$display\"",
+  ].join("\n");
+}
+
+/**
  * Drop the desktop shell and any Chrome that was started without kiosk flags.
  * An already-running Chrome ignores `--kiosk` and `--no-first-run` on a second launch.
  * `exec` inside the detached command replaces the shell so E2B can disconnect

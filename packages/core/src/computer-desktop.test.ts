@@ -15,6 +15,7 @@ import {
   refuseBrowserHuntShell,
   repairBlackStreamCommand,
   repairDesktopDisplayCommand,
+  streamedDisplayCommand,
 } from "./computer-desktop.js";
 
 describe("computer desktop window helpers", () => {
@@ -109,6 +110,11 @@ describe("computer desktop window helpers", () => {
     expect(command).toContain("Toolbar");
     expect(command).not.toContain("rakazo-chrome-kiosk-v3");
     expect(command).toContain("windowmap");
+    const streamed = streamedDisplayCommand();
+    expect(streamed).toContain("x11vnc");
+    expect(streamed).toContain("-display");
+    expect(streamed).toContain("/tmp/.X11-unix/X1");
+    expect(streamed).toContain("display=:1");
     const black = repairBlackStreamCommand(":0");
     expect(black).toContain("windowmap");
     expect(black).toContain("-noxdamage");

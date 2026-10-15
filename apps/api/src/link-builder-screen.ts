@@ -22,6 +22,7 @@ import {
   prepareKioskDesktopCommand,
   raiseBrowserWindowCommand,
   repairBlackStreamCommand,
+  streamedDisplayCommand,
 } from "@rakazo/core";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
 import {
@@ -372,7 +373,7 @@ async function sandboxDisplay(
   computer: TeamComputer,
 ): Promise<string> {
   try {
-    const out = await runDesktop(deps, actor, computer, "printf '%s\\n' \"${DISPLAY:-:0}\"");
+    const out = await runDesktop(deps, actor, computer, streamedDisplayCommand());
     const found = out
       .split("\n")
       .map((line) => line.trim())
