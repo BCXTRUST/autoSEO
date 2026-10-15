@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { recoverStuckStep, type StepContext } from "./link-builder-real-steps.js";
+import {
+  REAL_STEP_HANDLERS,
+  recoverStuckStep,
+  type StepContext,
+} from "./link-builder-real-steps.js";
 
 function ctx(input: {
   steps: Array<{ outcome: unknown; error: string | null; createdAt: Date }>;
@@ -171,5 +175,43 @@ describe("recoverStuckStep", () => {
     if (looked?.kind !== "step") return;
     expect(looked.outcome).toMatchObject({ looked: true, choice: "find_form" });
     expect(gotos.some((url) => url.includes("thread"))).toBe(false);
+  });
+
+  it("does not start a signup on a banned host with no account", async () => {
+    const result = await REAL_STEP_HANDLERS.select_host({
+      now: new Date("2026-10-15T12:00:00Z"),
+      run: { id: "run-1", counters: { newToday: 0 } },
+      project: {
+        id: "project-1",
+        workspaceId: "ws-1",
+        denyHosts: [],
+        preferHosts: [],
+        quotas: { newPerDay: 2 },
+        schedule: { timezone: "Europe/Berlin" },
+      },
+      host: null,
+      pool: () => undefined,
+      services: {
+        prisma: {
+          lbHost: {
+            findMany: async () => [
+              {
+                id: "banned",
+                registrableDomain: "frauenselbsthilfe.de",
+                status: "qualified",
+                accounts: [],
+                placements: [],
+                platform: "phpbb",
+                qualityScore: 1,
+                homepageUrl: "https://frauenselbsthilfe.de/",
+                statusReason: null,
+              },
+            ],
+          },
+          lbRunStep: { findMany: async () => [], count: async () => 0 },
+        },
+      },
+    } as unknown as StepContext);
+    expect(result).toEqual({ kind: "wait", reason: "no_workable_host" });
   });
 });
