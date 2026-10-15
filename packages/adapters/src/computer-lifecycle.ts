@@ -35,6 +35,14 @@ export class ComputerBusyError extends Error {
   }
 }
 
+/** The worker's signal that an E2B sandbox is gone. The name matches the SDK error. */
+export class ComputerGoneError extends Error {
+  constructor(id: string) {
+    super(`Sandbox is probably not running anymore: ${id}`);
+    this.name = "SandboxNotFoundError";
+  }
+}
+
 export { toComputerRef };
 
 export async function destroyWorkspaceComputers(

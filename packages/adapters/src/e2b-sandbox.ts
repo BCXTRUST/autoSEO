@@ -28,7 +28,8 @@ import {
   parseVisibleWindows,
   repairDesktopDisplayCommand,
 } from "@rakazo/core";
-import { sandboxHardTimeoutMs, sandboxIdleMs } from "./computer-idle.js";
+import { sandboxHardTimeoutMs } from "./computer-idle.js";
+import { ComputerGoneError } from "./computer-lifecycle.js";
 import { ComputerScreenUnavailableError, screenSessionKey } from "./computer-screens.js";
 import {
   boundedComputerActions,
@@ -69,6 +70,8 @@ export interface E2BSandboxSdk {
   create(options: ReturnType<typeof e2bCreateOptions>): Promise<Sandbox>;
   connect(id: string, options: { apiKey: string; timeoutMs: number }): Promise<Sandbox>;
   pause(id: string, options: { apiKey: string }): Promise<void>;
+  getInfo(id: string, options: { apiKey: string }): Promise<{ state: string }>;
+  kill(id: string, options: { apiKey: string }): Promise<boolean>;
 }
 
 /** The desktop SDK throws on a non-zero exit. Callers still need that stdout, for example a runner ping. */
@@ -199,8 +202,9 @@ export class E2BSandboxProvider implements SandboxProvider {
     const id = computer.providerRef || computer.id;
     const existing = this.boxes.get(id);
     if (existing) {
-      const lastTouched = this.lastTouchedAt.get(id) ?? 0;
-      if (Date.now() - lastTouched >= 60_000) {
+      const lastChecked = this.lastTouchedAt.get(id) ?? 0;
+      if (Date.now() - lastChecked >= 30_000) {
+        await this.assertRunning(id);
         await existing.setTimeout(sandboxHardTimeoutMs()).catch(() => undefined);
         this.lastTouchedAt.set(id, Date.now());
       }
@@ -215,6 +219,21 @@ export class E2BSandboxProvider implements SandboxProvider {
     return connected;
   }
 
+  private async assertRunning(id: string): Promise<void> {
+    let state = "";
+    try {
+      const info = await this.sdk.getInfo(id, { apiKey: this.apiKey });
+      state = info.state;
+    } catch (error) {
+      if (!isUnrecoverableSandboxError(error)) throw error;
+      this.forget(id);
+      throw new ComputerGoneError(id);
+    }
+    if (state === "running") return;
+    this.forget(id);
+    throw new ComputerGoneError(id);
+  }
+
   async provision(
     request: {
       botId: string;
@@ -225,10 +244,11 @@ export class E2BSandboxProvider implements SandboxProvider {
     _context: AdapterContext,
   ): Promise<ComputerRef> {
     if (request.providerRef && request.providerKind === "e2b") {
-      try {
+      const existing = await this.lookupSandbox(request.providerRef);
+      if (existing === "running") {
         const desktop = await this.sdk.connect(request.providerRef, {
           apiKey: this.apiKey,
-          timeoutMs: sandboxIdleMs(),
+          timeoutMs: sandboxHardTimeoutMs(),
         });
         this.boxes.set(desktop.sandboxId, desktop);
         this.lastTouchedAt.set(desktop.sandboxId, Date.now());
@@ -239,9 +259,13 @@ export class E2BSandboxProvider implements SandboxProvider {
           providerRef: desktop.sandboxId,
           fresh: false,
         };
-      } catch (error) {
-        this.boxes.delete(request.providerRef);
-        if (!isUnrecoverableSandboxError(error)) throw error;
+      }
+      if (existing === "paused") {
+        await this.sdk
+          .kill(request.providerRef, { apiKey: this.apiKey })
+          .catch((error: unknown) => {
+            if (!isUnrecoverableSandboxError(error)) throw error;
+          });
       }
     }
     const desktop = await this.sdk.create(e2bCreateOptions(request.botId, this.apiKey));
@@ -668,13 +692,22 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   async stop(computer: ComputerRef, _context: AdapterContext): Promise<void> {
     const id = computer.providerRef || computer.id;
-    const desktop = this.boxes.get(id);
     this.forget(id);
-    if (desktop) {
-      await desktop.pause().catch(() => undefined);
-      return;
+    await this.sdk.kill(id, { apiKey: this.apiKey }).catch((error: unknown) => {
+      if (!isUnrecoverableSandboxError(error)) throw error;
+    });
+  }
+
+  private async lookupSandbox(id: string): Promise<"running" | "paused" | "missing"> {
+    try {
+      const info = await this.sdk.getInfo(id, { apiKey: this.apiKey });
+      if (info.state === "running") return "running";
+      if (info.state === "paused") return "paused";
+      return "missing";
+    } catch (error) {
+      if (isUnrecoverableSandboxError(error)) return "missing";
+      throw error;
     }
-    await this.sdk.pause(id, { apiKey: this.apiKey }).catch(() => undefined);
   }
 
   async destroy(computer: ComputerRef, _context: AdapterContext): Promise<void> {

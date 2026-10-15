@@ -1,5 +1,7 @@
 import { type Sandbox, TimeoutError } from "@e2b/desktop";
+import { SandboxNotFoundError } from "e2b";
 import { describe, expect, it, vi } from "vitest";
+import { ComputerGoneError } from "./computer-lifecycle.js";
 import { shouldSkipPortableWorkspaceFile } from "./computer-workspace.js";
 import { E2BSandboxProvider, type E2BSandboxSdk, e2bCreateOptions } from "./e2b-sandbox.js";
 
@@ -60,6 +62,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     };
     const provider = new E2BSandboxProvider("test-key", sdk);
     const computer = await provider.provision(
@@ -172,6 +176,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     };
     const provider = new E2BSandboxProvider("test-key", sdk);
     const computer = await provider.provision(
@@ -297,7 +303,8 @@ describe("E2B computer backend", () => {
 
     await screen.close();
     await provider.stop(computer, context);
-    expect(desktop.pause).toHaveBeenCalled();
+    expect(sdk.kill).toHaveBeenCalled();
+    expect(desktop.pause).not.toHaveBeenCalled();
   });
 
   it("serves primary watch through noVNC even if the SDK stream URL is missing", async () => {
@@ -864,5 +871,61 @@ describe("E2B computer backend", () => {
       { type: "exit", code: 0 },
     ]);
     expect(directories).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("E2B sandbox liveness", () => {
+  it("drops a stale cache when getInfo says the sandbox is gone", async () => {
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const cached = {
+      sandboxId: "box-1",
+      setTimeout: vi.fn(async () => undefined),
+    } as unknown as Sandbox;
+    const sdk: E2BSandboxSdk = {
+      create: vi.fn(async () => cached),
+      connect: vi.fn(async () => cached),
+      pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => {
+        throw new SandboxNotFoundError("gone");
+      }),
+      kill: vi.fn(async () => false),
+    };
+    try {
+      const provider = new E2BSandboxProvider("test-key", sdk);
+      const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
+      now += 31_000;
+      await expect(provider.keepAlive(computer)).rejects.toBeInstanceOf(ComputerGoneError);
+      expect(sdk.connect).not.toHaveBeenCalled();
+      await provider.keepAlive(computer);
+      expect(sdk.connect).toHaveBeenCalledTimes(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("kills a paused sandbox and creates a new one without connecting", async () => {
+    const created = { sandboxId: "box-new", setTimeout: vi.fn() } as unknown as Sandbox;
+    const sdk: E2BSandboxSdk = {
+      create: vi.fn(async () => created),
+      connect: vi.fn(async () => created),
+      pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "paused" })),
+      kill: vi.fn(async () => true),
+    };
+    const provider = new E2BSandboxProvider("test-key", sdk);
+    const computer = await provider.provision(
+      {
+        botId: "bot-1",
+        homePath: "/unused",
+        providerRef: "paused-box",
+        providerKind: "e2b",
+      },
+      context,
+    );
+    expect(sdk.kill).toHaveBeenCalledWith("paused-box", { apiKey: "test-key" });
+    expect(sdk.connect).not.toHaveBeenCalled();
+    expect(sdk.create).toHaveBeenCalledTimes(1);
+    expect(computer.providerRef).toBe("box-new");
   });
 });
