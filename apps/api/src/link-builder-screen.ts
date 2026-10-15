@@ -434,7 +434,9 @@ async function showForumSearch(
       () => "",
     );
     let launched = false;
-    if (!persona && !browserUp) {
+    // A headless persona process has no window on the stream. Still open
+    // Firefox there. prepareKiosk killalls Chromium, which is that persona.
+    if (!browserUp) {
       if (starting.includes("ff-up")) {
         await runDesktop(
           deps,
@@ -443,7 +445,9 @@ async function showForumSearch(
           "pkill -x firefox-esr >/dev/null 2>&1 || true; pkill -x firefox >/dev/null 2>&1 || true; sleep 0.3",
         ).catch(() => undefined);
       }
-      await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
+      if (!persona) {
+        await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
+      }
       await runDesktop(deps, actor, computer, detachedBrowserCommand(display, url));
       launched = true;
       titles = await visibleTitles(deps, actor, computer, display);
@@ -482,6 +486,7 @@ async function showForumSearch(
       "link builder screen browser",
       `display=${display}`,
       `windows=${titles.length}`,
+      persona ? "persona" : "desktop",
       launched ? "opened" : "raised",
       `paint=${paint.replace(/\s+/g, " ").trim().slice(0, 360) || "unknown"}`,
     );

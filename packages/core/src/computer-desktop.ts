@@ -440,23 +440,21 @@ export function browserProcessCommand(): string {
 /** Wait until a browser window exists, then make it the only thing on the screen. */
 export function raiseBrowserWindowCommand(display: string): string {
   const quotedDisplay = posixShellQuote(display);
-  const classes = ["google-chrome", "Google-chrome", "Chromium", "chromium", "firefox", "Firefox", "Firefox-esr", "firefox-esr"]
-    .map(posixShellQuote)
-    .join(" ");
   return [
     `export DISPLAY=${quotedDisplay}`,
+    startDesktopWatchShell(),
     hideDesktopChromeShell(),
     dismissChromeDialogShell(),
     "id=",
     "for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do",
     hideDesktopChromeShell(),
     dismissChromeDialogShell(),
-    "  for class in google-chrome Google-chrome Chromium chromium firefox Firefox Firefox-esr firefox-esr; do",
+    "  for class in firefox-esr Firefox-esr firefox Firefox Navigator Chromium chromium google-chrome Google-chrome; do",
     '    xdotool search --class "$class" windowmap >/dev/null 2>&1 || true',
     "  done",
-    `  for class in ${classes}; do`,
+    "  id=",
+    "  for class in firefox-esr Firefox-esr firefox Firefox Navigator Chromium chromium google-chrome Google-chrome; do",
     "    id=$(xdotool search --onlyvisible --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
-    '    if [ -z "$id" ]; then id=$(xdotool search --class "$class" 2>/dev/null | awk \'NR==1{print; exit}\'); fi',
     '    if [ -n "$id" ]; then break; fi',
     "  done",
     '  if [ -n "$id" ]; then',

@@ -348,13 +348,14 @@ describe("project computer screen", () => {
         execute: async function* (_ref: unknown, request: { argv: string[] }) {
           const script = request.argv.at(-1) ?? "";
           scripts.push(script);
-          const data = script.includes("search --class")
-            ? "browser\n"
-            : script.includes("xdotool search")
-              ? "4\t1\tRegistrieren\n"
-              : script.includes("x11vnc")
-                ? ":0\n"
-                : "runner\n";
+          const data =
+            script.includes("--onlyvisible --class") || script.includes("search --class")
+              ? "browser\n"
+              : script.includes("xdotool search")
+                ? "4\t1\tRegistrieren\n"
+                : script.includes("x11vnc")
+                  ? ":0\n"
+                  : "runner\n";
           yield { type: "stdout" as const, data };
           yield { type: "exit" as const, code: 0 };
         },
