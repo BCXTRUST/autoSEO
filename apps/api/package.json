@@ -13,6 +13,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "ops:stop-all": "tsx src/ops-cli.ts stop-all",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --root ../.. apps/api/src"
   },

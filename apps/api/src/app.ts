@@ -12,6 +12,7 @@ import {
   type ConnectorRegistry,
   createBackgroundJobHandlers,
   createConnectorStack,
+  createE2BFleet,
   createJobReconciler,
   createRunExecutor,
   createRunSandbox,
@@ -56,6 +57,7 @@ import {
   takeLinkBuilderRequest,
   WorkspaceRateLimiter,
 } from "./link-builder-rate-limit.js";
+import { mountOpsRoutes } from "./ops.js";
 import { createRouter } from "./router.js";
 import { mountVoiceHttpRoutes } from "./voice.js";
 
@@ -395,6 +397,16 @@ export async function createApp(
       return c.json({ error: "invalid signature" }, 401);
     }
     return c.json(await ingestInboundMail(prisma, raw));
+  });
+  mountOpsRoutes(app, {
+    prisma,
+    fleet: process.env.E2B_API_KEY
+      ? createE2BFleet(process.env.E2B_API_KEY)
+      : {
+          listComputers: async () => [],
+          info: async () => null,
+          kill: async () => false,
+        },
   });
   app.get("/health", (c) =>
     c.json({
