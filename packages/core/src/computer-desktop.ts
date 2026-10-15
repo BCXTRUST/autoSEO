@@ -312,7 +312,7 @@ export function attachBrowserWindowStreamCommand(display: string): string {
     '  [ -r "/proc/$pid/cmdline" ] || continue',
     "  args=$(tr '\\0' ' ' < \"/proc/$pid/cmdline\")",
     '  case "$args" in',
-    "    *-noxdamage* *-nowf*|*-nowf* *-noxdamage*) printf '%s\\n' attached; exit 0 ;;",
+    "    *-id* *-noxdamage*|*-noxdamage* *-id*) printf '%s\\n' attached; exit 0 ;;",
     "  esac",
     "done",
     "id=",
