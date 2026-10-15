@@ -4,6 +4,7 @@ import type { PrismaClient } from "@rakazo/db";
 import { type BuildOptions, type LogEntry, Template } from "e2b";
 import type { Hono } from "hono";
 import { autoseoBrowserTemplate } from "../../../infra/sandboxes/e2b-browser/template.js";
+import { runBrowserSpike, type SpikeResult } from "./browser-spike.js";
 
 export interface OpsDeps {
   prisma: PrismaClient;
@@ -197,6 +198,7 @@ function defaultTemplateBuild(
 }
 
 let templateBuildImpl: TemplateBuild = defaultTemplateBuild;
+let browserSpikeImpl: () => Promise<SpikeResult> = () => runBrowserSpike();
 
 export function redactOpsSecrets(line: string, env: NodeJS.ProcessEnv = process.env): string {
   let redacted = line;
@@ -226,6 +228,10 @@ export function resetE2BTemplateBuildForTests(): void {
 
 export function setE2BTemplateBuildForTests(build: TemplateBuild): void {
   templateBuildImpl = build;
+}
+
+export function setBrowserSpikeForTests(run: (() => Promise<SpikeResult>) | null): void {
+  browserSpikeImpl = run ?? (() => runBrowserSpike());
 }
 
 export function startE2BTemplateBuild(): { status: E2BTemplateBuildStatus } {
@@ -287,5 +293,11 @@ export function mountOpsRoutes(app: Hono, deps: OpsDeps): void {
     if (status !== 200)
       return c.json({ error: status === 404 ? "not found" : "unauthorized" }, status);
     return c.json(e2bTemplateBuildSnapshot());
+  });
+  app.post("/api/ops/browser-spike", async (c) => {
+    const status = opsStatus(c.req.header("authorization"));
+    if (status !== 200)
+      return c.json({ error: status === 404 ? "not found" : "unauthorized" }, status);
+    return c.json(await browserSpikeImpl());
   });
 }

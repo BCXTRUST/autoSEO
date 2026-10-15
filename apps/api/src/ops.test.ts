@@ -6,6 +6,7 @@ import {
   mountOpsRoutes,
   type OpsDeps,
   resetE2BTemplateBuildForTests,
+  setBrowserSpikeForTests,
   setE2BTemplateBuildForTests,
   stopEverything,
 } from "./ops.js";
@@ -314,8 +315,24 @@ describe("ops routes", () => {
       assertNoSecrets(erroredBody);
       expect(JSON.parse(erroredBody).status).toBe("error");
       expect(fail).toBeTypeOf("function");
+
+      setBrowserSpikeForTests(async () => ({
+        checks: { setsid: true, window: true, noXfce: true, notBlack: true, novnc: true },
+        streamHost: "6080-box.e2b.app",
+      }));
+      const spikeDenied = await app.request("/api/ops/browser-spike", { method: "POST" });
+      expect(spikeDenied.status).toBe(401);
+      const spike = await app.request("/api/ops/browser-spike", {
+        method: "POST",
+        headers: { authorization: `Bearer ${RIGHT}` },
+      });
+      expect(spike.status).toBe(200);
+      const spikeBody = await spike.text();
+      assertNoSecrets(spikeBody);
+      expect(JSON.parse(spikeBody).streamHost).toBe("6080-box.e2b.app");
     } finally {
       resetE2BTemplateBuildForTests();
+      setBrowserSpikeForTests(null);
       if (savedToken === undefined) delete process.env.OPS_TOKEN;
       else process.env.OPS_TOKEN = savedToken;
       if (savedKey === undefined) delete process.env.E2B_API_KEY;
