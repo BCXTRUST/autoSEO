@@ -489,6 +489,9 @@ importers:
       d3-dsv:
         specifier: ^3.0.1
         version: 3.0.1
+      e2b:
+        specifier: 2.38.3
+        version: 2.38.3
       graphile-worker:
         specifier: ^0.17.3
         version: 0.17.3(typescript@5.9.3)

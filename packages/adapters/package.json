@@ -15,6 +15,7 @@
     "@composio/core": "0.16.0",
     "@daytona/sdk": "^0.204.1",
     "@e2b/desktop": "^2.3.1",
+    "e2b": "2.38.3",
     "@earendil-works/pi-agent-core": "^0.84.3",
     "@earendil-works/pi-ai": "^0.84.3",
     "@modelcontextprotocol/sdk": "1.30.0",
