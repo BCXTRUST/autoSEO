@@ -147,10 +147,11 @@ describe("computer desktop window helpers", () => {
     expect(repair).not.toMatch(/-nolisten/);
     expect(repair).not.toContain("exit 1");
     const attached = attachBrowserWindowStreamCommand(":0");
-    expect(attached).toContain("-id");
     expect(attached).toContain("-noxdamage");
-    expect(attached).toContain("-nowf");
-    expect(attached).not.toContain("pkill -f");
+    expect(attached).toContain("-rfbport 5900");
+    expect(attached).toContain("pgrep -x x11vnc");
+    expect(attached).not.toContain("pkill");
+    expect(attached).not.toContain("-id");
     expect(command).not.toContain("nohup");
   });
 

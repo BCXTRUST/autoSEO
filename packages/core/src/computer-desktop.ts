@@ -289,44 +289,17 @@ export function signupFormHeldCommand(): string {
 }
 
 /**
- * Stream the browser window, not the desktop. E2B's `stream.start()` without
- * a window id captures the whole X root (wallpaper, icons, taskbar). x11vnc
- * without `-noxdamage -nowf` keeps the first black frame when the browser
- * paints with damage events. One x11vnc at a time: if this window is already
- * the capture, leave it. Otherwise replace that one process. Do not call this
- * before a browser window exists — x11vnc `-id` exits 1 and the pane stays black.
+ * Keep the viewer's x11vnc. Killing it to recapture one window drops the
+ * websocket, and `x11vnc -id` exits when that window is not mapped. Firefox
+ * is already fullscreen, so the existing display capture is the browser.
+ * Start a capture only when none is running.
  */
 export function attachBrowserWindowStreamCommand(display: string): string {
   const quotedDisplay = posixShellQuote(display);
   return [
     `export DISPLAY=${quotedDisplay}`,
-    "id=",
-    "for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do",
-    "  for class in firefox-esr Firefox-esr firefox Firefox google-chrome Google-chrome Chromium chromium; do",
-    "    id=$(xdotool search --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
-    '    if [ -n "$id" ]; then break; fi',
-    "  done",
-    '  if [ -n "$id" ]; then break; fi',
-    "  sleep 0.4",
-    "done",
-    'if [ -z "$id" ]; then exit 0; fi',
-    "for pid in $(pgrep -x x11vnc 2>/dev/null || true); do",
-    '  [ -r "/proc/$pid/cmdline" ] || continue',
-    "  args=$(tr '\\0' ' ' < \"/proc/$pid/cmdline\")",
-    '  case "$args" in',
-    '    *"-id $id"*)',
-    '      case "$args" in',
-    "        *-noxdamage*) printf '%s\\n' attached; exit 0 ;;",
-    "      esac",
-    "      ;;",
-    "  esac",
-    "done",
-    "pkill -x x11vnc >/dev/null 2>&1 || true",
-    "for _ in 1 2 3 4 5 6 7 8 9 10; do",
-    "  pgrep -x x11vnc >/dev/null 2>&1 || break",
-    "  sleep 0.1",
-    "done",
-    "setsid -f x11vnc -bg -display \"$DISPLAY\" -forever -wait 50 -shared -rfbport 5900 -nopw -noxdamage -noxfixes -nowf -noscr -ping 1 -repeat -speeds lan -id \"$id\" >/tmp/rakazo-x11vnc.log 2>&1",
+    "if pgrep -x x11vnc >/dev/null 2>&1; then printf '%s\\n' attached; exit 0; fi",
+    "setsid -f x11vnc -bg -display \"$DISPLAY\" -forever -wait 50 -shared -rfbport 5900 -nopw -noxdamage -noxfixes >/tmp/rakazo-x11vnc.log 2>&1",
     "exit 0",
   ].join("\n");
 }
