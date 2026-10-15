@@ -146,6 +146,8 @@ export function browserCrop(pixels: Uint8ClampedArray, width: number, height: nu
   const mean = lumSum / cells;
   const stddev = Math.sqrt(Math.max(0, lumSq / cells - mean * mean));
   const busyFraction = busyCount / cells;
+  // A dark wallpaper with a small logo is not a page. A real page fills the frame.
+  if (mean < 28 && busyFraction < 0.22) return { kind: "blank" };
   const band = Math.max(1, Math.round(rows * 0.08));
   const topBar = uniformEdgeBar(lum, cols, rows, "top", band);
   const bottomBar = uniformEdgeBar(lum, cols, rows, "bottom", band);

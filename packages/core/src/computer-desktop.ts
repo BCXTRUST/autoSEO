@@ -223,6 +223,7 @@ function startDesktopWatchShell(): string {
   return [
     "cat > /tmp/rakazo-desktop-watch.sh << 'EOF'",
     "# rakazo-watch-v2",
+    "echo $$ > /tmp/rakazo-watch.pid",
     "while true; do",
     `killall -q ${DESKTOP_PANEL_PROCESSES} 2>/dev/null || true`,
     "xdotool search --class fluxbox windowunmap >/dev/null 2>&1 || true",
@@ -244,7 +245,8 @@ function startDesktopWatchShell(): string {
     "done",
     "EOF",
     "chmod +x /tmp/rakazo-desktop-watch.sh",
-    "pkill -f '[r]akazo-desktop-watch' >/dev/null 2>&1 || true",
+    "old=$(cat /tmp/rakazo-watch.pid 2>/dev/null || true)",
+    'if [ -n "$old" ]; then kill "$old" >/dev/null 2>&1 || true; fi',
     "setsid -f /tmp/rakazo-desktop-watch.sh </dev/null >/dev/null 2>&1 || true",
   ].join("\n");
 }
@@ -298,8 +300,26 @@ export function attachBrowserWindowStreamCommand(display: string): string {
   const quotedDisplay = posixShellQuote(display);
   return [
     `export DISPLAY=${quotedDisplay}`,
-    "if pgrep -x x11vnc >/dev/null 2>&1; then printf '%s\\n' attached; exit 0; fi",
-    'setsid -f x11vnc -bg -display "$DISPLAY" -forever -wait 50 -shared -rfbport 5900 -nopw -noxdamage -noxfixes >/tmp/rakazo-x11vnc.log 2>&1',
+    "id=",
+    "for class in firefox-esr Firefox-esr firefox Firefox google-chrome Google-chrome Chromium chromium; do",
+    "  id=$(xdotool search --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
+    '  if [ -n "$id" ]; then break; fi',
+    "done",
+    'if [ -z "$id" ]; then',
+    "  if pgrep -x x11vnc >/dev/null 2>&1; then printf '%s\\n' waiting; exit 0; fi",
+    '  setsid -f x11vnc -bg -display "$DISPLAY" -forever -wait 50 -shared -rfbport 5900 -nopw -noxdamage -noxfixes -nowf -noscr >/tmp/rakazo-x11vnc.log 2>&1',
+    "  exit 0",
+    "fi",
+    "for pid in $(pgrep -x x11vnc 2>/dev/null || true); do",
+    '  [ -r "/proc/$pid/cmdline" ] || continue',
+    "  args=$(tr '\\0' ' ' < \"/proc/$pid/cmdline\")",
+    '  case "$args" in',
+    '    *"-id $id"* *-noxdamage*|*-noxdamage* *"-id $id"*) printf \'%s\\n\' attached; exit 0 ;;',
+    "  esac",
+    "done",
+    "pkill -x x11vnc >/dev/null 2>&1 || true",
+    "for _ in 1 2 3 4 5 6 7 8; do pgrep -x x11vnc >/dev/null 2>&1 || break; sleep 0.1; done",
+    'setsid -f x11vnc -bg -display "$DISPLAY" -forever -wait 50 -shared -rfbport 5900 -nopw -noxdamage -noxfixes -nowf -noscr -id "$id" >/tmp/rakazo-x11vnc.log 2>&1',
     "exit 0",
   ].join("\n");
 }

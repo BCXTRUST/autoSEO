@@ -57,7 +57,8 @@ describe("computer desktop window helpers", () => {
     expect(command).toContain("--disable-fre");
     expect(command).toContain("OutdatedBuildDetector");
     expect(command).toContain("setsid -f");
-    expect(command).toContain("pkill -f '[r]akazo-desktop-watch'");
+    expect(command).toContain("/tmp/rakazo-watch.pid");
+    expect(command).not.toContain("pkill -f '[r]akazo-desktop-watch'");
     expect(command).toContain("rakazo-watch-v2");
     expect(command).toContain("xfce4-panel");
     expect(command).toContain(
@@ -149,10 +150,12 @@ describe("computer desktop window helpers", () => {
     expect(repair).not.toContain("exit 1");
     const attached = attachBrowserWindowStreamCommand(":0");
     expect(attached).toContain("-noxdamage");
+    expect(attached).toContain("-nowf");
     expect(attached).toContain("-rfbport 5900");
+    expect(attached).toContain("-id");
     expect(attached).toContain("pgrep -x x11vnc");
-    expect(attached).not.toContain("pkill");
-    expect(attached).not.toContain("-id");
+    expect(attached).toContain("pkill -x x11vnc");
+    expect(attached).not.toContain("pkill -f");
     expect(command).not.toContain("nohup");
   });
 
