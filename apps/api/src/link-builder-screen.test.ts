@@ -399,7 +399,8 @@ describe("project computer screen", () => {
             type: "stdout" as const,
             data: request.argv.at(-1)?.includes("rakazo-chrome-kiosk-v6")
               ? "ok\n"
-              : request.argv.at(-1)?.includes("search --class")
+              : request.argv.at(-1)?.includes("search --class") ||
+                  request.argv.at(-1)?.includes("--onlyvisible --class")
                 ? "browser\n"
                 : "9\t1\tMagnesium Krämpfe Forum - Google Suche\n",
           };
