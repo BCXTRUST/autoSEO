@@ -300,11 +300,12 @@ describe("project computer screen", () => {
     expect(opened).toContain("Forum");
     expect(opened).not.toMatch(/Vitaminexpress|kaufen/i);
     expect(opened).toContain("RAKAZO_DETACH_BROWSER");
-    expect(opened).toContain("exec /usr/bin/google-chrome");
+    expect(opened).toContain("/usr/bin/google-chrome");
+    expect(opened).toContain("setsid -f");
     expect(opened).toContain("--kiosk");
     expect(opened).toContain("TranslateEnabled");
     expect(opened).toContain("--disable-gpu");
-    expect(opened).toContain("rakazo-chrome-kiosk-v4");
+    expect(opened).toContain("rakazo-chrome-kiosk-v5");
     expect(opened).not.toContain("key --window");
     expect(scripts.join("\n")).not.toContain("key Escape");
     expect(opened).toContain("--start-fullscreen");
@@ -347,11 +348,13 @@ describe("project computer screen", () => {
         execute: async function* (_ref: unknown, request: { argv: string[] }) {
           const script = request.argv.at(-1) ?? "";
           scripts.push(script);
-          const data = script.includes("xdotool search")
-            ? "4\t1\tRegistrieren\n"
-            : script.includes("x11vnc")
-              ? ":0\n"
-              : "runner\n";
+          const data = script.includes("search --class")
+            ? "browser\n"
+            : script.includes("xdotool search")
+              ? "4\t1\tRegistrieren\n"
+              : script.includes("x11vnc")
+                ? ":0\n"
+                : "runner\n";
           yield { type: "stdout" as const, data };
           yield { type: "exit" as const, code: 0 };
         },
@@ -394,9 +397,11 @@ describe("project computer screen", () => {
           scripts.push(request.argv.at(-1) ?? "");
           yield {
             type: "stdout" as const,
-            data: request.argv.at(-1)?.includes("rakazo-chrome-kiosk-v4")
+            data: request.argv.at(-1)?.includes("rakazo-chrome-kiosk-v5")
               ? "ok\n"
-              : "9\t1\tMagnesium Krämpfe Forum - Google Suche\n",
+              : request.argv.at(-1)?.includes("search --class")
+                ? "browser\n"
+                : "9\t1\tMagnesium Krämpfe Forum - Google Suche\n",
           };
           yield { type: "exit" as const, code: 0 };
         },

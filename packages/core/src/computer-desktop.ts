@@ -66,7 +66,7 @@ export const DETACHED_BROWSER_MARKER = "RAKAZO_DETACH_BROWSER";
  * A desktop that is already on the problem query but missing this file is an
  * older Chrome, and its translate bubble stays until that process is replaced.
  */
-export const CHROME_KIOSK_STAMP = "/tmp/rakazo-chrome-kiosk-v4";
+export const CHROME_KIOSK_STAMP = "/tmp/rakazo-chrome-kiosk-v5";
 
 export function chromeKioskStampCommand(): string {
   return `test -f ${posixShellQuote(CHROME_KIOSK_STAMP)} && printf '%s\\n' ok || true`;
@@ -312,21 +312,66 @@ export function detachedBrowserCommand(display: string, url: string): string {
     installChromeTranslatePolicyShell(),
     `printf '%s\\n' '{"browser":{"check_default_browser":false,"has_seen_welcome_page":true},"translate":{"enabled":false},"translate_blocked_languages":["de","de-DE","en","en-US"],"intl":{"accept_languages":"de-DE,de","selected_languages":"de-DE,de"},"distribution":{"skip_first_run_ui":true,"suppress_first_run_default_browser_prompt":true,"make_chrome_default_for_user":false}}' > "$dir/Default/Preferences"`,
     `printf '%s\\n' '{"intl":{"app_locale":"de","accept_languages":"de-DE,de"}}' > "$dir/Local State"`,
-    'flags="--user-data-dir=$dir --kiosk --start-fullscreen --no-first-run --disable-fre --no-default-browser-check --disable-search-engine-choice-screen --disable-translate --disable-infobars --noerrdialogs --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-component-update --disable-background-networking --lang=de --accept-lang=de-DE,de --disable-gpu --disable-gpu-compositing --ozone-platform=x11 --disable-features=Translate,TranslateUI,InfiniteSessionRestore,ChromeWhatsNewUI,OutdatedBuildDetector,VizDisplayCompositor --password-store=basic --disable-sync --disable-dev-shm-usage --no-sandbox --window-position=0,0 --window-size=1280,800"',
+    'flags="--user-data-dir=$dir --kiosk --start-fullscreen --no-first-run --disable-fre --no-default-browser-check --disable-search-engine-choice-screen --disable-translate --disable-infobars --noerrdialogs --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-component-update --disable-background-networking --lang=de --accept-lang=de-DE,de --disable-gpu --use-gl=disabled --ozone-platform=x11 --disable-features=Translate,TranslateUI,InfiniteSessionRestore,ChromeWhatsNewUI,OutdatedBuildDetector --password-store=basic --disable-sync --disable-dev-shm-usage --no-sandbox --window-position=0,0 --window-size=1280,800"',
     `printf '%s\\n' translate-off > ${posixShellQuote(CHROME_KIOSK_STAMP)}`,
     startDesktopWatchShell(),
-    // stdin from /dev/null: the sandbox closes the command stdin on disconnect,
-    // and Chrome treats that EOF as a quit and exits 1 on the first page.
-    'if [ -x /usr/bin/google-chrome ]; then exec /usr/bin/google-chrome $flags "$url" </dev/null; fi',
-    'if [ -x /usr/bin/google-chrome-stable ]; then exec /usr/bin/google-chrome-stable $flags "$url" </dev/null; fi',
-    'if [ -x /usr/bin/chromium ]; then exec /usr/bin/chromium $flags "$url" </dev/null; fi',
-    'if [ -x /usr/bin/chromium-browser ]; then exec /usr/bin/chromium-browser $flags "$url" </dev/null; fi',
-    'if command -v google-chrome >/dev/null 2>&1; then exec google-chrome $flags "$url" </dev/null; fi',
-    'if command -v chromium >/dev/null 2>&1; then exec chromium $flags "$url" </dev/null; fi',
-    'if command -v firefox >/dev/null 2>&1; then exec firefox --kiosk "$url" </dev/null; fi',
-    'exec xdg-open "$url" </dev/null',
+    // A new session survives the command disconnect. stdin from /dev/null: Chrome
+    // treats a closed stdin as a quit and exits 1 on the first page.
+    'started=0',
+    'for bin in /usr/bin/google-chrome /usr/bin/google-chrome-stable /usr/bin/chromium /usr/bin/chromium-browser google-chrome chromium; do',
+    '  if [ -x "$bin" ] || command -v "$bin" >/dev/null 2>&1; then',
+    '    setsid -f "$bin" $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1',
+    "    started=1",
+    "    break",
+    "  fi",
+    "done",
+    'if [ "$started" = 0 ] && command -v firefox >/dev/null 2>&1; then setsid -f firefox --kiosk "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1; started=1; fi',
+    'if [ "$started" = 0 ]; then setsid -f xdg-open "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1 || true; fi',
+    "for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do",
+    "  xdotool search --class google-chrome >/dev/null 2>&1 && break",
+    "  xdotool search --class chromium >/dev/null 2>&1 && break",
+    "  xdotool search --class firefox >/dev/null 2>&1 && break",
+    "  sleep 0.4",
+    "done",
+    "sleep 0.8",
+    "paint=$(python3 - <<'PY'",
+    "import subprocess, sys",
+    "try:",
+    "    data = subprocess.run(['import','-window','root','-crop','320x200+480+300','-resize','8x5!','-depth','8','ppm:-'], capture_output=True, timeout=8)",
+    "except Exception:",
+    "    sys.exit(0)",
+    "blob = data.stdout or b''",
+    "mark = blob.find(b'\\n255\\n')",
+    "if data.returncode != 0 or mark < 0:",
+    "    sys.exit(0)",
+    "pixels = blob[mark+5:]",
+    "if len(pixels) < 8*5*3:",
+    "    sys.exit(0)",
+    "mean = sum(pixels) / float(len(pixels))",
+    "print('black' if mean < 12 else 'live')",
+    "PY",
+    ")",
+    'printf \'%s\\n\' "${paint:-unknown}" > /tmp/rakazo-paint',
+    'if [ "$paint" = black ] && command -v firefox >/dev/null 2>&1; then',
+    "  killall -q chrome chromium chromium-browser google-chrome google-chrome-stable >/dev/null 2>&1 || true",
+    '  setsid -f firefox --kiosk "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1',
+    "fi",
+    "exit 0",
   ];
   return [`# ${DETACHED_BROWSER_MARKER}`, ...launch].join("\n");
+}
+
+/** True when a browser window class is mapped. Desktop icons do not count. */
+export function browserWindowPresentCommand(display: string): string {
+  const quotedDisplay = posixShellQuote(display);
+  return [
+    `export DISPLAY=${quotedDisplay}`,
+    "for class in google-chrome Google-chrome Chromium chromium firefox Firefox; do",
+    "  id=$(xdotool search --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
+    "  if [ -n \"$id\" ]; then printf '%s\\n' browser; exit 0; fi",
+    "done",
+    "printf '%s\\n' none",
+  ].join("\n");
 }
 
 /** Wait until a browser window exists, then make it the only thing on the screen. */

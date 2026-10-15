@@ -15,6 +15,7 @@ import {
 } from "@rakazo/adapters";
 import type { Actor } from "@rakazo/contracts";
 import {
+  browserWindowPresentCommand,
   chromeKioskStampCommand,
   detachedBrowserCommand,
   listVisibleWindowsCommand,
@@ -427,12 +428,13 @@ async function showForumSearch(
       () => "",
     );
     const persona = await personaBrowserOwnsDesktop(deps, actor, computer);
-    const visibleBrowser = titles.some((title) => !isDesktopShellTitle(title));
+    const present = await runDesktop(deps, actor, computer, browserWindowPresentCommand(display)).catch(
+      () => "",
+    );
+    const browserUp = present.includes("browser");
     let launched = false;
-    if (!(onProblem(titles) && stamp.includes("ok")) && !(persona && visibleBrowser)) {
-      if (!persona) {
-        await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
-      }
+    if (!persona && !(browserUp && stamp.includes("ok"))) {
+      await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
       await runDesktop(deps, actor, computer, detachedBrowserCommand(display, url));
       launched = true;
       titles = await visibleTitles(deps, actor, computer, display);
@@ -440,6 +442,9 @@ async function showForumSearch(
         await runDesktop(deps, actor, computer, typeSearchUrlCommand(display, url));
         titles = await visibleTitles(deps, actor, computer, display);
       }
+    } else if (!persona && !onProblem(titles)) {
+      await runDesktop(deps, actor, computer, typeSearchUrlCommand(display, url));
+      titles = await visibleTitles(deps, actor, computer, display);
     }
     try {
       await runDesktop(deps, actor, computer, raiseBrowserWindowCommand(display));
@@ -453,11 +458,18 @@ async function showForumSearch(
       () => undefined,
     );
     titles = await visibleTitles(deps, actor, computer, display);
+    const paint = await runDesktop(
+      deps,
+      actor,
+      computer,
+      "cat /tmp/rakazo-paint 2>/dev/null || true",
+    ).catch(() => "");
     console.info(
       "link builder screen browser",
       `display=${display}`,
       `windows=${titles.length}`,
       launched ? "opened" : "raised",
+      `paint=${paint.trim().slice(0, 16) || "unknown"}`,
     );
     if (query && desktopShowsProblemSearch(titles, query, shops)) {
       await noteDesktopSearch(deps, actor, project.id, query);
