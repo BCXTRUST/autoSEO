@@ -1,5 +1,7 @@
-import { randomBytes } from "node:crypto";
-import { Sandbox, TimeoutError } from "@e2b/desktop";
+import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { Sandbox as DesktopSandbox, TimeoutError } from "@e2b/desktop";
 import type {
   AdapterContext,
   CommandRequest,
@@ -28,6 +30,7 @@ import {
   parseVisibleWindows,
   repairDesktopDisplayCommand,
 } from "@rakazo/core";
+import { Sandbox as E2BSandbox } from "e2b";
 import { sandboxHardTimeoutMs } from "./computer-idle.js";
 import { ComputerGoneError } from "./computer-lifecycle.js";
 import { ComputerScreenUnavailableError, screenSessionKey } from "./computer-screens.js";
@@ -63,11 +66,21 @@ import {
   screenControlKey,
 } from "./extra-displays.js";
 
+const require = createRequire(import.meta.url);
 const E2B_WORKSPACE = "/home/user/rakazo-home";
 const E2B_BROWSER_PROFILES = `${E2B_WORKSPACE}/.browser-profiles`;
+const RUNNER_BUNDLE = "/home/user/.autoseo/rakazo-lb-browser.cjs";
+const RUNNER_HASH = "/home/user/.autoseo/runner.sha256";
+const RUNNER_WRAPPER = "/home/user/.autoseo/bin/rakazo-lb-browser";
+const RUNNER_WRAPPER_SCRIPT = `#!/bin/sh
+export NODE_PATH="$(npm root -g)"
+exec node /home/user/.autoseo/rakazo-lb-browser.cjs "$@"
+`;
+
+type Sandbox = DesktopSandbox;
 
 export interface E2BSandboxSdk {
-  create(options: ReturnType<typeof e2bCreateOptions>): Promise<Sandbox>;
+  create(template: string, options: ReturnType<typeof e2bCreateOptions>): Promise<Sandbox>;
   connect(id: string, options: { apiKey: string; timeoutMs: number }): Promise<Sandbox>;
   pause(id: string, options: { apiKey: string }): Promise<void>;
   getInfo(id: string, options: { apiKey: string }): Promise<{ state: string }>;
@@ -98,7 +111,7 @@ function commandFailure(
 }
 
 export function e2bTemplate(): string {
-  return process.env.E2B_TEMPLATE?.trim() || "desktop";
+  return process.env.E2B_TEMPLATE?.trim() || "autoseo-browser-v1";
 }
 
 export function e2bCreateOptions(botId: string, apiKey: string) {
@@ -172,6 +185,28 @@ async function listDesktopWindows(desktop: Sandbox, display = desktop.display ??
   return parseVisibleWindows(typeof listed.stdout === "string" ? listed.stdout : "");
 }
 
+function createDefaultE2BSandboxSdk(): E2BSandboxSdk {
+  const desktop = DesktopSandbox as unknown as E2BSandboxSdk;
+  return {
+    async create(template, options) {
+      const created = await E2BSandbox.create(template, {
+        apiKey: options.apiKey,
+        timeoutMs: options.timeoutMs,
+        metadata: options.metadata,
+        lifecycle: options.lifecycle,
+      });
+      return DesktopSandbox.connect(created.sandboxId, {
+        apiKey: options.apiKey,
+        timeoutMs: options.timeoutMs,
+      });
+    },
+    connect: (id, options) => desktop.connect(id, options),
+    pause: (id, options) => desktop.pause(id, options),
+    getInfo: (id, options) => desktop.getInfo(id, options),
+    kill: (id, options) => desktop.kill(id, options),
+  };
+}
+
 export class E2BSandboxProvider implements SandboxProvider {
   private readonly boxes = new Map<string, Sandbox>();
   private readonly lastTouchedAt = new Map<string, number>();
@@ -179,7 +214,7 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   constructor(
     private readonly apiKey: string,
-    private readonly sdk: E2BSandboxSdk = Sandbox as unknown as E2BSandboxSdk,
+    private readonly sdk: E2BSandboxSdk = createDefaultE2BSandboxSdk(),
   ) {}
 
   describe() {
@@ -252,6 +287,7 @@ export class E2BSandboxProvider implements SandboxProvider {
         });
         this.boxes.set(desktop.sandboxId, desktop);
         this.lastTouchedAt.set(desktop.sandboxId, Date.now());
+        await ensureBrowserRunner(desktop);
         return {
           id: desktop.sandboxId,
           botId: request.botId,
@@ -268,9 +304,13 @@ export class E2BSandboxProvider implements SandboxProvider {
           });
       }
     }
-    const desktop = await this.sdk.create(e2bCreateOptions(request.botId, this.apiKey));
+    const desktop = await this.sdk.create(
+      e2bTemplate(),
+      e2bCreateOptions(request.botId, this.apiKey),
+    );
     this.boxes.set(desktop.sandboxId, desktop);
     this.lastTouchedAt.set(desktop.sandboxId, Date.now());
+    await ensureBrowserRunner(desktop);
     return {
       id: desktop.sandboxId,
       botId: request.botId,
@@ -282,6 +322,7 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   async prepare(computer: ComputerRef, _context: AdapterContext): Promise<void> {
     const desktop = await this.box(computer);
+    await ensureBrowserRunner(desktop);
     await ensureE2BWorkspace(desktop);
     await keepDesktopDisplay(desktop);
     const profilesChanged = await configurePortableBrowserProfiles(desktop);
@@ -1155,6 +1196,26 @@ function isMissingWorkspaceCwd(error: unknown): boolean {
 }
 
 /** The folder is created on a fresh boot only. A resumed sandbox can lose it, and every command then dies. */
+export async function ensureBrowserRunner(desktop: Sandbox): Promise<void> {
+  if (!desktop.files?.read || !desktop.files.write) return;
+  const bundle = readFileSync(
+    require.resolve("@rakazo/linkbuilder-browser/dist/rakazo-lb-browser.cjs"),
+  );
+  const hash = createHash("sha256").update(bundle).digest("hex");
+  const current = await desktop.files
+    .read(RUNNER_HASH)
+    .then((value) => (typeof value === "string" ? value : Buffer.from(value).toString("utf8")))
+    .catch(() => "");
+  if (current.trim() === hash) return;
+  await desktop.commands.run("mkdir -p /home/user/.autoseo/bin");
+  await desktop.files.write([
+    { path: RUNNER_BUNDLE, data: toArrayBuffer(bundle) },
+    { path: RUNNER_HASH, data: toArrayBuffer(Buffer.from(hash)) },
+    { path: RUNNER_WRAPPER, data: toArrayBuffer(Buffer.from(RUNNER_WRAPPER_SCRIPT)) },
+  ]);
+  await desktop.commands.run(`chmod 755 ${shellQuote(RUNNER_WRAPPER)}`);
+}
+
 async function ensureE2BWorkspace(desktop: Sandbox): Promise<void> {
   if (!desktop.files?.makeDir) return;
   await desktop.files.makeDir(E2B_WORKSPACE).catch(() => undefined);

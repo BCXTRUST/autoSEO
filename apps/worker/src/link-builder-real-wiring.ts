@@ -178,7 +178,13 @@ export function browserFactoryFromEnv(input: {
     sandbox: input.sandbox,
     helperDirs: dirs(env.LINK_BUILDER_SANDBOX_HELPER_DIR),
     // E2B's desktop user is `user`. The Docker computer image uses `/home/rakazo`.
-    ...(env.SANDBOX_PROVIDER === "e2b" ? { profileRoot: "/home/user/.browser-profiles" } : {}),
+    ...(env.SANDBOX_PROVIDER === "e2b"
+      ? {
+          profileRoot: "/home/user/.browser-profiles",
+          runnerArgv: ["/home/user/.autoseo/bin/rakazo-lb-browser"],
+          bundledChromium: true,
+        }
+      : {}),
     proxyResolver: input.proxyResolver,
     resolveComputer(persona, context) {
       return resolvePersonaComputer({

@@ -4,6 +4,7 @@ WORKDIR /app
 COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @rakazo/db generate
+RUN pnpm --filter @rakazo/linkbuilder-browser build
 RUN RAKAZO_ALLOW_DEV_SECRETS=1 pnpm --filter @rakazo/web build
 RUN install -d -m 750 -o node -g node /data /app/apps/web/node_modules/.vite-temp
 ARG GIT_SHA

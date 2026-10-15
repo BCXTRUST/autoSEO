@@ -1,9 +1,15 @@
-import { type Sandbox, TimeoutError } from "@e2b/desktop";
-import { SandboxNotFoundError } from "e2b";
+import { execFileSync } from "node:child_process";
+import { Sandbox as DesktopSandbox, type Sandbox, TimeoutError } from "@e2b/desktop";
+import { Sandbox as E2BSandbox, SandboxNotFoundError } from "e2b";
 import { describe, expect, it, vi } from "vitest";
 import { ComputerGoneError } from "./computer-lifecycle.js";
 import { shouldSkipPortableWorkspaceFile } from "./computer-workspace.js";
-import { E2BSandboxProvider, type E2BSandboxSdk, e2bCreateOptions } from "./e2b-sandbox.js";
+import {
+  E2BSandboxProvider,
+  type E2BSandboxSdk,
+  e2bCreateOptions,
+  ensureBrowserRunner,
+} from "./e2b-sandbox.js";
 
 const context = {
   operationId: "e2b-test",
@@ -26,7 +32,7 @@ describe("E2B computer backend", () => {
       expect(options.metadata).toMatchObject({
         botId: "bot-1",
         rakazo: "computer",
-        template: "desktop",
+        template: "autoseo-browser-v1",
       });
     } finally {
       if (previousTemplate === undefined) delete process.env.E2B_TEMPLATE;
@@ -927,5 +933,76 @@ describe("E2B sandbox liveness", () => {
     expect(sdk.connect).not.toHaveBeenCalled();
     expect(sdk.create).toHaveBeenCalledTimes(1);
     expect(computer.providerRef).toBe("box-new");
+  });
+});
+
+describe("autoseo browser runner", () => {
+  it("does not call the desktop SDK create for autoseo-browser-v1", async () => {
+    const previous = process.env.E2B_TEMPLATE;
+    delete process.env.E2B_TEMPLATE;
+    const desktop = { sandboxId: "box-new", setTimeout: vi.fn() } as unknown as Sandbox;
+    const created = vi
+      .spyOn(E2BSandbox, "create")
+      .mockResolvedValue({ sandboxId: "box-new" } as never);
+    const desktopCreate = vi.spyOn(DesktopSandbox, "create");
+    const connect = vi.spyOn(DesktopSandbox, "connect").mockResolvedValue(desktop);
+    try {
+      const provider = new E2BSandboxProvider("test-key");
+      const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
+      expect(desktopCreate).not.toHaveBeenCalled();
+      expect(created).toHaveBeenCalledWith(
+        "autoseo-browser-v1",
+        expect.objectContaining({
+          apiKey: "test-key",
+          metadata: expect.objectContaining({ template: "autoseo-browser-v1", rakazo: "computer" }),
+        }),
+      );
+      expect(connect).toHaveBeenCalledWith(
+        "box-new",
+        expect.objectContaining({ apiKey: "test-key" }),
+      );
+      expect(computer.providerRef).toBe("box-new");
+    } finally {
+      created.mockRestore();
+      desktopCreate.mockRestore();
+      connect.mockRestore();
+      if (previous === undefined) delete process.env.E2B_TEMPLATE;
+      else process.env.E2B_TEMPLATE = previous;
+    }
+  });
+
+  it("writes three runner files when the hash changes and none when it matches", async () => {
+    execFileSync("node", ["scripts/bundle-runner.mjs"], {
+      cwd: "packages/linkbuilder-browser",
+      stdio: "pipe",
+    });
+    const written: string[] = [];
+    let hash = "";
+    const write = vi.fn(async (entries: Array<{ path: string; data: ArrayBuffer }>) => {
+      for (const entry of entries) {
+        written.push(entry.path);
+        if (entry.path.endsWith("runner.sha256")) hash = Buffer.from(entry.data).toString("utf8");
+      }
+    });
+    const desktop = {
+      files: {
+        read: vi.fn(async () => {
+          if (!hash) throw new Error("missing");
+          return hash;
+        }),
+        write,
+      },
+      commands: { run: vi.fn(async () => ({ exitCode: 0 })) },
+    } as unknown as Sandbox;
+    await ensureBrowserRunner(desktop);
+    expect(written).toEqual([
+      "/home/user/.autoseo/rakazo-lb-browser.cjs",
+      "/home/user/.autoseo/runner.sha256",
+      "/home/user/.autoseo/bin/rakazo-lb-browser",
+    ]);
+    written.length = 0;
+    await ensureBrowserRunner(desktop);
+    expect(written).toEqual([]);
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });

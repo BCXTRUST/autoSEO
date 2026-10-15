@@ -139,6 +139,8 @@ export interface SandboxBrowserSessionFactoryOptions {
   /** Helper extension directories inside the sandbox. */
   helperDirs?: readonly string[];
   executablePath?: string;
+  /** Use Playwright's bundled Chromium instead of SANDBOX_CHROMIUM. */
+  bundledChromium?: boolean;
   camoufoxPath?: string;
   headless?: boolean;
   pacing?: PacingPolicy;
@@ -247,7 +249,9 @@ export class SandboxBrowserSessionFactory implements BrowserSessionFactory {
         executablePath:
           parsed.engine === "camoufox"
             ? (this.options.camoufoxPath ?? process.env.LINK_BUILDER_CAMOUFOX_PATH)
-            : (this.options.executablePath ?? SANDBOX_CHROMIUM),
+            : this.options.executablePath === undefined && this.options.bundledChromium === true
+              ? undefined
+              : (this.options.executablePath ?? SANDBOX_CHROMIUM),
         engine: parsed.engine === "camoufox" ? "camoufox" : undefined,
         pacing: this.options.pacing,
       };

@@ -181,7 +181,7 @@ describe("e2b create options", () => {
       expect(opts.lifecycle).toEqual({ onTimeout: "kill", autoResume: false });
       expect(opts.timeoutMs).toBe(300000);
       expect(opts.metadata.botId).toBe("bot-1");
-      expect(opts.metadata.template).toBe("desktop");
+      expect(opts.metadata.template).toBe("autoseo-browser-v1");
     } finally {
       if (previous === undefined) delete process.env.SANDBOX_HARD_TIMEOUT_MS;
       else process.env.SANDBOX_HARD_TIMEOUT_MS = previous;

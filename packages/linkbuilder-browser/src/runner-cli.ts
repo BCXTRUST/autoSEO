@@ -190,7 +190,11 @@ export async function runRunnerCli(
   return 2;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+const cliEntry = process.argv[1];
+if (
+  cliEntry &&
+  (cliEntry.endsWith("rakazo-lb-browser.cjs") || import.meta.url === pathToFileURL(cliEntry).href)
+) {
   runRunnerCli(process.argv.slice(2)).then(
     (code) => process.exit(code),
     () => process.exit(1),
