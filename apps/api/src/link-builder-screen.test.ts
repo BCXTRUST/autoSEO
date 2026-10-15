@@ -527,4 +527,52 @@ describe("project computer screen", () => {
     expect(scripts.some((script) => script.includes("xfce4-panel"))).toBe(true);
     expect(scripts.join("\n")).not.toMatch(/register|signup|post/i);
   });
+
+  it("replaces a firefox process that never mapped a window", async () => {
+    const expires = Date.now() + 60 * 60_000;
+    const url = `https://app.autoseo.run/novnc/remote/view/${expires}.capability/vnc.html`;
+    const scripts: string[] = [];
+    const prisma = {
+      lbProject: {
+        findFirst: vi.fn(async () => ({
+          id: "project-windowless",
+          name: "Vitaminexpress",
+          brandName: "Vitaminexpress",
+          topicLanes: [{ tag: "Magnesium kaufen" }],
+          targets: [{ url: "https://www.vitaminexpress.org/de/magnesium", keywordClusters: [] }],
+        })),
+      },
+      computer: {
+        findFirst: vi.fn(async () => computer({ screenUrl: url })),
+        findMany: vi.fn(async () => [computer({ screenUrl: url })]),
+        updateMany: vi.fn(async () => ({ count: 1 })),
+      },
+      bot: { findFirst: vi.fn() },
+    } as unknown as PrismaClient;
+    await openProjectComputerScreen(
+      deps(prisma, {
+        keepAlive: vi.fn(),
+        execute: async function* (_ref: unknown, request: { argv: string[] }) {
+          const script = request.argv.at(-1) ?? "";
+          scripts.push(script);
+          const data = script.includes("ps -o stat=")
+            ? "up\n"
+            : script.includes("onlyvisible --class")
+              ? "none\n"
+              : script.includes("[r]akazo-lb-browser")
+                ? ""
+                : "";
+          yield { type: "stdout" as const, data };
+          yield { type: "exit" as const, code: 0 };
+        },
+      }),
+      actor,
+      "project-windowless",
+    );
+    await vi.waitFor(() => {
+      expect(scripts.some((script) => script.includes("rakazo-ff-recover"))).toBe(true);
+    });
+    expect(scripts.some((script) => script.includes("RAKAZO_DETACH_BROWSER"))).toBe(false);
+    expect(scripts.join("\n")).not.toMatch(/register|signup|post/i);
+  });
 });

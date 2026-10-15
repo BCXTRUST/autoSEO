@@ -226,6 +226,9 @@ function startDesktopWatchShell(): string {
     "echo $$ > /tmp/rakazo-watch.pid",
     "while true; do",
     `killall -q ${DESKTOP_PANEL_PROCESSES} 2>/dev/null || true`,
+    "xset s off -dpms s noblank >/dev/null 2>&1 || true",
+    "xfconf-query -c xfce4-screensaver -p /saver/enabled -n -t bool -s false >/dev/null 2>&1 || true",
+    "xfconf-query -c xfce4-screensaver -p /lock/enabled -n -t bool -s false >/dev/null 2>&1 || true",
     "xdotool search --class fluxbox windowunmap >/dev/null 2>&1 || true",
     "xdotool search --name Toolbar windowunmap >/dev/null 2>&1 || true",
     "id=",
@@ -246,7 +249,12 @@ function startDesktopWatchShell(): string {
     "EOF",
     "chmod +x /tmp/rakazo-desktop-watch.sh",
     "old=$(cat /tmp/rakazo-watch.pid 2>/dev/null || true)",
-    'if [ -n "$old" ]; then kill "$old" >/dev/null 2>&1 || true; fi',
+    'if [ -n "$old" ] && [ -r "/proc/$old/cmdline" ]; then',
+    "  args=$(tr '\\0' ' ' < \"/proc/$old/cmdline\")",
+    '  case "$args" in',
+    "    *rakazo-desktop-watch*) kill \"$old\" >/dev/null 2>&1 || true ;;",
+    "  esac",
+    "fi",
     "setsid -f /tmp/rakazo-desktop-watch.sh </dev/null >/dev/null 2>&1 || true",
   ].join("\n");
 }
@@ -353,6 +361,8 @@ export function detachedBrowserCommand(display: string, url: string): string {
     "export MOZ_ENABLE_WAYLAND=0",
     "export GDK_BACKEND=x11",
     "export MOZ_DISABLE_CONTENT_SANDBOX=1",
+    "unset MOZ_HEADLESS MOZ_HEADLESS_WIDTH MOZ_HEADLESS_HEIGHT",
+    "export MOZ_HEADLESS=0",
     'if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then uid=$(id -u); if [ -S "/run/user/$uid/bus" ]; then export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus"; fi; fi',
     "trap '' HUP",
     `url=${quotedUrl}`,
@@ -468,8 +478,68 @@ export function browserWindowPresentCommand(display: string): string {
  */
 export function browserProcessCommand(): string {
   return [
-    "if pgrep -x firefox-esr >/dev/null 2>&1 || pgrep -x firefox >/dev/null 2>&1; then printf '%s\\n' up; exit 0; fi",
+    "pid=$(pgrep -x firefox-esr | awk 'NR==1{print; exit}')",
+    'if [ -z "$pid" ]; then pid=$(pgrep -x firefox | awk \'NR==1{print; exit}\'); fi',
+    'if [ -n "$pid" ]; then',
+    "  state=$(ps -o stat= -p \"$pid\" 2>/dev/null | awk '{print substr($1,1,1)}')",
+    '  if [ -n "$state" ] && [ "$state" != "Z" ]; then printf \'%s\\n\' up; exit 0; fi',
+    "fi",
     "printf '%s\\n' none",
+  ].join("\n");
+}
+
+/**
+ * A firefox process with no mapped window leaves x11vnc on the wallpaper.
+ * Map a hidden window first. A process that has already had time to paint
+ * and still has no window is replaced once on this same display.
+ */
+export function recoverWindowlessBrowserCommand(display: string, url: string): string {
+  const quotedDisplay = posixShellQuote(display);
+  const quotedUrl = posixShellQuote(url.trim());
+  return [
+    `export DISPLAY=${quotedDisplay}`,
+    "export MOZ_WEBRENDER=0",
+    "export LIBGL_ALWAYS_SOFTWARE=1",
+    "export MOZ_ENABLE_WAYLAND=0",
+    "export GDK_BACKEND=x11",
+    "export MOZ_HEADLESS=0",
+    "unset MOZ_HEADLESS_WIDTH MOZ_HEADLESS_HEIGHT",
+    "id=",
+    "for class in firefox-esr Firefox-esr firefox Firefox Navigator; do",
+    '  xdotool search --class "$class" windowmap >/dev/null 2>&1 || true',
+    "  id=$(xdotool search --onlyvisible --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
+    '  if [ -n "$id" ]; then break; fi',
+    "done",
+    'if [ -n "$id" ]; then',
+    '  xdotool windowmove "$id" 0 0 windowsize "$id" 1280 800 windowactivate "$id" windowraise "$id" >/dev/null 2>&1 || true',
+    '  xdotool windowstate --add FULLSCREEN "$id" >/dev/null 2>&1 || true',
+    "  exit 0",
+    "fi",
+    "pid=$(pgrep -x firefox-esr | awk 'NR==1{print; exit}')",
+    'if [ -z "$pid" ]; then pid=$(pgrep -x firefox | awk \'NR==1{print; exit}\'); fi',
+    'if [ -z "$pid" ]; then exit 0; fi',
+    "age=$(ps -o etimes= -p \"$pid\" 2>/dev/null | tr -d ' ')",
+    'if [ -n "$age" ] && [ "$age" -lt 20 ]; then exit 0; fi',
+    "nows=$(date +%s)",
+    "old=$(cat /tmp/rakazo-ff-recover 2>/dev/null || echo 0)",
+    'case "$old" in ""|*[!0-9]*) old=0 ;; esac',
+    'if [ "$((nows - old))" -lt 90 ]; then exit 0; fi',
+    "printf '%s\\n' \"$nows\" > /tmp/rakazo-ff-recover",
+    'kill "$pid" >/dev/null 2>&1 || true',
+    "sleep 0.3",
+    'kill -9 "$pid" >/dev/null 2>&1 || true',
+    "mkdir -p /tmp/rakazo-ff-profile",
+    "rm -f /tmp/rakazo-ff-profile/.parentlock /tmp/rakazo-ff-profile/lock",
+    "ff=/usr/bin/firefox-esr",
+    'if [ ! -x "$ff" ]; then ff=$(command -v firefox-esr || command -v firefox || true); fi',
+    'if [ -z "$ff" ]; then exit 0; fi',
+    `setsid -f "$ff" --no-remote --kiosk --profile /tmp/rakazo-ff-profile ${quotedUrl} </dev/null >/tmp/rakazo-firefox.log 2>&1`,
+    "for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do",
+    "  xdotool search --class firefox-esr >/dev/null 2>&1 && exit 0",
+    "  xdotool search --class firefox >/dev/null 2>&1 && exit 0",
+    "  sleep 0.4",
+    "done",
+    "exit 0",
   ].join("\n");
 }
 

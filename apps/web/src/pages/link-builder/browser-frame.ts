@@ -146,8 +146,9 @@ export function browserCrop(pixels: Uint8ClampedArray, width: number, height: nu
   const mean = lumSum / cells;
   const stddev = Math.sqrt(Math.max(0, lumSq / cells - mean * mean));
   const busyFraction = busyCount / cells;
-  // A dark wallpaper with a small logo is not a page. A real page fills the frame.
-  if (mean < 28 && busyFraction < 0.22) return { kind: "blank" };
+  // A dark wallpaper, a screensaver, or a small logo on black is not a page.
+  // A bright mark on that field used to pass the busy-pixel check and show the desktop.
+  if (mean < 32) return { kind: "blank" };
   const band = Math.max(1, Math.round(rows * 0.08));
   const topBar = uniformEdgeBar(lum, cols, rows, "top", band);
   const bottomBar = uniformEdgeBar(lum, cols, rows, "bottom", band);

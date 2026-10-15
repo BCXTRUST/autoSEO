@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   attachBrowserWindowStreamCommand,
+  recoverWindowlessBrowserCommand,
   COMPUTER_AUTONOMY_INSTRUCTION,
   detachedBrowserCommand,
   exposeBrowserDesktopCommand,
@@ -58,7 +59,14 @@ describe("computer desktop window helpers", () => {
     expect(command).toContain("OutdatedBuildDetector");
     expect(command).toContain("setsid -f");
     expect(command).toContain("/tmp/rakazo-watch.pid");
+    expect(command).toContain("rakazo-desktop-watch*");
+    expect(command).toContain("MOZ_HEADLESS=0");
     expect(command).not.toContain("pkill -f '[r]akazo-desktop-watch'");
+    const recover = recoverWindowlessBrowserCommand(":0", "https://www.google.de/search?q=Kreatin");
+    expect(recover).toContain("rakazo-ff-recover");
+    expect(recover).toContain("firefox-esr");
+    expect(recover).toContain("etimes=");
+    expect(recover).not.toContain("pkill -f");
     expect(command).toContain("rakazo-watch-v2");
     expect(command).toContain("xfce4-panel");
     expect(command).toContain(

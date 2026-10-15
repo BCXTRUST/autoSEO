@@ -81,6 +81,10 @@ describe("browserCrop", () => {
     });
     const black = paint(80, 50, () => [0, 0, 0]);
     expect(browserCrop(black, 80, 50).kind).toBe("blank");
+    const logo = paint(80, 50, (x, y) =>
+      x > 30 && x < 50 && y > 20 && y < 32 ? [220, 40, 20] : [8, 8, 10],
+    );
+    expect(browserCrop(logo, 80, 50).kind).toBe("blank");
     const wallpaper = paint(80, 50, () => [30, 90, 160]);
     expect(browserCrop(wallpaper, 80, 50).kind).toBe("desktop");
   });

@@ -17,6 +17,7 @@ import type { Actor } from "@rakazo/contracts";
 import {
   attachBrowserWindowStreamCommand,
   browserProcessCommand,
+  recoverWindowlessBrowserCommand,
   browserWindowPresentCommand,
   detachedBrowserCommand,
   listVisibleWindowsCommand,
@@ -468,6 +469,11 @@ async function showForumSearch(
     );
     const processUp =
       starting.trim() === "up" || starting.includes("\nup\n") || starting.startsWith("up");
+    if (!browserUp && processUp && !formOnScreen && !persona) {
+      await runDesktop(deps, actor, computer, recoverWindowlessBrowserCommand(display, url)).catch(
+        () => undefined,
+      );
+    }
     let launched = false;
     if (!browserUp && !processUp && !formOnScreen) {
       if (!persona) await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
