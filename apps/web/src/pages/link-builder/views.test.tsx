@@ -491,7 +491,6 @@ describe("link builder screens", () => {
     expect(html).toContain("Warmup");
     expect(html).toContain("Place");
     expect(html).toContain("Verify");
-    expect(html).toContain("bui-pixel-on");
     expect(html).toContain('data-status="working"');
     expect(html).toContain('data-frame="artifact"');
     expect(html).not.toContain("forum-a.example");
@@ -619,11 +618,11 @@ describe("link builder screens", () => {
     expect(html).toContain("Verify");
     expect(html).toContain('aria-label="Opened Google search"');
     expect(html).not.toContain("Checking Google for on-topic forums");
-    expect(html.indexOf('aria-label="Opened Google search"')).toBeLessThan(
-      html.indexOf("Connecting the computer"),
+    expect(html.indexOf('data-live-status="strip"')).toBeLessThan(
+      html.indexOf('aria-label="Opened Google search"'),
     );
-    expect(html).toContain("bui-pixel-on");
-    expect(html).toContain("Connecting the computer");
+    expect(html).toContain("Reconnecting");
+    expect(html).not.toContain("Connecting the computer");
     expect(html).not.toContain("No session");
     expect(html).not.toContain("Failed to connect to server");
     expect(html).toContain('data-session="closed"');
@@ -646,7 +645,8 @@ describe("link builder screens", () => {
       statusView({ activity: "paused", activityLabel: "paused", run: null }),
       [],
     );
-    expect(html).toContain("Computer is off. It turns on when a post is being made.");
+    expect(html).toContain("Computer is off");
+    expect(html).not.toContain("Computer is off. It turns on when a post is being made.");
     expect(html).not.toContain("Failed to connect to server");
     expect(html).not.toContain("Connecting the computer");
   });

@@ -922,6 +922,15 @@ function ComputerPane({
     setStripStatus(status);
   }, []);
   const frameUrl = frame?.kind === "url" ? frame.url : "";
+  const waiting = frame?.kind !== "url" && frame?.kind !== "artifact";
+  const errorStatus = screenError && !isMailSendFailure(screenError) ? screenError : null;
+  const idleStatus = errorStatus
+    ? null
+    : !waiting
+      ? null
+      : screenPending || working
+        ? "Reconnecting"
+        : "Computer is off";
   useEffect(() => {
     setStripStatus(null);
   }, [frameUrl]);
@@ -960,12 +969,12 @@ function ComputerPane({
             );
           })}
         </ol>
-        {stripStatus || (frame && label) ? (
+        {stripStatus || errorStatus || idleStatus || (frame && label) ? (
           <span
             data-live-status="strip"
             className="shrink-0 font-mono text-[11px] leading-none tracking-[0.04em] text-[#C8C4B8]"
           >
-            {stripStatus || label}
+            {stripStatus || errorStatus || idleStatus || label}
           </span>
         ) : null}
         <span className="hidden shrink-0 sm:flex">
@@ -981,14 +990,7 @@ function ComputerPane({
             onStatus={onPaneStatus}
           />
         ) : (
-          <WorkingScreen
-            working={working}
-            label={label}
-            stage={stage}
-            closed={session === "closed"}
-            screenError={screenError}
-            screenPending={screenPending}
-          />
+          <div className="h-full min-h-0 bg-[#0c0c0e]" data-live-pane="dark" aria-label={label} />
         )}
         {frame?.kind === "artifact" && loadArtifact ? (
           <ArtifactShot
@@ -1042,49 +1044,6 @@ function computerFrameSandbox(url: string): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function WorkingScreen({
-  working,
-  label,
-  stage,
-  closed,
-  screenError,
-  screenPending,
-}: {
-  working: boolean;
-  label: string;
-  stage: (typeof WORK_STAGES)[number];
-  closed: boolean;
-  screenError?: string | null;
-  screenPending?: boolean;
-}) {
-  return (
-    <section
-      aria-label={label}
-      className="flex h-full min-h-0 items-start justify-end bg-[#0c0c0e] p-4"
-    >
-      <BuiCard className="flex w-fit max-w-md flex-col gap-3 px-4 py-3">
-        <p className="text-[13px] text-[#8A8A90]">{WORK_STAGE_LABELS[stage]}</p>
-        {screenError && !isMailSendFailure(screenError) ? (
-          <p className="text-[22px] font-medium leading-none text-[#ECECEE]">{screenError}</p>
-        ) : working ? (
-          <LoadingState label={label} prominent />
-        ) : (
-          <p className="text-[22px] font-medium leading-none text-[#ECECEE]">{label}</p>
-        )}
-        {screenError && !isMailSendFailure(screenError) ? null : screenPending ? (
-          <p className="text-[12px] text-[#6C6C70]">Starting computer</p>
-        ) : closed ? (
-          <p className="text-[12px] text-[#6C6C70]">
-            {working
-              ? "Connecting the computer"
-              : "Computer is off. It turns on when a post is being made."}
-          </p>
-        ) : null}
-      </BuiCard>
-    </section>
-  );
 }
 
 /** A few pixels and a short dot trail. A hint, not a maze. */

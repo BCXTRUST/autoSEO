@@ -322,6 +322,38 @@ describe("project computer screen", () => {
     expect(keepAlive).not.toHaveBeenCalled();
   });
 
+  it("wakes a stopped sandbox instead of leaving the pane dark", async () => {
+    const expires = Date.now() + 60 * 60_000;
+    const url = `https://app.autoseo.run/novnc/remote/view/${expires}.capability/vnc.html`;
+    const updates: Array<Record<string, unknown>> = [];
+    const prisma = {
+      lbProject: { findFirst: vi.fn(async () => ({ id: "project-1" })) },
+      computer: {
+        findFirst: vi.fn(async () => computer({ state: "stopped", screenUrl: url })),
+        findMany: vi.fn(async () => [computer({ state: "stopped", screenUrl: url })]),
+        updateMany: vi.fn(async (args: { data: Record<string, unknown> }) => {
+          updates.push(args.data);
+          return { count: 1 };
+        }),
+      },
+      bot: { findFirst: vi.fn() },
+    } as unknown as PrismaClient;
+    const result = await openProjectComputerScreen(
+      deps(prisma, {
+        connectScreen: vi.fn(),
+        keepAlive: vi.fn(),
+        execute: async function* () {
+          yield { type: "stdout" as const, data: "ok\n" };
+          yield { type: "exit" as const, code: 0 };
+        },
+      }),
+      actor,
+      "project-1",
+    );
+    expect(result).toEqual({ url, error: null });
+    expect(updates[0]).toMatchObject({ state: "running" });
+  });
+
   it("opens Google search for the stored topic and skips example hosts", async () => {
     const expires = Date.now() + 60 * 60_000;
     const url = `https://app.autoseo.run/novnc/remote/view/${expires}.capability/vnc.html`;

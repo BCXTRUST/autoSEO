@@ -176,10 +176,21 @@ async function openScreen(
 ): Promise<{ url: string | null; error: string | null }> {
   try {
     const computer = await teamComputer(deps, actor);
-    if (computer?.state !== "running" || !computer?.providerRef) {
-      return { url: null, error: null };
-    }
+    if (!computer?.providerRef) return { url: null, error: null };
     let machine = computer;
+    if (machine.state !== "running" && machine.state !== "booting") {
+      // stop() pauses the sandbox. The row stays stopped, so the pane used to
+      // stay dark while that same machine still existed.
+      if (machine.state !== "stopped" && machine.state !== "suspended") {
+        return { url: null, error: null };
+      }
+      const woke = await deps.prisma.computer.updateMany({
+        where: { id: machine.id, providerRef: machine.providerRef, state: machine.state },
+        data: { state: "running" },
+      });
+      if (woke.count !== 1) return { url: null, error: null };
+      machine = { ...machine, state: "running" };
+    }
     let url = liveCachedUrl(machine);
     if (url && typeof deps.sandbox.execute === "function") {
       try {
