@@ -225,7 +225,7 @@ function startDesktopWatchShell(): string {
     `killall -q ${DESKTOP_PANEL_PROCESSES} 2>/dev/null || true`,
     "xdotool search --class fluxbox windowunmap >/dev/null 2>&1 || true",
     "xdotool search --name Toolbar windowunmap >/dev/null 2>&1 || true",
-    "for class in google-chrome Google-chrome Chromium chromium firefox Firefox; do",
+    "for class in google-chrome Google-chrome Chromium chromium firefox Firefox Navigator firefox-esr; do",
     '  xdotool search --class "$class" windowmap >/dev/null 2>&1 || true',
     "done",
     dismissChromeDialogShell(),
@@ -318,14 +318,14 @@ export function detachedBrowserCommand(display: string, url: string): string {
     // Firefox paints into Xvfb. Chrome's GL window stays black on this capture.
     // exec replaces the shell so disconnect cannot reap the browser.
     // stdin from /dev/null: Chrome treats a closed stdin as a quit.
-    'if command -v firefox >/dev/null 2>&1; then exec firefox --kiosk "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1; fi',
+    'if command -v firefox >/dev/null 2>&1; then export MOZ_WEBRENDER=0 LIBGL_ALWAYS_SOFTWARE=1; exec firefox --kiosk "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1; fi',
     'if [ -x /usr/bin/google-chrome ]; then exec /usr/bin/google-chrome $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
     'if [ -x /usr/bin/google-chrome-stable ]; then exec /usr/bin/google-chrome-stable $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
     'if [ -x /usr/bin/chromium ]; then exec /usr/bin/chromium $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
     'if [ -x /usr/bin/chromium-browser ]; then exec /usr/bin/chromium-browser $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
     'if command -v google-chrome >/dev/null 2>&1; then exec google-chrome $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
     'if command -v chromium >/dev/null 2>&1; then exec chromium $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
-    'if command -v firefox >/dev/null 2>&1; then exec firefox --kiosk "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1; fi',
+    'if command -v firefox >/dev/null 2>&1; then export MOZ_WEBRENDER=0 LIBGL_ALWAYS_SOFTWARE=1; exec firefox --kiosk "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1; fi',
     'exec xdg-open "$url" </dev/null',
   ];
   return [`# ${DETACHED_BROWSER_MARKER}`, ...launch].join("\n");
@@ -379,7 +379,7 @@ export function browserWindowPresentCommand(display: string): string {
   const quotedDisplay = posixShellQuote(display);
   return [
     `export DISPLAY=${quotedDisplay}`,
-    "for class in google-chrome Google-chrome Chromium chromium firefox Firefox; do",
+    "for class in google-chrome Google-chrome Chromium chromium firefox Firefox Navigator firefox-esr; do",
     "  id=$(xdotool search --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
     "  if [ -n \"$id\" ]; then printf '%s\\n' browser; exit 0; fi",
     "done",
@@ -449,7 +449,7 @@ export function repairBlackStreamCommand(display: string): string {
   return [
     `export DISPLAY=${quotedDisplay}`,
     "id=",
-    "for class in google-chrome Google-chrome Chromium chromium firefox Firefox; do",
+    "for class in google-chrome Google-chrome Chromium chromium firefox Firefox Navigator firefox-esr; do",
     "  id=$(xdotool search --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
     '  if [ -n "$id" ]; then break; fi',
     "done",

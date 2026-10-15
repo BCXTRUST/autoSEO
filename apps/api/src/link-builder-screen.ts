@@ -468,14 +468,14 @@ async function showForumSearch(
       deps,
       actor,
       computer,
-      "cat /tmp/rakazo-paint 2>/dev/null || true",
+      "printf 'paint:%s names:%s\\n' \"$(cat /tmp/rakazo-paint 2>/dev/null)\" \"$(DISPLAY=:0 xdotool search --name . 2>/dev/null | head -5 | while read -r id; do xdotool getwindowname \"$id\" 2>/dev/null | tr '\\n' ' '; done)\"",
     ).catch(() => "");
     console.info(
       "link builder screen browser",
       `display=${display}`,
       `windows=${titles.length}`,
       launched ? "opened" : "raised",
-      `paint=${paint.trim().slice(0, 16) || "unknown"}`,
+      `paint=${paint.replace(/\s+/g, " ").trim().slice(0, 180) || "unknown"}`,
     );
     if (query && desktopShowsProblemSearch(titles, query, shops)) {
       await noteDesktopSearch(deps, actor, project.id, query);
