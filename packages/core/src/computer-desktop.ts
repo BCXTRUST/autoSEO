@@ -233,7 +233,7 @@ function startDesktopWatchShell(): string {
     "  id=$(xdotool search --onlyvisible --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
     '  if [ -n "$id" ]; then break; fi',
     "done",
-    'if [ -z "$id" ]; then id=$(xdotool search --onlyvisible --name Firefox 2>/dev/null | awk \'NR==1{print; exit}\'); fi',
+    "if [ -z \"$id\" ]; then id=$(xdotool search --onlyvisible --name Firefox 2>/dev/null | awk 'NR==1{print; exit}'); fi",
     'if [ -n "$id" ]; then',
     '  xdotool windowmove "$id" 0 0 windowsize "$id" 1280 800 windowactivate "$id" windowraise "$id" >/dev/null 2>&1 || true',
     '  xdotool windowstate --add FULLSCREEN "$id" >/dev/null 2>&1 || true',
@@ -299,7 +299,7 @@ export function attachBrowserWindowStreamCommand(display: string): string {
   return [
     `export DISPLAY=${quotedDisplay}`,
     "if pgrep -x x11vnc >/dev/null 2>&1; then printf '%s\\n' attached; exit 0; fi",
-    "setsid -f x11vnc -bg -display \"$DISPLAY\" -forever -wait 50 -shared -rfbport 5900 -nopw -noxdamage -noxfixes >/tmp/rakazo-x11vnc.log 2>&1",
+    'setsid -f x11vnc -bg -display "$DISPLAY" -forever -wait 50 -shared -rfbport 5900 -nopw -noxdamage -noxfixes >/tmp/rakazo-x11vnc.log 2>&1',
     "exit 0",
   ].join("\n");
 }
@@ -334,6 +334,7 @@ export function detachedBrowserCommand(display: string, url: string): string {
     "export GDK_BACKEND=x11",
     "export MOZ_DISABLE_CONTENT_SANDBOX=1",
     'if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then uid=$(id -u); if [ -S "/run/user/$uid/bus" ]; then export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus"; fi; fi',
+    "trap '' HUP",
     `url=${quotedUrl}`,
     // The image ships /usr/bin/firefox-esr. `firefox` is absent, and Chrome
     // never maps a window on this capture, so the ESR kiosk has to start
@@ -341,21 +342,17 @@ export function detachedBrowserCommand(display: string, url: string): string {
     "mkdir -p /tmp/rakazo-ff-profile",
     "rm -f /tmp/rakazo-ff-profile/.parentlock /tmp/rakazo-ff-profile/lock",
     "ff=",
-    'if [ -x /usr/bin/firefox-esr ]; then ff=/usr/bin/firefox-esr; fi',
+    "if [ -x /usr/bin/firefox-esr ]; then ff=/usr/bin/firefox-esr; fi",
     'if [ -z "$ff" ] && command -v firefox-esr >/dev/null 2>&1; then ff=$(command -v firefox-esr); fi',
     'if [ -z "$ff" ] && [ -x /usr/lib/firefox-esr/firefox-esr ]; then ff=/usr/lib/firefox-esr/firefox-esr; fi',
     'if [ -z "$ff" ] && command -v firefox >/dev/null 2>&1; then ff=$(command -v firefox); fi',
     startDesktopWatchShell(),
     'if [ -n "$ff" ]; then',
     `  printf '%s\\n' translate-off > ${posixShellQuote(CHROME_KIOSK_STAMP)}`,
-    '  setsid -f "$ff" --no-remote --kiosk --profile /tmp/rakazo-ff-profile "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1',
-    "  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do",
-    '    xdotool search --onlyvisible --class firefox-esr >/dev/null 2>&1 && exit 0',
-    '    xdotool search --onlyvisible --class Firefox-esr >/dev/null 2>&1 && exit 0',
-    '    xdotool search --onlyvisible --class firefox >/dev/null 2>&1 && exit 0',
-    "    sleep 0.4",
-    "  done",
-    "  exit 0",
+    // The sandbox tears the command down when this shell exits, which was
+    // killing Firefox and leaving the screensaver. The browser has to be
+    // the command, the same way the desktop session stays up.
+    '  exec "$ff" --no-remote --kiosk --profile /tmp/rakazo-ff-profile "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1',
     "fi",
     "dir=/tmp/rakazo-linkbuilder-chrome",
     'rm -rf "$dir"',
@@ -411,8 +408,8 @@ export function repaintBlackKioskCommand(display: string, url: string): string {
     "print('black' if mean < 12 else 'live')",
     "PY",
     ")",
-    'printf \'%s\\n\' "${paint:-unknown}" > /tmp/rakazo-paint',
-    'printf \'%s\\n\' "${paint:-unknown}"',
+    "printf '%s\\n' \"${paint:-unknown}\" > /tmp/rakazo-paint",
+    "printf '%s\\n' \"${paint:-unknown}\"",
     'if [ "$paint" != black ]; then exit 0; fi',
     "ff=",
     "if [ -x /usr/bin/firefox-esr ]; then ff=/usr/bin/firefox-esr; fi",

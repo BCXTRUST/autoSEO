@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  attachBrowserWindowStreamCommand,
   COMPUTER_AUTONOMY_INSTRUCTION,
   detachedBrowserCommand,
   exposeBrowserDesktopCommand,
@@ -13,7 +14,6 @@ import {
   prepareKioskDesktopCommand,
   raiseBrowserWindowCommand,
   refuseBrowserHuntShell,
-  attachBrowserWindowStreamCommand,
   repairBlackStreamCommand,
   repairDesktopDisplayCommand,
   streamedDisplayCommand,
@@ -107,6 +107,7 @@ describe("computer desktop window helpers", () => {
     expect(command).toContain("app_locale");
     expect(command).toContain("--disable-gpu");
     expect(command).toContain("/usr/bin/firefox-esr");
+    expect(command).toContain('exec "$ff"');
     expect(command).toContain("exec firefox --kiosk");
     expect(command).toContain("--ozone-platform=x11");
     expect(command).not.toContain("VizDisplayCompositor");
