@@ -183,6 +183,7 @@ export function browserFactoryFromEnv(input: {
           profileRoot: "/home/user/.browser-profiles",
           runnerArgv: ["/home/user/.autoseo/bin/rakazo-lb-browser"],
           bundledChromium: true,
+          kiosk: true,
         }
       : {}),
     proxyResolver: input.proxyResolver,
