@@ -173,12 +173,13 @@ export function refreshVendorStreamCommand(display: string, force = false): stri
  * without reaping the browser.
  */
 const DESKTOP_PANEL_PROCESSES =
-  "xfce4-panel xfdesktop pcmanfm lxpanel tint2 plank gnome-panel plasmashell xfce4-notifyd fbpanel lxqt-panel mate-panel";
+  "xfce4-panel xfdesktop pcmanfm lxpanel tint2 plank gnome-panel plasmashell xfce4-notifyd fbpanel lxqt-panel mate-panel xfce4-screensaver light-locker xscreensaver";
 
 /** Hide the window-manager bar (Applications, clock) so noVNC is only the browser. */
 function hideDesktopChromeShell(): string {
   return [
     `killall -q ${DESKTOP_PANEL_PROCESSES} >/dev/null 2>&1 || true`,
+    "xset s off -dpms s noblank >/dev/null 2>&1 || true",
     'for home in "$HOME" /root /tmp/fluxbox-home /tmp/fluxbox-home-0 /home/user /home/ubuntu /home/rakazo; do',
     '  [ -d "$home/.fluxbox" ] || continue',
     '  init="$home/.fluxbox/init"',
