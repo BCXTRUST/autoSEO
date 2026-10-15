@@ -305,7 +305,7 @@ describe("project computer screen", () => {
     expect(opened).toContain("--kiosk");
     expect(opened).toContain("TranslateEnabled");
     expect(opened).toContain("--disable-gpu");
-    expect(opened).toContain("rakazo-chrome-kiosk-v5");
+    expect(opened).toContain("rakazo-chrome-kiosk-v6");
     expect(opened).not.toContain("key --window");
     expect(scripts.join("\n")).not.toContain("key Escape");
     expect(opened).toContain("--start-fullscreen");
@@ -397,7 +397,7 @@ describe("project computer screen", () => {
           scripts.push(request.argv.at(-1) ?? "");
           yield {
             type: "stdout" as const,
-            data: request.argv.at(-1)?.includes("rakazo-chrome-kiosk-v5")
+            data: request.argv.at(-1)?.includes("rakazo-chrome-kiosk-v6")
               ? "ok\n"
               : request.argv.at(-1)?.includes("search --class")
                 ? "browser\n"

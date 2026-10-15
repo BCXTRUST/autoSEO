@@ -62,7 +62,7 @@ describe("computer desktop window helpers", () => {
       "https://www.google.de/search?q=Magnesium+Kr%C3%A4mpfe+Forum&hl=de&gl=de",
     );
     expect(command).toContain("--kiosk");
-    expect(command).toContain('setsid -f "$bin" $flags "$url"');
+    expect(command).toContain("exec /usr/bin/google-chrome");
     expect(command).toContain("firefox --kiosk");
     expect(command).not.toContain(">/tmp/rakazo-browser.log");
     expect(command.trimEnd().endsWith("&")).toBe(false);
@@ -74,7 +74,7 @@ describe("computer desktop window helpers", () => {
       "https://www.google.de/search?q=Magnesium+Kr%C3%A4mpfe+Forum&hl=de&gl=de",
     );
     expect(command).toContain("RAKAZO_DETACH_BROWSER");
-    expect(command).toContain('setsid -f "$bin" $flags "$url"');
+    expect(command).toContain("exec /usr/bin/google-chrome");
     expect(command).toContain("</dev/null");
     expect(command).toContain("--kiosk");
     expect(command).toContain("--disable-fre");
@@ -106,11 +106,11 @@ describe("computer desktop window helpers", () => {
     expect(command).toContain("--use-gl=disabled");
     expect(command).toContain("--ozone-platform=x11");
     expect(command).not.toContain("VizDisplayCompositor");
-    expect(command).toContain("rakazo-chrome-kiosk-v5");
+    expect(command).toContain("rakazo-chrome-kiosk-v6");
     expect(command).toContain("Translate this page");
     expect(command).toContain("Diese Seite übersetzen");
     expect(command).toContain("Toolbar");
-    expect(command).not.toContain("rakazo-chrome-kiosk-v4");
+    expect(command).not.toContain("rakazo-chrome-kiosk-v5");
     expect(command).toContain("windowmap");
     const streamed = streamedDisplayCommand();
     expect(streamed).toContain("x11vnc");

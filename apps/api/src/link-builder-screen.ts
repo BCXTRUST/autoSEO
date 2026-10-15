@@ -23,6 +23,7 @@ import {
   prepareKioskDesktopCommand,
   raiseBrowserWindowCommand,
   refreshVendorStreamCommand,
+  repaintBlackKioskCommand,
   repairBlackStreamCommand,
   streamedDisplayCommand,
 } from "@rakazo/core";
@@ -450,6 +451,11 @@ async function showForumSearch(
       await runDesktop(deps, actor, computer, raiseBrowserWindowCommand(display));
     } catch {
       // The kiosk window can still be opening. The next screen open tries again.
+    }
+    if (!persona && (launched || !onProblem(titles))) {
+      await runDesktop(deps, actor, computer, repaintBlackKioskCommand(display, url)).catch(
+        () => undefined,
+      );
     }
     await runDesktop(deps, actor, computer, repairBlackStreamCommand(display)).catch(
       () => undefined,

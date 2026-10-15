@@ -66,7 +66,7 @@ export const DETACHED_BROWSER_MARKER = "RAKAZO_DETACH_BROWSER";
  * A desktop that is already on the problem query but missing this file is an
  * older Chrome, and its translate bubble stays until that process is replaced.
  */
-export const CHROME_KIOSK_STAMP = "/tmp/rakazo-chrome-kiosk-v5";
+export const CHROME_KIOSK_STAMP = "/tmp/rakazo-chrome-kiosk-v6";
 
 export function chromeKioskStampCommand(): string {
   return `test -f ${posixShellQuote(CHROME_KIOSK_STAMP)} && printf '%s\\n' ok || true`;
@@ -315,25 +315,30 @@ export function detachedBrowserCommand(display: string, url: string): string {
     'flags="--user-data-dir=$dir --kiosk --start-fullscreen --no-first-run --disable-fre --no-default-browser-check --disable-search-engine-choice-screen --disable-translate --disable-infobars --noerrdialogs --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-component-update --disable-background-networking --lang=de --accept-lang=de-DE,de --disable-gpu --use-gl=disabled --ozone-platform=x11 --disable-features=Translate,TranslateUI,InfiniteSessionRestore,ChromeWhatsNewUI,OutdatedBuildDetector --password-store=basic --disable-sync --disable-dev-shm-usage --no-sandbox --window-position=0,0 --window-size=1280,800"',
     `printf '%s\\n' translate-off > ${posixShellQuote(CHROME_KIOSK_STAMP)}`,
     startDesktopWatchShell(),
-    // A new session survives the command disconnect. stdin from /dev/null: Chrome
-    // treats a closed stdin as a quit and exits 1 on the first page.
-    'started=0',
-    'for bin in /usr/bin/google-chrome /usr/bin/google-chrome-stable /usr/bin/chromium /usr/bin/chromium-browser google-chrome chromium; do',
-    '  if [ -x "$bin" ] || command -v "$bin" >/dev/null 2>&1; then',
-    '    setsid -f "$bin" $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1',
-    "    started=1",
-    "    break",
-    "  fi",
-    "done",
-    'if [ "$started" = 0 ] && command -v firefox >/dev/null 2>&1; then setsid -f firefox --kiosk "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1; started=1; fi',
-    'if [ "$started" = 0 ]; then setsid -f xdg-open "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1 || true; fi',
-    "for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do",
-    "  xdotool search --class google-chrome >/dev/null 2>&1 && break",
-    "  xdotool search --class chromium >/dev/null 2>&1 && break",
-    "  xdotool search --class firefox >/dev/null 2>&1 && break",
-    "  sleep 0.4",
-    "done",
-    "sleep 0.8",
+    // exec replaces the shell so disconnect cannot reap the browser.
+    // stdin from /dev/null: Chrome treats a closed stdin as a quit.
+    'if [ -x /usr/bin/google-chrome ]; then exec /usr/bin/google-chrome $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
+    'if [ -x /usr/bin/google-chrome-stable ]; then exec /usr/bin/google-chrome-stable $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
+    'if [ -x /usr/bin/chromium ]; then exec /usr/bin/chromium $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
+    'if [ -x /usr/bin/chromium-browser ]; then exec /usr/bin/chromium-browser $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
+    'if command -v google-chrome >/dev/null 2>&1; then exec google-chrome $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
+    'if command -v chromium >/dev/null 2>&1; then exec chromium $flags "$url" </dev/null >/tmp/rakazo-chrome.log 2>&1; fi',
+    'if command -v firefox >/dev/null 2>&1; then exec firefox --kiosk "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1; fi',
+    'exec xdg-open "$url" </dev/null',
+  ];
+  return [`# ${DETACHED_BROWSER_MARKER}`, ...launch].join("\n");
+}
+
+/**
+ * A black kiosk is Chrome painting nowhere x11vnc can read. Firefox in a new
+ * session draws a normal window. One try, so a dark page is not relaunched.
+ */
+export function repaintBlackKioskCommand(display: string, url: string): string {
+  const quotedDisplay = posixShellQuote(display);
+  const quotedUrl = posixShellQuote(url.trim());
+  return [
+    `export DISPLAY=${quotedDisplay}`,
+    "if [ -f /tmp/rakazo-firefox-kiosk ]; then printf '%s\\n' firefox; exit 0; fi",
     "paint=$(python3 - <<'PY'",
     "import subprocess, sys",
     "try:",
@@ -352,13 +357,19 @@ export function detachedBrowserCommand(display: string, url: string): string {
     "PY",
     ")",
     'printf \'%s\\n\' "${paint:-unknown}" > /tmp/rakazo-paint',
-    'if [ "$paint" = black ] && command -v firefox >/dev/null 2>&1; then',
-    "  killall -q chrome chromium chromium-browser google-chrome google-chrome-stable >/dev/null 2>&1 || true",
-    '  setsid -f firefox --kiosk "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1',
-    "fi",
+    'printf \'%s\\n\' "${paint:-unknown}"',
+    'if [ "$paint" != black ]; then exit 0; fi',
+    "if ! command -v firefox >/dev/null 2>&1; then exit 0; fi",
+    "killall -q chrome chromium chromium-browser google-chrome google-chrome-stable >/dev/null 2>&1 || true",
+    `setsid -f firefox --kiosk ${quotedUrl} </dev/null >/tmp/rakazo-firefox.log 2>&1`,
+    "printf '%s\\n' firefox > /tmp/rakazo-firefox-kiosk",
+    "for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do",
+    "  xdotool search --class firefox >/dev/null 2>&1 && exit 0",
+    "  xdotool search --class Firefox >/dev/null 2>&1 && exit 0",
+    "  sleep 0.4",
+    "done",
     "exit 0",
-  ];
-  return [`# ${DETACHED_BROWSER_MARKER}`, ...launch].join("\n");
+  ].join("\n");
 }
 
 /** True when a browser window class is mapped. Desktop icons do not count. */
