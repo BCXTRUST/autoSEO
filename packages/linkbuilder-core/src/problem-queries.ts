@@ -64,7 +64,7 @@ const NUTRIENTS: readonly Nutrient[] = [
   {
     id: "vitamin-d",
     label: "Vitamin D",
-    match: /vitamin\s*d|vitamin\s*k2/i,
+    match: /vitamin[\s-]*d|vitamin[\s-]*k2|\bk2[\s-]*vitamin/i,
     uses: [
       { useCase: "Mangel", query: "Vitamin D Mangel Forum" },
       { useCase: "Knochen", query: "Vitamin D Knochen Forum" },
@@ -76,7 +76,7 @@ const NUTRIENTS: readonly Nutrient[] = [
   {
     id: "b12",
     label: "B12",
-    match: /vitamin\s*b12|\bb12\b|b-komplex|b komplex/i,
+    match: /vitamin[\s-]*b12|\bb12\b|b-komplex|b komplex/i,
     uses: [
       { useCase: "Vegan", query: "Vitamin B12 Vegan Forum" },
       { useCase: "Müdigkeit", query: "Vitamin B12 Müdigkeit Forum" },
@@ -113,6 +113,78 @@ const NUTRIENTS: readonly Nutrient[] = [
       { useCase: "Schlaf", query: "Schlafprobleme Forum Melatonin" },
       { useCase: "Jetlag", query: "Melatonin Jetlag Forum" },
       { useCase: "Schichtarbeit", query: "Melatonin Schichtarbeit Forum" },
+      { useCase: "Kinder", query: "Kind schläft nicht ein Forum" },
+    ],
+  },
+  {
+    id: "creatin",
+    label: "Kreatin",
+    match: /creatin|kreatin/i,
+    uses: [
+      { useCase: "Krafttraining", query: "Kreatin Krafttraining Forum" },
+      { useCase: "Muskelaufbau", query: "Kreatin Muskelaufbau Forum" },
+      { useCase: "Regeneration", query: "Kreatin Regeneration Sport Forum" },
+      { useCase: "Energie", query: "Kreatin Energie Training Forum" },
+    ],
+  },
+  {
+    id: "folsaeure",
+    label: "Folsäure",
+    match: /fols[aä]ure|folsaeure|folic/i,
+    uses: [
+      { useCase: "Mangel", query: "Folsäure Mangel Forum" },
+      { useCase: "Müdigkeit", query: "Folsäure Müdigkeit Forum" },
+      { useCase: "Blutbildung", query: "Folsäure Blutwerte Forum" },
+    ],
+  },
+  {
+    id: "sango",
+    label: "Sango",
+    match: /sango|meeres[\s-]*koralle/i,
+    uses: [
+      { useCase: "Knochen", query: "Knochenschmerzen Forum" },
+      { useCase: "Krämpfe", query: "Wadenkrämpfe Forum" },
+      { useCase: "Kalzium", query: "Kalzium Mangel Forum" },
+    ],
+  },
+  {
+    id: "spirulina",
+    label: "Spirulina",
+    match: /spirulina/i,
+    uses: [
+      { useCase: "Energie", query: "Müdigkeit Energie Forum" },
+      { useCase: "Eisen", query: "Eisenmangel Forum" },
+      { useCase: "Immun", query: "Immunsystem schwach Forum" },
+    ],
+  },
+  {
+    id: "vitamin-b",
+    label: "Vitamin B",
+    match: /vitamin[\s-]*b(?![\s-]*12)\b|b[\s-]*complex|b[\s-]*komplex/i,
+    uses: [
+      { useCase: "Müdigkeit", query: "Vitamin B Müdigkeit Forum" },
+      { useCase: "Mangel", query: "Vitamin B Mangel Forum" },
+      { useCase: "Nerven", query: "Vitamin B Nerven Forum" },
+    ],
+  },
+  {
+    id: "stimmung",
+    label: "Stimmung",
+    match: /stimmungsaufheller|stimmungstief/i,
+    uses: [
+      { useCase: "Stimmung", query: "Stimmungstief Forum" },
+      { useCase: "Antrieb", query: "Antriebslosigkeit Forum" },
+      { useCase: "Schlaf", query: "schlechte Stimmung Schlaf Forum" },
+    ],
+  },
+  {
+    id: "einschlafen",
+    label: "Einschlafen",
+    match: /tipps zum einschlafen|nicht einschlafen|einschlafprobleme/i,
+    uses: [
+      { useCase: "Einschlafen", query: "nicht einschlafen können Forum" },
+      { useCase: "Schlaf", query: "Einschlafprobleme Forum" },
+      { useCase: "Nacht", query: "nachts wach liegen Forum" },
     ],
   },
   {
@@ -325,7 +397,9 @@ export function relevanceTopicFromProject(project: {
   targets?: unknown;
 }): { tag: string; description: string } {
   const lane =
-    Array.isArray(project.topicLanes) && project.topicLanes[0] && typeof project.topicLanes[0] === "object"
+    Array.isArray(project.topicLanes) &&
+    project.topicLanes[0] &&
+    typeof project.topicLanes[0] === "object"
       ? (project.topicLanes[0] as { tag?: unknown; description?: unknown })
       : undefined;
   const laneTag = typeof lane?.tag === "string" ? lane.tag.trim() : "";

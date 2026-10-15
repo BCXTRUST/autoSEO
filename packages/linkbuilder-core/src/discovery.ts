@@ -2,6 +2,7 @@ import type { LbMarket, LbMarketPolicy, LbTopicLane } from "@rakazo/contracts";
 import { marketKey, selectMarkets } from "./market.js";
 import { registrableDomain } from "./policy.js";
 import { type ProbeFacts, type ProbePage, probePages, settleProbe } from "./probe.js";
+import { useCaseLanes } from "./problem-queries.js";
 
 /**
  * One combined footprint per lane tag. The OR covers every platform in Appendix A, so discovery
@@ -37,8 +38,28 @@ export function planFootprintQueries(input: {
     supply: input.supply,
     need: input.need,
   });
+  const problems = [
+    ...new Set(
+      useCaseLanes({
+        keywords: input.lanes.flatMap((lane) => [lane.tag, lane.description]),
+      }).map((lane) => lane.query),
+    ),
+  ];
   const queries: FootprintQuery[] = [];
   for (const market of markets) {
+    if (problems.length > 0) {
+      const lane = input.lanes[0];
+      if (!lane) continue;
+      for (const problem of problems) {
+        queries.push({
+          market,
+          laneId: lane.id,
+          laneTag: problem,
+          query: footprintQuery(problem),
+        });
+      }
+      continue;
+    }
     for (const lane of input.lanes) {
       queries.push({
         market,

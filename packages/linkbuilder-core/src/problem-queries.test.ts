@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   boardTopicQueries,
-  relevanceTopicFromProject,
   matchDeepLink,
   pageKind,
   primaryProblemQuery,
   queryOmitsShop,
+  relevanceTopicFromProject,
   searchedGoogleLine,
   useCaseLanes,
 } from "./problem-queries.js";
@@ -59,6 +59,47 @@ describe("problem queries", () => {
         keywords: ["forum-abc.example", "https://brett.example/topic"],
       }),
     ).toBeNull();
+  });
+
+  it("turns each catalog product into German problems and leaves problem searches unlinked", () => {
+    const creatin = useCaseLanes({
+      brandName: "Vitaminexpress",
+      keywords: ["Kreatin EEM", "folsäure kaufen", "k2 vitamin", "vitamin b"],
+      pages: [
+        { url: "https://www.vitaminexpress.org/at/creatin", keyword: "Kreatin EEM" },
+        { url: "https://www.vitaminexpress.org/at/folsaeure-kaufen", keyword: "folsäure kaufen" },
+        { url: "https://www.vitaminexpress.org/de/vitamin-k2", keyword: "k2 vitamin" },
+        {
+          url: "https://www.vitaminexpress.org/at/vitamin-b-complex-vitamin-b-kapseln",
+          keyword: "vitamin b",
+        },
+      ],
+    });
+    const queries = creatin.map((lane) => lane.query);
+    expect(queries).toEqual(
+      expect.arrayContaining([
+        "Kreatin Krafttraining Forum",
+        "Folsäure Mangel Forum",
+        "Vitamin D Mangel Forum",
+        "Vitamin B Müdigkeit Forum",
+      ]),
+    );
+    expect(queries.every((query) => !/vitaminexpress|kaufen/i.test(query))).toBe(true);
+    expect(creatin.find((lane) => lane.nutrient === "Kreatin")?.destinationUrl).toBe(
+      "https://www.vitaminexpress.org/at/creatin",
+    );
+    expect(useCaseLanes({ keywords: ["vitamin b"] }).some((lane) => /B12/.test(lane.query))).toBe(
+      false,
+    );
+    expect(
+      useCaseLanes({ keywords: ["vitamin b12"] }).some((lane) => lane.nutrient === "Vitamin B"),
+    ).toBe(false);
+    for (const keyword of ["Stimmungsaufheller", "Tipps zum Einschlafen"]) {
+      const lanes = useCaseLanes({ keywords: [keyword] });
+      expect(lanes.length).toBeGreaterThan(1);
+      expect(lanes.every((lane) => lane.destinationUrl === null)).toBe(true);
+      expect(lanes.every((lane) => !/vitaminexpress|kaufen/i.test(lane.query))).toBe(true);
+    }
   });
 
   it("uses the brief templates for the other catalog lanes", () => {

@@ -74,7 +74,7 @@ export function funnelColumnId(status: LbHostStatus): (typeof FUNNEL_COLUMNS)[nu
   );
 }
 
-export const PAGE_BOX_LIMIT = 10;
+export const PAGE_BOX_LIMIT = 40;
 
 export interface WizardPage {
   id: string;
@@ -410,9 +410,15 @@ function topicIssues(draft: WizardDraft): string[] {
     const number = pages.indexOf(page) + 1;
     const url = normalizePageUrl(page.url);
     if (!url) {
-      issues.push(
-        page.url.trim() ? `Page ${number} looks wrong` : `Add the address for page ${number}`,
-      );
+      if (page.url.trim()) {
+        issues.push(`Page ${number} looks wrong`);
+        continue;
+      }
+      if (!page.keyword.trim()) {
+        issues.push(`Add the address for page ${number}`);
+        continue;
+      }
+      if (page.keyword.trim().length > 80) issues.push(`Keyword for page ${number} is too long`);
       continue;
     }
     const checked = validateTargetUrl(url, domains);
@@ -457,7 +463,7 @@ export function withPagePrefill(draft: WizardDraft): WizardDraft {
   const pages = draft.pages.length > 0 ? draft.pages.slice(0, PAGE_BOX_LIMIT) : [emptyPage()];
   if (!site || pages.some((page) => page.url.trim())) return { ...draft, pages };
   const [first, ...rest] = pages;
-  if (!first) return { ...draft, pages };
+  if (!first || first.keyword.trim() || first.rules.trim()) return { ...draft, pages };
   return { ...draft, pages: [{ ...first, url: site }, ...rest] };
 }
 
@@ -479,10 +485,15 @@ export function removeWizardPage(draft: WizardDraft, index: number): WizardDraft
   return { ...draft, pages: draft.pages.filter((_, item) => item !== index) };
 }
 
+function sameKeyword(left: string, right: string): boolean {
+  return left.trim().toLocaleLowerCase("de") === right.trim().toLocaleLowerCase("de");
+}
+
 function pagesFromProject(project: LbProjectDetail): WizardPage[] {
   const facts = project.facts.join("\n");
   const lanes = project.topicLanes;
-  if (project.targets.length === 0) {
+  const targets = project.targets;
+  if (targets.length === 0) {
     if (lanes.length === 0) return [emptyPage()];
     return lanes.slice(0, PAGE_BOX_LIMIT).map((lane) => ({
       id: lane.id,
@@ -491,13 +502,33 @@ function pagesFromProject(project: LbProjectDetail): WizardPage[] {
       rules: lane.description || facts,
     }));
   }
-  return project.targets.slice(0, PAGE_BOX_LIMIT).map((target, index) => {
-    const lane = lanes[index] ?? (project.targets.length === 1 ? lanes[0] : undefined);
+  const lanesCoverTargets =
+    lanes.length > 0 &&
+    targets.every((target) =>
+      target.keywordClusters.some((keyword) =>
+        lanes.some((lane) => sameKeyword(lane.tag, keyword)),
+      ),
+    );
+  if (lanesCoverTargets) {
+    return lanes.slice(0, PAGE_BOX_LIMIT).map((lane) => {
+      const target = targets.find((item) =>
+        item.keywordClusters.some((keyword) => sameKeyword(keyword, lane.tag)),
+      );
+      return {
+        id: lane.id,
+        url: target?.url ?? "",
+        keyword: lane.tag,
+        rules: target?.description || lane.description || (targets.length === 1 ? facts : ""),
+      };
+    });
+  }
+  return targets.slice(0, PAGE_BOX_LIMIT).map((target, index) => {
+    const lane = lanes[index] ?? (targets.length === 1 ? lanes[0] : undefined);
     return {
       id: lane?.id ?? `page-${index + 1}`,
       url: target.url,
       keyword: target.keywordClusters.join(", ") || lane?.tag || "",
-      rules: target.description || lane?.description || (project.targets.length === 1 ? facts : ""),
+      rules: target.description || lane?.description || (targets.length === 1 ? facts : ""),
     };
   });
 }

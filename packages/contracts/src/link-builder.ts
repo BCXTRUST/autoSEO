@@ -464,7 +464,7 @@ export const LbProjectConfigSchema = z.object({
   captchaLowBalanceCredits: z.number().int().min(0).default(500),
   quotas: LbQuotasSchema,
   schedule: LbScheduleSchema,
-  topicLanes: z.array(LbTopicLaneSchema).max(20).default([]),
+  topicLanes: z.array(LbTopicLaneSchema).max(40).default([]),
   markets: LbMarketsSchema.default(() => [{ ...LB_DEFAULT_MARKET }]),
   marketPolicy: LbMarketPolicySchema.default("primary_first"),
   disclosureMode: LbDisclosureModeSchema.default("undisclosed_persona"),
@@ -502,7 +502,7 @@ export type LbProjectConfigInput = z.input<typeof LbProjectConfigSchema>;
 /** Fields the wizard must have before Start building is allowed. Captell stays on the deployment. */
 export const LbProjectStartableSchema = LbProjectConfigSchema.extend({
   mailboxId: Id,
-  topicLanes: z.array(LbTopicLaneSchema).min(1).max(20),
+  topicLanes: z.array(LbTopicLaneSchema).min(1).max(40),
 });
 
 export const LbDraftQualityChecksSchema = z.object({
@@ -524,25 +524,38 @@ export const LbThreadRelevanceSchema = z.object({
 });
 export type LbThreadRelevance = z.infer<typeof LbThreadRelevanceSchema>;
 
-const DRAFT_BODY_KEYS = ["body", "text", "reply", "message", "answer", "response", "content"] as const;
+const DRAFT_BODY_KEYS = [
+  "body",
+  "text",
+  "reply",
+  "message",
+  "answer",
+  "response",
+  "content",
+] as const;
 
-export const LbDraftReplySchema = z.preprocess((value) => {
-  if (!value || typeof value !== "object") return value;
-  const record = { ...(value as Record<string, unknown>) };
-  const named = DRAFT_BODY_KEYS.map((key) => record[key]).find((item) => typeof item === "string");
-  if (typeof record.body !== "string" && typeof named === "string") record.body = named;
-  if (record.linkSlot === undefined) record.linkSlot = "none";
-  if (record.targetUrlIndex === undefined) record.targetUrlIndex = null;
-  if (record.anchorText === undefined) record.anchorText = null;
-  if (typeof record.confidence !== "number") record.confidence = 0.6;
-  return record;
-}, z.object({
-  body: z.string().max(10_000),
-  linkSlot: LbLinkSlotSchema,
-  targetUrlIndex: z.number().int().min(0).nullable(),
-  anchorText: z.string().max(80).nullable(),
-  confidence: z.number().min(0).max(1),
-}));
+export const LbDraftReplySchema = z.preprocess(
+  (value) => {
+    if (!value || typeof value !== "object") return value;
+    const record = { ...(value as Record<string, unknown>) };
+    const named = DRAFT_BODY_KEYS.map((key) => record[key]).find(
+      (item) => typeof item === "string",
+    );
+    if (typeof record.body !== "string" && typeof named === "string") record.body = named;
+    if (record.linkSlot === undefined) record.linkSlot = "none";
+    if (record.targetUrlIndex === undefined) record.targetUrlIndex = null;
+    if (record.anchorText === undefined) record.anchorText = null;
+    if (typeof record.confidence !== "number") record.confidence = 0.6;
+    return record;
+  },
+  z.object({
+    body: z.string().max(10_000),
+    linkSlot: LbLinkSlotSchema,
+    targetUrlIndex: z.number().int().min(0).nullable(),
+    anchorText: z.string().max(80).nullable(),
+    confidence: z.number().min(0).max(1),
+  }),
+);
 export type LbDraftReply = z.infer<typeof LbDraftReplySchema>;
 
 export const LbFitCheckSchema = z.object({

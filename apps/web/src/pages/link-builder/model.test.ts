@@ -1,9 +1,11 @@
+import type { LbProjectDetail } from "@rakazo/contracts";
 import { describe, expect, it } from "vitest";
 import {
   addMarket,
   addWizardPage,
   artifactImageSrc,
   canStart,
+  draftFromProject,
   emptyDraft,
   emptyPage,
   PAGE_BOX_LIMIT,
@@ -125,7 +127,7 @@ describe("link builder wizard", () => {
     expect(saved.facts).toEqual(["Use the page's own wording."]);
   });
 
-  it("prefills the first page from the brand site and stops at 10 boxes", () => {
+  it("prefills the first page from the brand site and stops at the box limit", () => {
     const draft = emptyDraft();
     draft.allowedDomains = "https://www.vitaminexpress.org/de";
     const filled = withPagePrefill(draft);
@@ -138,7 +140,7 @@ describe("link builder wizard", () => {
     };
     expect(withPagePrefill(filled).pages[0]?.url).toBe("https://vitaminexpress.org/other");
     let many = filled;
-    for (let index = 0; index < 12; index += 1) many = addWizardPage(many);
+    for (let index = 0; index < PAGE_BOX_LIMIT + 5; index += 1) many = addWizardPage(many);
     expect(many.pages).toHaveLength(PAGE_BOX_LIMIT);
     expect(removeWizardPage(many, 1).pages).toHaveLength(PAGE_BOX_LIMIT - 1);
     expect(removeWizardPage({ ...draft, pages: [emptyPage()] }, 0).pages).toHaveLength(1);
@@ -155,6 +157,79 @@ describe("link builder wizard", () => {
     expect(filled.bio).toContain("/de");
     draft.bio = "Already written";
     expect(withPersonaPrefill(draft).bio).toBe("Already written");
+  });
+
+  it("keeps a problem keyword when the landing page is blank", () => {
+    const draft = emptyDraft();
+    draft.allowedDomains = "https://www.vitaminexpress.org";
+    draft.pages = [
+      {
+        id: "page-mood",
+        url: "",
+        keyword: "Stimmungsaufheller",
+        rules: "Problem search",
+      },
+    ];
+    expect(wizardStepIssues(3, draft)).toEqual([]);
+    const patch = patchFromDraft(draft);
+    expect(patch.targets).toEqual([]);
+    expect(patch.topicLanes[0]).toMatchObject({ tag: "Stimmungsaufheller" });
+  });
+
+  it("shows every stored keyword, including a problem search with no URL", () => {
+    const project = {
+      name: "Vitaminexpress",
+      slug: "vitaminexpress-3096",
+      brandName: "Vitaminexpress",
+      allowedDomains: ["vitaminexpress.org"],
+      persona: null,
+      mailboxAddress: null,
+      mailboxId: null,
+      captchaConfigured: false,
+      quotas: null,
+      schedule: {
+        timezone: "Europe/Berlin",
+        weekdaysOnly: true,
+        window: { start: "09:00", end: "22:00" },
+        overtimeUntilLiveMet: false,
+        hardStopHour: 24,
+      },
+      topicLanes: [
+        { id: "kw-creatin", tag: "Kreatin EEM", description: "Brief", exampleQuestions: [] },
+        {
+          id: "kw-mood",
+          tag: "Stimmungsaufheller",
+          description: "Brief",
+          exampleQuestions: [],
+        },
+        {
+          id: "kw-sleep",
+          tag: "Tipps zum Einschlafen",
+          description: "Brief",
+          exampleQuestions: [],
+        },
+      ],
+      targets: [
+        {
+          url: "https://www.vitaminexpress.org/at/creatin",
+          priority: 50,
+          description: "",
+          keywordClusters: ["Kreatin EEM"],
+        },
+      ],
+      facts: [],
+      markets: [{ country: "DE", language: "de", locale: "de-DE", timezoneId: "Europe/Berlin" }],
+      marketPolicy: "primary_first",
+      denyHosts: [],
+      linkRatio: { links: 1, posts: 3 },
+      disclosureMode: "undisclosed_persona",
+    } as LbProjectDetail;
+    const pages = draftFromProject(project).pages;
+    expect(pages.map((page) => [page.keyword, page.url])).toEqual([
+      ["Kreatin EEM", "https://www.vitaminexpress.org/at/creatin"],
+      ["Stimmungsaufheller", ""],
+      ["Tipps zum Einschlafen", ""],
+    ]);
   });
 
   it("keeps acceptance as a sentence with no checkbox field", () => {

@@ -75,7 +75,7 @@ export const LbProjectPatchSchema = z.object({
   captchaLowBalanceCredits: z.number().int().min(0).optional(),
   quotas: LbQuotasSchema.optional(),
   schedule: LbScheduleSchema.optional(),
-  topicLanes: z.array(LbTopicLaneSchema).max(20).optional(),
+  topicLanes: z.array(LbTopicLaneSchema).max(40).optional(),
   markets: LbMarketsSchema.optional(),
   marketPolicy: LbMarketPolicySchema.optional(),
   disclosureMode: LbDisclosureModeSchema.optional(),
