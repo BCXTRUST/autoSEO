@@ -29,7 +29,17 @@ import {
   Shimmer,
   SuccessPop,
 } from "../../components/beautiful-ui/primitives";
+import { LIVE_PANE_BG } from "./browser-frame.js";
 import { BrowserOnlyFrame } from "./browser-only-frame.js";
+
+export type ScreenState = "off" | "starting" | "no_browser" | "live";
+
+const SCREEN_PANE_STATUS: Record<Exclude<ScreenState, "live">, string> = {
+  off: "Computer is off",
+  starting: "Starting",
+  no_browser: "Opening the browser",
+};
+
 import {
   addWizardPage,
   disclosureLabel,
@@ -405,6 +415,7 @@ export function ProjectView({
   creditNote,
   onBuyCredits,
   screenUrl,
+  screenState,
   screenError,
   screenPending,
   onHelp,
@@ -437,6 +448,7 @@ export function ProjectView({
   creditNote?: string | null;
   onBuyCredits?: () => void;
   screenUrl?: string | null;
+  screenState?: ScreenState;
   screenError?: string | null;
   screenPending?: boolean;
   onHelp?: () => void;
@@ -562,6 +574,7 @@ export function ProjectView({
           tickets={tickets}
           working={working}
           screenUrl={screenUrl}
+          screenState={screenState}
           screenError={screenError}
           screenPending={screenPending}
           loadArtifact={loadArtifact}
@@ -688,6 +701,7 @@ function Dashboard({
   tickets,
   working,
   screenUrl,
+  screenState,
   screenError,
   screenPending,
   loadArtifact,
@@ -702,6 +716,7 @@ function Dashboard({
   tickets: LbOperatorTicketView[];
   working: boolean;
   screenUrl?: string | null;
+  screenState?: ScreenState;
   screenError?: string | null;
   screenPending?: boolean;
   loadArtifact?: ArtifactLoader;
@@ -767,6 +782,7 @@ function Dashboard({
           action={cornerLabel(action, WORK_STAGE_LABELS[stage])}
           stage={stage}
           frame={frame}
+          screenState={screenState}
           screenError={screenError}
           screenPending={screenPending}
           loadArtifact={loadArtifact}
@@ -902,6 +918,7 @@ function ComputerPane({
   action,
   stage,
   frame,
+  screenState,
   screenError,
   screenPending,
   loadArtifact,
@@ -910,6 +927,7 @@ function ComputerPane({
   action: string;
   stage: (typeof WORK_STAGES)[number];
   frame: ReturnType<typeof overviewFrame>;
+  screenState?: ScreenState;
   screenError?: string | null;
   screenPending?: boolean;
   loadArtifact?: ArtifactLoader;
@@ -924,13 +942,18 @@ function ComputerPane({
   const frameUrl = frame?.kind === "url" ? frame.url : "";
   const waiting = frame?.kind !== "url" && frame?.kind !== "artifact";
   const errorStatus = screenError && !isMailSendFailure(screenError) ? screenError : null;
+  const serverStatus =
+    screenState && screenState !== "live" ? SCREEN_PANE_STATUS[screenState] : null;
+  const showLive = Boolean(frameUrl) && (screenState == null || screenState === "live");
   const idleStatus = errorStatus
     ? null
-    : !waiting
+    : serverStatus
       ? null
-      : screenPending || working
-        ? "Reconnecting"
-        : "Computer is off";
+      : !waiting
+        ? null
+        : screenPending || working
+          ? "Reconnecting"
+          : "Computer is off";
   useEffect(() => {
     setStripStatus(null);
   }, [frameUrl]);
@@ -969,12 +992,12 @@ function ComputerPane({
             );
           })}
         </ol>
-        {stripStatus || errorStatus || idleStatus || (frame && label) ? (
+        {stripStatus || errorStatus || serverStatus || idleStatus || (frame && label) ? (
           <span
             data-live-status="strip"
             className="shrink-0 font-mono text-[11px] leading-none tracking-[0.04em] text-[#C8C4B8]"
           >
-            {stripStatus || errorStatus || idleStatus || label}
+            {stripStatus || errorStatus || serverStatus || idleStatus || label}
           </span>
         ) : null}
         <span className="hidden shrink-0 sm:flex">
@@ -982,17 +1005,30 @@ function ComputerPane({
         </span>
       </div>
       <div className="relative min-h-0 flex-1">
-        {frame?.kind === "url" ? (
+        {showLive && frame?.kind === "url" ? (
           <BrowserOnlyFrame
             url={watchingFrameSrc(frame.url)}
             title="Computer"
             sandbox={computerFrameSandbox(frame.url)}
             onStatus={onPaneStatus}
           />
+        ) : serverStatus ? (
+          <div
+            className="flex h-full min-h-0 items-center justify-center"
+            data-live-pane="dark"
+            data-desktop="hidden"
+            style={{ background: LIVE_PANE_BG }}
+          >
+            <p className="font-mono text-[13px] text-[#C8C4B8]">{serverStatus}</p>
+          </div>
         ) : (
-          <div className="h-full min-h-0 bg-[#0c0c0e]" data-live-pane="dark" aria-label={label} />
+          <section
+            className="h-full min-h-0 bg-[#0c0c0e]"
+            data-live-pane="dark"
+            aria-label={label}
+          />
         )}
-        {frame?.kind === "artifact" && loadArtifact ? (
+        {frame?.kind === "artifact" && loadArtifact && !serverStatus ? (
           <ArtifactShot
             artifactId={frame.artifactId}
             load={loadArtifact}

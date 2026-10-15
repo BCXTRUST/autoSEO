@@ -198,8 +198,8 @@ describe("link builder screens", () => {
     expect(watchingFrameSrc(stream)).toContain("reconnect=true");
     expect(watchingFrameSrc(stream)).toContain("path=novnc%2Fremote%2Fview%2F9.abc%2Fwebsockify");
     expect(html).toContain('title="Computer"');
-    expect(html).toContain('data-desktop="hidden"');
-    expect(html).toContain('data-live-pane="dark"');
+    expect(html).toContain('data-desktop="browser"');
+    expect(html).not.toContain('data-desktop="hidden"');
     expect(html).toContain("allow-scripts allow-same-origin");
     expect(html).not.toContain("No session");
     const failed = renderToStaticMarkup(
@@ -651,6 +651,29 @@ describe("link builder screens", () => {
     expect(html).not.toContain("Connecting the computer");
   });
 
+  it("renders the computer from server screen state", () => {
+    const stream = "https://app.autoseo.run/novnc/remote/view/9.abc/vnc.html";
+    const states = [
+      ["off", "Computer is off"],
+      ["starting", "Starting"],
+      ["no_browser", "Opening the browser"],
+    ] as const;
+    for (const [state, label] of states) {
+      const html = renderOverview(statusView(), [], [], stream, [], [], state);
+      expect(html).not.toContain("<iframe");
+      expect(html).toContain('data-desktop="hidden"');
+      expect(html).toContain('data-live-pane="dark"');
+      expect(html).toContain(label);
+    }
+    const live = renderOverview(statusView(), [], [], stream, [], [], "live");
+    expect(live).toContain("<iframe");
+    expect(live).toContain('title="Computer"');
+    expect(live).toContain('data-desktop="browser"');
+    expect(live).not.toContain('data-desktop="hidden"');
+    const liveWithoutUrl = renderOverview(statusView(), [], [], null, [], [], "live");
+    expect(liveWithoutUrl).not.toContain("<iframe");
+  });
+
   it("stays on research when Verify has no placement, and still shows a frame", () => {
     const reading = step(0, "research", []);
     reading.lastAction = "Opened Google search";
@@ -972,6 +995,7 @@ function renderOverview(
   screenUrl?: string | null,
   tickets: LbOperatorTicketView[] = [],
   hosts: LbHostView[] = [],
+  screenState?: "off" | "starting" | "no_browser" | "live",
 ) {
   return renderToStaticMarkup(
     <ProjectView
@@ -991,6 +1015,7 @@ function renderOverview(
       loadArtifact={loadArtifact}
       busy={false}
       screenUrl={screenUrl}
+      screenState={screenState}
     />,
   );
 }
