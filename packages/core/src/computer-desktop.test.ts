@@ -103,7 +103,7 @@ describe("computer desktop window helpers", () => {
     expect(command).toContain("translate_blocked_languages");
     expect(command).toContain("app_locale");
     expect(command).toContain("--disable-gpu");
-    expect(command).toContain("--use-gl=disabled");
+    expect(command).toContain("exec firefox --kiosk");
     expect(command).toContain("--ozone-platform=x11");
     expect(command).not.toContain("VizDisplayCompositor");
     expect(command).toContain("rakazo-chrome-kiosk-v6");
