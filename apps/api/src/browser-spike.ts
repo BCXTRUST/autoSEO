@@ -95,9 +95,9 @@ export async function evaluateSpike(
   try {
     await sandbox.ensureRunner();
     await sandbox.openExample();
-    await sandbox.run("setsid -f sleep 600");
+    await sandbox.run("setsid -f sleep 600 </dev/null >/dev/null 2>&1");
     await sleep(30_000);
-    const alive = await sandbox.run("pgrep -f 'sleep 600'").catch(() => ({
+    const alive = await sandbox.run("pgrep -x sleep").catch(() => ({
       stdout: "",
       exitCode: 1,
     }));
@@ -183,11 +183,7 @@ export async function runBrowserSpike(env: NodeJS.ProcessEnv = process.env): Pro
     async openExample() {
       try {
         const session = await factory.open(SPIKE_PERSONA, SPIKE_CONTEXT);
-        try {
-          await session.goto("https://example.org/");
-        } finally {
-          await session.close().catch(() => undefined);
-        }
+        await session.goto("https://example.org/");
       } catch (error) {
         const log = await desktop.commands
           .run("tail -n 40 /tmp/rakazo-lb/spike.json.log", { timeoutMs: 30_000 })

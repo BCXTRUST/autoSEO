@@ -16,6 +16,8 @@ describe("autoseo browser template", () => {
     expect(serialized).toContain("fonts-dejavu");
     expect(serialized).toContain("fonts-liberation");
     expect(serialized).toContain("x11-xserver-utils");
+    expect(serialized).toContain("x11-utils");
+    expect(serialized).toContain("imagemagick");
     expect(serialized).toContain("netcat-openbsd");
     expect(serialized).toContain("de_DE.UTF-8");
     expect(serialized).toContain("setup_22.x");

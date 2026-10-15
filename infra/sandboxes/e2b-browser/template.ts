@@ -12,6 +12,8 @@ export function autoseoBrowserTemplate() {
       "fonts-dejavu",
       "fonts-liberation",
       "x11-xserver-utils",
+      "x11-utils",
+      "imagemagick",
       "netcat-openbsd",
     ])
     .runCmd("sed -i 's/# de_DE.UTF-8/de_DE.UTF-8/' /etc/locale.gen && locale-gen", {
