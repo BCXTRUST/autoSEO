@@ -308,6 +308,13 @@ export function attachBrowserWindowStreamCommand(display: string): string {
   const quotedDisplay = posixShellQuote(display);
   return [
     `export DISPLAY=${quotedDisplay}`,
+    "for pid in $(pgrep -x x11vnc 2>/dev/null || true); do",
+    '  [ -r "/proc/$pid/cmdline" ] || continue',
+    "  args=$(tr '\\0' ' ' < \"/proc/$pid/cmdline\")",
+    '  case "$args" in',
+    "    *-noxdamage* *-nowf*|*-nowf* *-noxdamage*) printf '%s\\n' attached; exit 0 ;;",
+    "  esac",
+    "done",
     "id=",
     "for class in firefox-esr Firefox-esr firefox Firefox google-chrome Google-chrome Chromium chromium; do",
     "  id=$(xdotool search --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
