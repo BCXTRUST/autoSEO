@@ -31,6 +31,7 @@ export interface OpsState {
     driver: string | null;
     browser: string;
     search: string | null;
+    searchCredentials: "row" | "env" | "none";
     sandboxProvider: string | null;
     template: string | null;
     idleMs: number;
@@ -66,11 +67,19 @@ export function opsRevision(env: NodeJS.ProcessEnv): string | null {
   return value || null;
 }
 
+function searchCredentialsMode(env: NodeJS.ProcessEnv): "row" | "env" | "none" {
+  const login = env.DATAFORSEO_LOGIN?.trim() ?? "";
+  const password = env.DATAFORSEO_PASSWORD?.trim() ?? "";
+  if (login && password) return "env";
+  return "none";
+}
+
 export function opsConfig(env: NodeJS.ProcessEnv): OpsState["config"] {
   return {
     driver: env.LINK_BUILDER_DRIVER?.trim() || null,
     browser: env.LINK_BUILDER_BROWSER?.trim() || "sandbox",
     search: env.LINK_BUILDER_SEARCH?.trim() || null,
+    searchCredentials: searchCredentialsMode(env),
     sandboxProvider: env.SANDBOX_PROVIDER?.trim() || null,
     template: env.E2B_TEMPLATE?.trim() || null,
     idleMs: sandboxIdleMs(),

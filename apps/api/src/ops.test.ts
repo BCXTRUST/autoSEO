@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   mountOpsRoutes,
   type OpsDeps,
+  opsConfig,
   resetE2BTemplateBuildForTests,
   setBrowserSpikeForTests,
   setE2BTemplateBuildForTests,
@@ -156,6 +157,8 @@ describe("ops routes", () => {
     LINK_BUILDER_SEARCH: process.env.LINK_BUILDER_SEARCH,
     SANDBOX_PROVIDER: process.env.SANDBOX_PROVIDER,
     E2B_TEMPLATE: process.env.E2B_TEMPLATE,
+    DATAFORSEO_LOGIN: process.env.DATAFORSEO_LOGIN,
+    DATAFORSEO_PASSWORD: process.env.DATAFORSEO_PASSWORD,
   };
 
   function restore(): void {
@@ -197,6 +200,8 @@ describe("ops routes", () => {
       process.env.LINK_BUILDER_SEARCH = "dataforseo";
       process.env.SANDBOX_PROVIDER = "e2b";
       process.env.E2B_TEMPLATE = "desktop";
+      delete process.env.DATAFORSEO_LOGIN;
+      delete process.env.DATAFORSEO_PASSWORD;
       const right = await app.request("/api/ops/state?projectId=project-1", {
         headers: { authorization: `Bearer ${RIGHT}` },
       });
@@ -218,6 +223,7 @@ describe("ops routes", () => {
         sandboxProvider: "e2b",
         template: "desktop",
         idleMs: 120000,
+        searchCredentials: "none",
       });
       expect(json.hosts).toEqual([
         {
@@ -349,5 +355,18 @@ describe("ops routes", () => {
       if (savedKey === undefined) delete process.env.E2B_API_KEY;
       else process.env.E2B_API_KEY = savedKey;
     }
+  });
+});
+
+describe("opsConfig search credentials", () => {
+  it("reports env when both names are set and none otherwise", () => {
+    expect(
+      opsConfig({
+        DATAFORSEO_LOGIN: "test-login",
+        DATAFORSEO_PASSWORD: "test-pass",
+      }).searchCredentials,
+    ).toBe("env");
+    expect(opsConfig({ DATAFORSEO_LOGIN: "test-login" }).searchCredentials).toBe("none");
+    expect(opsConfig({ DATAFORSEO_PASSWORD: "   " }).searchCredentials).toBe("none");
   });
 });

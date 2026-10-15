@@ -115,19 +115,35 @@ export function searchProviderFromEnv(input: {
   if (input.env.LINK_BUILDER_SEARCH !== "dataforseo") return recorded;
   return new DataForSeoSearchProvider({
     onSecret: (secret) => input.secrets.redact(secret),
-    credentials: async (context: AdapterContext) => {
-      const row = await input.prisma.secret.findFirst({
-        where: { workspaceId: context.workspaceId, kind: "lb_search" },
-        orderBy: { createdAt: "desc" },
-      });
-      if (!row) throw new Error("missing search credentials");
-      const plain = input.secrets.load(row.ciphertext);
-      input.secrets.redact(plain);
-      const split = plain.indexOf(":");
-      if (split <= 0) throw new Error("missing search credentials");
-      return { login: plain.slice(0, split), password: plain.slice(split + 1) };
-    },
+    credentials: (context) => searchCredentialsForContext({ ...input, context }),
   });
+}
+
+export async function searchCredentialsForContext(input: {
+  env: NodeJS.ProcessEnv;
+  prisma: PrismaClient;
+  secrets: EncryptedSecretStore;
+  context: AdapterContext;
+}): Promise<{ login: string; password: string }> {
+  const row = await input.prisma.secret.findFirst({
+    where: { workspaceId: input.context.workspaceId, kind: "lb_search" },
+    orderBy: { createdAt: "desc" },
+  });
+  if (row) {
+    const plain = input.secrets.load(row.ciphertext);
+    input.secrets.redact(plain);
+    const split = plain.indexOf(":");
+    if (split <= 0) throw new Error("missing search credentials");
+    return { login: plain.slice(0, split), password: plain.slice(split + 1) };
+  }
+  const login = input.env.DATAFORSEO_LOGIN?.trim() ?? "";
+  const password = input.env.DATAFORSEO_PASSWORD?.trim() ?? "";
+  if (login && password) {
+    input.secrets.redact(login);
+    input.secrets.redact(password);
+    return { login, password };
+  }
+  throw new Error("missing search credentials");
 }
 
 export function browserFactoryFromEnv(input: {
