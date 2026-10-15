@@ -28,7 +28,6 @@ import {
   listVisibleWindowsCommand,
   looksLikeDesktopBrowserApp,
   parseVisibleWindows,
-  repairDesktopDisplayCommand,
 } from "@rakazo/core";
 import { Sandbox as E2BSandbox } from "e2b";
 import { sandboxHardTimeoutMs } from "./computer-idle.js";
@@ -325,7 +324,6 @@ export class E2BSandboxProvider implements SandboxProvider {
     const desktop = await this.box(computer);
     await ensureBrowserRunner(desktop);
     await ensureE2BWorkspace(desktop);
-    await keepDesktopDisplay(desktop);
     const profilesChanged = await configurePortableBrowserProfiles(desktop);
     if (!computer.fresh && profilesChanged) await openDesktopBrowser(desktop);
     await exposeBrowserDesktop(desktop);
@@ -340,7 +338,6 @@ export class E2BSandboxProvider implements SandboxProvider {
     const cmd = request.argv.map(shellQuote).join(" ");
     if (cmd.includes("RAKAZO_DETACH_BROWSER")) {
       await ensureE2BWorkspace(desktop);
-      await keepDesktopDisplay(desktop);
       const handle = await runDesktopCommand(desktop, cmd, {
         cwd: e2bCwd(request.cwd),
         background: true,
@@ -390,7 +387,6 @@ export class E2BSandboxProvider implements SandboxProvider {
   ): Promise<ScreenSession> {
     const desktop = await this.box(computer);
     await ensureE2BWorkspace(desktop);
-    await keepDesktopDisplay(desktop);
     const screenKey = screenSessionKey(context);
     const layout = await this.resolveLayout(
       desktop,
@@ -420,7 +416,6 @@ export class E2BSandboxProvider implements SandboxProvider {
       // A saved slot above the primary display exits 1 and used to replace
       // the browser. The signup page is on the primary display.
       if (request.interactive || !recoverableScreenFailure(error)) throw error;
-      await keepDesktopDisplay(desktop);
       return this.primaryWatchSession(
         desktop,
         extraDisplayLayout(0, desktop.display ?? ":0"),
@@ -875,7 +870,6 @@ export class E2BSandboxProvider implements SandboxProvider {
           );
         }
       }
-      if (attempt === 0) await keepDesktopDisplay(desktop);
     }
     throw last;
   }
@@ -1220,13 +1214,6 @@ export async function ensureBrowserRunner(desktop: Sandbox): Promise<void> {
 async function ensureE2BWorkspace(desktop: Sandbox): Promise<void> {
   if (!desktop.files?.makeDir) return;
   await desktop.files.makeDir(E2B_WORKSPACE).catch(() => undefined);
-}
-
-async function keepDesktopDisplay(desktop: Sandbox): Promise<void> {
-  if (!desktop.commands?.run) return;
-  await desktop.commands
-    .run(repairDesktopDisplayCommand(desktop.display ?? ":0"), { timeoutMs: 20_000 })
-    .catch(() => undefined);
 }
 
 async function runDesktopCommand(

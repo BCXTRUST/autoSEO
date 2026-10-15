@@ -104,27 +104,3 @@ export function localStuckChoice(input: {
   if (input.threadCount > 0) return { action: "other_thread", index: 0 };
   return { action: "find_form" };
 }
-
-/** One click on the first search result. A second call finds the stamp and does nothing. */
-export function forumResultClickCommand(display: string): string {
-  const quoted = `'${display.replace(/'/g, `'"'"'`)}'`;
-  return [
-    `export DISPLAY=${quoted}`,
-    "if [ -f /tmp/rakazo-forum-click ]; then printf '%s\\n' already; exit 0; fi",
-    "if [ -f /tmp/rakazo-form-hold ]; then printf '%s\\n' held; exit 0; fi",
-    "id=",
-    "for class in firefox-esr Firefox-esr firefox Firefox; do",
-    "  id=$(xdotool search --onlyvisible --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
-    '  if [ -n "$id" ]; then break; fi',
-    "done",
-    'if [ -z "$id" ]; then exit 0; fi',
-    'name=$(xdotool getwindowname "$id" 2>/dev/null || true)',
-    'case "$name" in',
-    "  *frauenselbsthilfe*|*lifters-lounge*|*medizin-forum*|*psychic.de*|*ulrichradig*|*tauschring-koeln*) printf '%s\\n' skip; exit 0 ;;",
-    "esac",
-    'xdotool windowactivate --sync "$id"',
-    'xdotool mousemove --window "$id" 420 300',
-    "xdotool click 1",
-    "printf '%s\\n' clicked > /tmp/rakazo-forum-click",
-  ].join("\n");
-}

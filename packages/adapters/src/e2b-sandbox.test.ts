@@ -346,6 +346,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const screen = await provider.connectScreen(computer, { view: "stream" }, context);
@@ -381,6 +383,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const screen = await provider.connectScreen(computer, { view: "stream" }, context);
@@ -598,6 +602,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     await provider.prepare(computer, context);
@@ -645,6 +651,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const observation = await provider.observe(computer, context);
@@ -671,14 +679,14 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const observation = await provider.observe(computer, { ...context, operationId: "preview" });
     expect(screenshot).toHaveBeenCalledOnce();
     expect(observation.image.byteLength).toBeGreaterThan(0);
-    expect(
-      command.mock.calls.some(([value]) => String(value).includes("RAKAZO_SCREEN_INDEX")),
-    ).toBe(false);
+    expect(JSON.stringify(command.mock.calls)).not.toContain("RAKAZO_SCREEN_INDEX");
   });
 
   it("keeps a detached browser after the command handle disconnects", async () => {
@@ -703,6 +711,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const events = [];
@@ -744,6 +754,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const events = [];
@@ -793,6 +805,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const screen = await provider.connectScreen(computer, { view: "stream" }, context);
@@ -836,6 +850,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const screen = await provider.connectScreen(computer, { view: "stream" }, context);
@@ -866,6 +882,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     await provider.prepare(computer, context);
