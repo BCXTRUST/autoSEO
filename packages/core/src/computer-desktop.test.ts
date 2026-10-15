@@ -13,6 +13,7 @@ import {
   prepareKioskDesktopCommand,
   raiseBrowserWindowCommand,
   refuseBrowserHuntShell,
+  attachBrowserWindowStreamCommand,
   repairBlackStreamCommand,
   repairDesktopDisplayCommand,
   streamedDisplayCommand,
@@ -56,7 +57,8 @@ describe("computer desktop window helpers", () => {
     expect(command).toContain("--disable-fre");
     expect(command).toContain("OutdatedBuildDetector");
     expect(command).toContain("setsid -f");
-    expect(command).toContain("pgrep -f '[r]akazo-desktop-watch'");
+    expect(command).toContain("pkill -f '[r]akazo-desktop-watch'");
+    expect(command).toContain("rakazo-watch-v2");
     expect(command).toContain("xfce4-panel");
     expect(command).toContain(
       "https://www.google.de/search?q=Magnesium+Kr%C3%A4mpfe+Forum&hl=de&gl=de",
@@ -140,10 +142,15 @@ describe("computer desktop window helpers", () => {
     expect(kiosk.indexOf("[r]akazo-lb-browser")).toBeLessThan(kiosk.indexOf("killall -q chrome"));
     const repair = repairDesktopDisplayCommand(":0");
     expect(repair).toContain("xdpyinfo -display ':0'");
-    expect(repair).toContain("Xvfb ':0'");
-    expect(repair).toContain("[r]akazo-lb-browser");
-    expect(repair).toContain("-noxdamage");
-    expect(repair).not.toMatch(/Xvfb ':0' -ac[^\n]*-nolisten/);
+    expect(repair).toContain("setsid -f Xvfb ':0'");
+    expect(repair).not.toContain("pkill");
+    expect(repair).not.toMatch(/-nolisten/);
+    expect(repair).not.toContain("exit 1");
+    const attached = attachBrowserWindowStreamCommand(":0");
+    expect(attached).toContain("-id");
+    expect(attached).toContain("-noxdamage");
+    expect(attached).toContain("-nowf");
+    expect(attached).not.toContain("pkill -f");
     expect(command).not.toContain("nohup");
   });
 

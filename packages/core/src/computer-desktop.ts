@@ -222,61 +222,108 @@ function installChromeTranslatePolicyShell(): string {
 function startDesktopWatchShell(): string {
   return [
     "cat > /tmp/rakazo-desktop-watch.sh << 'EOF'",
+    "# rakazo-watch-v2",
     "while true; do",
     `killall -q ${DESKTOP_PANEL_PROCESSES} 2>/dev/null || true`,
     "xdotool search --class fluxbox windowunmap >/dev/null 2>&1 || true",
     "xdotool search --name Toolbar windowunmap >/dev/null 2>&1 || true",
-    "for class in google-chrome Google-chrome Chromium chromium firefox Firefox Navigator firefox-esr; do",
+    "id=",
+    "for class in firefox-esr Firefox-esr firefox Firefox Navigator Chromium chromium google-chrome Google-chrome; do",
     '  xdotool search --class "$class" windowmap >/dev/null 2>&1 || true',
+    "  id=$(xdotool search --onlyvisible --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
+    '  if [ -n "$id" ]; then break; fi',
     "done",
+    'if [ -z "$id" ]; then id=$(xdotool search --onlyvisible --name Firefox 2>/dev/null | awk \'NR==1{print; exit}\'); fi',
+    'if [ -n "$id" ]; then',
+    '  xdotool windowmove "$id" 0 0 windowsize "$id" 1280 800 windowactivate "$id" windowraise "$id" >/dev/null 2>&1 || true',
+    '  xdotool windowstate --add FULLSCREEN "$id" >/dev/null 2>&1 || true',
+    '  if command -v wmctrl >/dev/null 2>&1; then wmctrl -i -r "$id" -b add,fullscreen,above >/dev/null 2>&1 || true; fi',
+    "fi",
     dismissChromeDialogShell(),
     "sleep 1",
     "done",
     "EOF",
     "chmod +x /tmp/rakazo-desktop-watch.sh",
-    "if ! pgrep -f '[r]akazo-desktop-watch' >/dev/null 2>&1; then",
-    "  setsid -f /tmp/rakazo-desktop-watch.sh </dev/null >/dev/null 2>&1 || true",
-    "fi",
+    "pkill -f '[r]akazo-desktop-watch' >/dev/null 2>&1 || true",
+    "setsid -f /tmp/rakazo-desktop-watch.sh </dev/null >/dev/null 2>&1 || true",
   ].join("\n");
 }
 
 /**
- * The desktop SDK starts Xvfb with `-nolisten unix`. Chrome and x11vnc then
- * exit 1 and noVNC stays on Reconnecting. A display clients can already open
- * is left alone, including one started with `-nolisten`: replacing it while
- * x11vnc is attached freezes the live pane on the last wallpaper frame.
- * A silent display is replaced, and the vendor capture is started again on
- * that same display. A signup browser that is already up is left on its form.
+ * The desktop SDK starts Xvfb in the background, then x11vnc attaches to it.
+ * Killing that server and starting another from a short command makes the new
+ * Xvfb exit 1: either it has no listening socket, or the command's process
+ * group is reaped and takes the server with it. The stream then stays black
+ * and Chrome exits 1 before a page loads. A display that already answers is
+ * left alone. A display that is still booting is waited on. A missing display
+ * is started in its own session, without `-nolisten unix`, so Chrome can open
+ * the socket. This command does not restart x11vnc.
  */
 export function repairDesktopDisplayCommand(display: string): string {
   const quotedDisplay = posixShellQuote(display);
   const number = display.replace(/^:/, "") || "0";
   return [
     `export DISPLAY=${quotedDisplay}`,
-    "persona=0",
-    "if pgrep -f '[r]akazo-lb-browser' >/dev/null 2>&1; then persona=1; fi",
-    "if pgrep -af -- '--user-data-dir=' 2>/dev/null | grep -F '/.browser-profiles/' >/dev/null 2>&1; then persona=1; fi",
-    "nolisten=0",
-    `pid=$(pgrep -f ${posixShellQuote(`^Xvfb ${display} `)} | awk 'NR==1{print; exit}')`,
-    'if [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ] && tr "\\0" " " < "/proc/$pid/cmdline" | grep -F -- "-nolisten" >/dev/null 2>&1; then nolisten=1; fi',
-    `if xdpyinfo -display ${quotedDisplay} >/dev/null 2>&1 && { [ "$persona" = 1 ] || [ "$nolisten" = 0 ]; }; then exit 0; fi`,
-    'if [ "$persona" = 1 ]; then exit 0; fi',
-    `pkill -f ${posixShellQuote(`Xvfb ${display} `)} || true`,
-    "sleep 0.2",
-    `rm -f /tmp/.X${number}-lock /tmp/.X11-unix/X${number}`,
-    "mkdir -p /tmp/.X11-unix",
-    `Xvfb ${quotedDisplay} -ac -screen 0 1280x800x24 +extension RANDR +render -noreset >/tmp/rakazo-xvfb.log 2>&1 &`,
+    `if xdpyinfo -display ${quotedDisplay} >/dev/null 2>&1; then exit 0; fi`,
     "for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do",
-    `  xdpyinfo -display ${quotedDisplay} >/dev/null 2>&1 && break`,
+    `  xdpyinfo -display ${quotedDisplay} >/dev/null 2>&1 && exit 0`,
     "  sleep 0.25",
     "done",
-    `xdpyinfo -display ${quotedDisplay} >/dev/null 2>&1 || { printf 'RAKAZO_SCREEN_ERROR=no_display\\n' >&2; exit 1; }`,
-    "if ! pgrep -x fluxbox >/dev/null 2>&1 && ! pgrep -x xfce4-session >/dev/null 2>&1; then",
-    "  if command -v fluxbox >/dev/null 2>&1; then fluxbox >/tmp/rakazo-fluxbox.log 2>&1 &",
-    "  elif command -v startxfce4 >/dev/null 2>&1; then startxfce4 >/tmp/rakazo-xfce.log 2>&1 &",
-    "  fi",
-    "fi",
-    refreshVendorStreamCommand(display, true),
+    "mkdir -p /tmp/.X11-unix",
+    "chmod 1777 /tmp/.X11-unix 2>/dev/null || true",
+    `rm -f /tmp/.X${number}-lock`,
+    `setsid -f Xvfb ${quotedDisplay} -ac -screen 0 1280x800x24 +extension RANDR +render -noreset >/tmp/rakazo-xvfb.log 2>&1`,
+    "for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do",
+    `  xdpyinfo -display ${quotedDisplay} >/dev/null 2>&1 && exit 0`,
+    "  sleep 0.25",
+    "done",
+    "exit 0",
+  ].join("\n");
+}
+
+/** Written while a signup form is the active step. The screen must not move that page. */
+export const FORM_HOLD_STAMP = "/tmp/rakazo-form-hold";
+
+export function signupFormHeldCommand(): string {
+  return `test -f ${posixShellQuote(FORM_HOLD_STAMP)} && printf '%s\\n' held || true`;
+}
+
+/**
+ * Stream the browser window, not the desktop. E2B's `stream.start()` without
+ * a window id captures the whole X root (wallpaper, icons, taskbar). x11vnc
+ * without `-noxdamage -nowf` keeps the first black frame when the browser
+ * paints with damage events. One x11vnc at a time: if this window is already
+ * the capture, leave it. Otherwise replace that one process. Do not call this
+ * before a browser window exists — x11vnc `-id` exits 1 and the pane stays black.
+ */
+export function attachBrowserWindowStreamCommand(display: string): string {
+  const quotedDisplay = posixShellQuote(display);
+  return [
+    `export DISPLAY=${quotedDisplay}`,
+    "id=",
+    "for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do",
+    "  for class in firefox-esr Firefox-esr firefox Firefox google-chrome Google-chrome Chromium chromium; do",
+    "    id=$(xdotool search --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
+    '    if [ -n "$id" ]; then break; fi',
+    "  done",
+    '  if [ -n "$id" ]; then break; fi',
+    "  sleep 0.4",
+    "done",
+    'if [ -z "$id" ]; then exit 0; fi',
+    "for pid in $(pgrep -x x11vnc 2>/dev/null || true); do",
+    '  [ -r "/proc/$pid/cmdline" ] || continue',
+    "  args=$(tr '\\0' ' ' < \"/proc/$pid/cmdline\")",
+    '  case "$args" in',
+    '    *"-id $id"*)',
+    '      case "$args" in',
+    "        *-noxdamage*) printf '%s\\n' attached; exit 0 ;;",
+    "      esac",
+    "      ;;",
+    "  esac",
+    "done",
+    "pkill -x x11vnc >/dev/null 2>&1 || true",
+    "sleep 0.2",
+    "setsid -f x11vnc -bg -display \"$DISPLAY\" -forever -wait 50 -shared -rfbport 5900 -nopw -noxdamage -noxfixes -nowf -noscr -ping 1 -repeat -speeds lan -id \"$id\" >/tmp/rakazo-x11vnc.log 2>&1",
     "exit 0",
   ].join("\n");
 }
@@ -326,20 +373,12 @@ export function detachedBrowserCommand(display: string, url: string): string {
     'if [ -n "$ff" ]; then',
     `  printf '%s\\n' translate-off > ${posixShellQuote(CHROME_KIOSK_STAMP)}`,
     '  setsid -f "$ff" --no-remote --kiosk "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1',
-    "  mapped=none",
     "  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do",
-    '    xdotool search --onlyvisible --class firefox-esr >/dev/null 2>&1 && mapped=window && break',
-    '    xdotool search --onlyvisible --class Firefox-esr >/dev/null 2>&1 && mapped=window && break',
-    '    xdotool search --onlyvisible --class firefox >/dev/null 2>&1 && mapped=window && break',
+    '    xdotool search --onlyvisible --class firefox-esr >/dev/null 2>&1 && exit 0',
+    '    xdotool search --onlyvisible --class Firefox-esr >/dev/null 2>&1 && exit 0',
+    '    xdotool search --onlyvisible --class firefox >/dev/null 2>&1 && exit 0',
     "    sleep 0.4",
     "  done",
-    '  if [ "$mapped" != window ]; then',
-    "    tail -c 180 /tmp/rakazo-firefox.log > /tmp/rakazo-ff-status 2>/dev/null || true",
-    "    pkill -x firefox-esr >/dev/null 2>&1 || true",
-    "    pkill -x firefox >/dev/null 2>&1 || true",
-    "    sleep 0.3",
-    '    setsid -f "$ff" --no-remote "$url" </dev/null >>/tmp/rakazo-firefox.log 2>&1',
-    "  fi",
     "  exit 0",
     "fi",
     "dir=/tmp/rakazo-linkbuilder-chrome",
@@ -349,7 +388,7 @@ export function detachedBrowserCommand(display: string, url: string): string {
     installChromeTranslatePolicyShell(),
     `printf '%s\\n' '{"browser":{"check_default_browser":false,"has_seen_welcome_page":true},"translate":{"enabled":false},"translate_blocked_languages":["de","de-DE","en","en-US"],"intl":{"accept_languages":"de-DE,de","selected_languages":"de-DE,de"},"distribution":{"skip_first_run_ui":true,"suppress_first_run_default_browser_prompt":true,"make_chrome_default_for_user":false}}' > "$dir/Default/Preferences"`,
     `printf '%s\\n' '{"intl":{"app_locale":"de","accept_languages":"de-DE,de"}}' > "$dir/Local State"`,
-    'flags="--user-data-dir=$dir --kiosk --start-fullscreen --no-first-run --disable-fre --no-default-browser-check --disable-search-engine-choice-screen --disable-translate --disable-infobars --noerrdialogs --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-component-update --disable-background-networking --lang=de --accept-lang=de-DE,de --disable-gpu --ozone-platform=x11 --disable-features=Translate,TranslateUI,InfiniteSessionRestore,ChromeWhatsNewUI,OutdatedBuildDetector --password-store=basic --disable-sync --disable-dev-shm-usage --no-sandbox --window-position=0,0 --window-size=1280,800"',
+    'flags="--user-data-dir=$dir --kiosk --start-fullscreen --no-first-run --disable-fre --no-default-browser-check --disable-search-engine-choice-screen --disable-translate --disable-infobars --noerrdialogs --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-component-update --disable-background-networking --lang=de --accept-lang=de-DE,de --disable-gpu --disable-gpu-compositing --ozone-platform=x11 --disable-features=Translate,TranslateUI,InfiniteSessionRestore,ChromeWhatsNewUI,OutdatedBuildDetector --password-store=basic --disable-sync --disable-dev-shm-usage --no-sandbox --window-position=0,0 --window-size=1280,800"',
     `printf '%s\\n' translate-off > ${posixShellQuote(CHROME_KIOSK_STAMP)}`,
     startDesktopWatchShell(),
     // Firefox paints into Xvfb. Chrome's GL window stays black on this capture.
@@ -429,10 +468,14 @@ export function browserWindowPresentCommand(display: string): string {
   ].join("\n");
 }
 
-/** Firefox ESR is starting. A second launch would fight the same profile. */
+/**
+ * Firefox is already running. A second launch uses the same profile and the
+ * first process exits 1. Chromium can be headless with no window; it does not
+ * count, so a visible Firefox can still be the stream.
+ */
 export function browserProcessCommand(): string {
   return [
-    "if pgrep -x firefox-esr >/dev/null 2>&1 || pgrep -x firefox >/dev/null 2>&1; then printf '%s\\n' ff-up; exit 0; fi",
+    "if pgrep -x firefox-esr >/dev/null 2>&1 || pgrep -x firefox >/dev/null 2>&1; then printf '%s\\n' up; exit 0; fi",
     "printf '%s\\n' none",
   ].join("\n");
 }
