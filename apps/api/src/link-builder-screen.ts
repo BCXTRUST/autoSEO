@@ -17,7 +17,6 @@ import type { Actor } from "@rakazo/contracts";
 import {
   browserProcessCommand,
   browserWindowPresentCommand,
-  chromeKioskStampCommand,
   detachedBrowserCommand,
   listVisibleWindowsCommand,
   parseVisibleWindows,
@@ -426,9 +425,6 @@ async function showForumSearch(
     query ? desktopShowsProblemSearch(titles, query, shops) : desktopShowsForumSearch(titles);
   try {
     let titles = await visibleTitles(deps, actor, computer, display);
-    const stamp = await runDesktop(deps, actor, computer, chromeKioskStampCommand()).catch(
-      () => "",
-    );
     const persona = await personaBrowserOwnsDesktop(deps, actor, computer);
     const present = await runDesktop(deps, actor, computer, browserWindowPresentCommand(display)).catch(
       () => "",
@@ -438,7 +434,15 @@ async function showForumSearch(
       () => "",
     );
     let launched = false;
-    if (!persona && !(browserUp && stamp.includes("ok")) && !starting.includes("ff-up")) {
+    if (!persona && !browserUp) {
+      if (starting.includes("ff-up")) {
+        await runDesktop(
+          deps,
+          actor,
+          computer,
+          "pkill -x firefox-esr >/dev/null 2>&1 || true; pkill -x firefox >/dev/null 2>&1 || true; sleep 0.3",
+        ).catch(() => undefined);
+      }
       await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
       await runDesktop(deps, actor, computer, detachedBrowserCommand(display, url));
       launched = true;
@@ -472,14 +476,14 @@ async function showForumSearch(
       deps,
       actor,
       computer,
-      "printf 'paint:%s ff:%s up:%s names:%s\\n' \"$(cat /tmp/rakazo-paint 2>/dev/null)\" \"$(command -v firefox-esr || command -v firefox || echo missing)\" \"$(pgrep -x firefox-esr >/dev/null && echo ff || echo none)\" \"$(DISPLAY=:0 xdotool search --name . 2>/dev/null | head -5 | while read -r id; do xdotool getwindowname \"$id\" 2>/dev/null | tr '\\n' ' '; done)\"",
+      "printf 'paint:%s ff:%s up:%s names:%s log:%s\\n' \"$(cat /tmp/rakazo-paint 2>/dev/null)\" \"$(command -v firefox-esr || command -v firefox || echo missing)\" \"$(pgrep -x firefox-esr >/dev/null && echo ff || echo none)\" \"$(DISPLAY=:0 xdotool search --name . 2>/dev/null | head -6 | while read -r id; do xdotool getwindowname \"$id\" 2>/dev/null | tr '\\n' ' '; done)\" \"$(tail -c 120 /tmp/rakazo-firefox.log 2>/dev/null | tr '\\n' ' ')\"",
     ).catch(() => "");
     console.info(
       "link builder screen browser",
       `display=${display}`,
       `windows=${titles.length}`,
       launched ? "opened" : "raised",
-      `paint=${paint.replace(/\s+/g, " ").trim().slice(0, 180) || "unknown"}`,
+      `paint=${paint.replace(/\s+/g, " ").trim().slice(0, 360) || "unknown"}`,
     );
     if (query && desktopShowsProblemSearch(titles, query, shops)) {
       await noteDesktopSearch(deps, actor, project.id, query);
@@ -540,6 +544,9 @@ function typeSearchUrlCommand(display: string, url: string): string {
     `export DISPLAY=${quotedDisplay}`,
     "id=$(xdotool search --onlyvisible --class google-chrome 2>/dev/null | awk 'NR==1{print; exit}')",
     "if [ -z \"$id\" ]; then id=$(xdotool search --onlyvisible --class Chromium 2>/dev/null | awk 'NR==1{print; exit}'); fi",
+    "if [ -z \"$id\" ]; then id=$(xdotool search --onlyvisible --class firefox-esr 2>/dev/null | awk 'NR==1{print; exit}'); fi",
+    "if [ -z \"$id\" ]; then id=$(xdotool search --onlyvisible --class Firefox-esr 2>/dev/null | awk 'NR==1{print; exit}'); fi",
+    "if [ -z \"$id\" ]; then id=$(xdotool search --onlyvisible --class firefox 2>/dev/null | awk 'NR==1{print; exit}'); fi",
     'if [ -z "$id" ]; then exit 0; fi',
     'xdotool windowactivate --sync "$id"',
     "sleep 0.2",

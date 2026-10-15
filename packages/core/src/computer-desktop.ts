@@ -307,6 +307,10 @@ export function detachedBrowserCommand(display: string, url: string): string {
     "export LANGUAGE=de_DE:de",
     "export MOZ_WEBRENDER=0",
     "export LIBGL_ALWAYS_SOFTWARE=1",
+    "export MOZ_ENABLE_WAYLAND=0",
+    "export GDK_BACKEND=x11",
+    "export MOZ_DISABLE_CONTENT_SANDBOX=1",
+    'if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then uid=$(id -u); if [ -S "/run/user/$uid/bus" ]; then export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus"; fi; fi',
     `url=${quotedUrl}`,
     // The image ships /usr/bin/firefox-esr. `firefox` is absent, and Chrome
     // never maps a window on this capture, so the ESR kiosk has to start
@@ -318,7 +322,26 @@ export function detachedBrowserCommand(display: string, url: string): string {
     'if [ -z "$ff" ] && command -v firefox-esr >/dev/null 2>&1; then ff=$(command -v firefox-esr); fi',
     'if [ -z "$ff" ] && [ -x /usr/lib/firefox-esr/firefox-esr ]; then ff=/usr/lib/firefox-esr/firefox-esr; fi',
     'if [ -z "$ff" ] && command -v firefox >/dev/null 2>&1; then ff=$(command -v firefox); fi',
-    'if [ -n "$ff" ]; then setsid -f "$ff" --no-remote --kiosk --profile /tmp/rakazo-ff-profile "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1; fi',
+    startDesktopWatchShell(),
+    'if [ -n "$ff" ]; then',
+    `  printf '%s\\n' translate-off > ${posixShellQuote(CHROME_KIOSK_STAMP)}`,
+    '  setsid -f "$ff" --no-remote --kiosk "$url" </dev/null >/tmp/rakazo-firefox.log 2>&1',
+    "  mapped=none",
+    "  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do",
+    '    xdotool search --class firefox-esr >/dev/null 2>&1 && mapped=window && break',
+    '    xdotool search --class Firefox-esr >/dev/null 2>&1 && mapped=window && break',
+    '    xdotool search --class firefox >/dev/null 2>&1 && mapped=window && break',
+    "    sleep 0.4",
+    "  done",
+    '  if [ "$mapped" != window ]; then',
+    "    tail -c 180 /tmp/rakazo-firefox.log > /tmp/rakazo-ff-status 2>/dev/null || true",
+    "    pkill -x firefox-esr >/dev/null 2>&1 || true",
+    "    pkill -x firefox >/dev/null 2>&1 || true",
+    "    sleep 0.3",
+    '    setsid -f "$ff" --no-remote "$url" </dev/null >>/tmp/rakazo-firefox.log 2>&1',
+    "  fi",
+    "  exit 0",
+    "fi",
     "dir=/tmp/rakazo-linkbuilder-chrome",
     'rm -rf "$dir"',
     'mkdir -p "$dir/Default"',
@@ -329,8 +352,6 @@ export function detachedBrowserCommand(display: string, url: string): string {
     'flags="--user-data-dir=$dir --kiosk --start-fullscreen --no-first-run --disable-fre --no-default-browser-check --disable-search-engine-choice-screen --disable-translate --disable-infobars --noerrdialogs --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-component-update --disable-background-networking --lang=de --accept-lang=de-DE,de --disable-gpu --ozone-platform=x11 --disable-features=Translate,TranslateUI,InfiniteSessionRestore,ChromeWhatsNewUI,OutdatedBuildDetector --password-store=basic --disable-sync --disable-dev-shm-usage --no-sandbox --window-position=0,0 --window-size=1280,800"',
     `printf '%s\\n' translate-off > ${posixShellQuote(CHROME_KIOSK_STAMP)}`,
     startDesktopWatchShell(),
-    // Firefox is already in its own session. Do not also exec Chrome over it.
-    'if [ -n "$ff" ]; then exit 0; fi',
     // Firefox paints into Xvfb. Chrome's GL window stays black on this capture.
     // exec replaces the shell so disconnect cannot reap the browser.
     // stdin from /dev/null: Chrome treats a closed stdin as a quit.
