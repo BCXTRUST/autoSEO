@@ -54,6 +54,7 @@ import {
   redactSecrets,
   transitionRun,
 } from "@rakazo/linkbuilder-core";
+import { deliverStuckAlertEmail } from "./link-builder-alerts.js";
 import { runDueWork } from "./link-builder-operations.js";
 import {
   browserPersona,
@@ -67,6 +68,7 @@ import {
   REAL_STEP_HANDLERS,
   type RealWorkerServices,
   type RunRow,
+  recoverStuckStep,
   StaleState,
   type StepContext,
   type StepResult,
@@ -294,32 +296,54 @@ export class LinkBuilderRealRunner {
     let result: StepResult;
     let error: string | null = null;
     try {
-      result = await Promise.race([
-        REAL_STEP_HANDLERS[plan.kind](ctx),
-        new Promise<StepResult>((_, reject) => {
-          setTimeout(() => reject(new Error("Browser action timed out")), 3 * 60_000);
-        }),
-      ]);
+      result =
+        (await recoverStuckStep(ctx)) ??
+        (await Promise.race([
+          REAL_STEP_HANDLERS[plan.kind](ctx),
+          new Promise<StepResult>((_, reject) => {
+            setTimeout(() => reject(new Error("Browser action timed out")), 3 * 60_000);
+          }),
+        ]));
     } catch (caught) {
       error = redactSecrets(caught instanceof Error ? caught.message : "Step failed", ctx.secrets);
       result = await this.failure(ctx, error);
     }
     if (result.kind === "wait") return "waited";
-    const committed = await this.commit(ctx, fence, plan.kind, result, error, startedAt);
+    const sandboxGone = result.outcome?.sandboxGone === true;
+    const committed = await this.commit(
+      ctx,
+      fence,
+      plan.kind,
+      result,
+      sandboxGone ? "SandboxNotFoundError" : error,
+      startedAt,
+    );
     if (!committed) return "skipped";
     await result.afterCommit?.();
-    await this.dropDesktop(
-      ctx,
-      plan.kind,
-      result.kind === "step" ? result.lastAction : "",
-      error !== null && /timed out|timeout|not running anymore/i.test(error),
-    );
+    const pausing = result.outcome?.pauseSandbox === true;
+    if (pausing) {
+      await deliverStuckAlertEmail({
+        kind: "project.paused",
+        message: "Paused, the browser step is stuck",
+        apiKey: process.env.RESEND_API_KEY ?? "",
+        domain: process.env.RESEND_INBOUND_DOMAIN ?? "",
+      }).catch(() => false);
+      await this.deps.releaseDesktop?.(ctx.project.id, ctx.adapter, "stop").catch(() => undefined);
+    } else if (!sandboxGone) {
+      await this.dropDesktop(
+        ctx,
+        plan.kind,
+        result.lastAction,
+        error !== null && /timed out|timeout|not running anymore/i.test(error),
+      );
+    }
     await this.deps.realtime
       ?.publish(
         linkBuilderTopic(ctx.project.id),
         JSON.stringify({ cursor: `${runId}:${ctx.stepIndex}` }),
       )
       .catch(() => undefined);
+    if (sandboxGone) return "waited";
     return error ? "failed" : "stepped";
   }
 

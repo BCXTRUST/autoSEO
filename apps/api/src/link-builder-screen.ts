@@ -31,6 +31,7 @@ import {
   choosePersonaComputer,
   desktopShowsForumSearch,
   desktopShowsProblemSearch,
+  forumResultClickCommand,
   forumSearchUrlFromProject,
   isCannedResearchLine,
   isStaleResearchLine,
@@ -437,9 +438,12 @@ async function showForumSearch(
     const held = await runDesktop(deps, actor, computer, signupFormHeldCommand()).catch(() => "");
     let titles = await visibleTitles(deps, actor, computer, display);
     const persona = await personaBrowserOwnsDesktop(deps, actor, computer);
-    const present = await runDesktop(deps, actor, computer, browserWindowPresentCommand(display)).catch(
-      () => "",
-    );
+    const present = await runDesktop(
+      deps,
+      actor,
+      computer,
+      browserWindowPresentCommand(display),
+    ).catch(() => "");
     const browserUp = present.includes("browser");
     const formOnScreen = held.includes("held") || titlesShowSignupForm(titles);
     if (browserUp && (formOnScreen || persona)) {
@@ -451,7 +455,8 @@ async function showForumSearch(
     const starting = await runDesktop(deps, actor, computer, browserProcessCommand()).catch(
       () => "",
     );
-    const processUp = starting.trim() === "up" || starting.includes("\nup\n") || starting.startsWith("up");
+    const processUp =
+      starting.trim() === "up" || starting.includes("\nup\n") || starting.startsWith("up");
     let launched = false;
     if (!browserUp && !processUp && !formOnScreen) {
       if (!persona) await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
@@ -481,7 +486,7 @@ async function showForumSearch(
       deps,
       actor,
       computer,
-      "printf 'paint:%s ff:%s up:%s names:%s log:%s\\n' \"$(cat /tmp/rakazo-paint 2>/dev/null)\" \"$(command -v firefox-esr || command -v firefox || echo missing)\" \"$(pgrep -x firefox-esr >/dev/null && echo ff || echo none)\" \"$(DISPLAY=:0 xdotool search --name . 2>/dev/null | head -6 | while read -r id; do xdotool getwindowname \"$id\" 2>/dev/null | tr '\\n' ' '; done)\" \"$(tail -c 120 /tmp/rakazo-firefox.log 2>/dev/null | tr '\\n' ' ')\"",
+      'printf \'paint:%s ff:%s up:%s names:%s log:%s\\n\' "$(cat /tmp/rakazo-paint 2>/dev/null)" "$(command -v firefox-esr || command -v firefox || echo missing)" "$(pgrep -x firefox-esr >/dev/null && echo ff || echo none)" "$(DISPLAY=:0 xdotool search --name . 2>/dev/null | head -6 | while read -r id; do xdotool getwindowname "$id" 2>/dev/null | tr \'\\n\' \' \'; done)" "$(tail -c 120 /tmp/rakazo-firefox.log 2>/dev/null | tr \'\\n\' \' \')"',
     ).catch(() => "");
     console.info(
       "link builder screen browser",
@@ -491,6 +496,11 @@ async function showForumSearch(
       launched ? "opened" : "raised",
       `paint=${paint.replace(/\s+/g, " ").trim().slice(0, 360) || "unknown"}`,
     );
+    if (!persona && !held.includes("held") && !titlesShowSignupForm(titles) && onProblem(titles)) {
+      await runDesktop(deps, actor, computer, forumResultClickCommand(display)).catch(
+        () => undefined,
+      );
+    }
     if (query && desktopShowsProblemSearch(titles, query, shops)) {
       await noteDesktopSearch(deps, actor, project.id, query);
     }

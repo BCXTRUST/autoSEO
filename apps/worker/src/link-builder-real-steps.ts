@@ -6,6 +6,7 @@ import {
   type BrowserSessionFactory,
   type CaptchaSolver,
   CaptchaSolverError,
+  type FormFieldInfo,
   isSecretRegistrationPrompt,
   type MailboxProvider,
   type ProxyEndpoint,
@@ -56,6 +57,7 @@ import {
   closingRunStatus,
   countedWithinPlan,
   decideEdgeBlock,
+  decideStuckStep,
   extractVerificationLink,
   generateForumPassword,
   generateForumUsername,
@@ -68,13 +70,17 @@ import {
   isHostTerminal,
   isMailSendFailure,
   isMissingSandboxWorkspace,
+  isNewSignupBannedHost,
+  isSandboxGoneText,
   isWarmupMet,
+  localStuckChoice,
   MAIL_SKIP_STATUS,
   marketForHost,
   PAGE_HELPER_EXTENSION_ID,
   PAGE_HELPER_VERSION,
   type PlanCaps,
   pacedDelayMs,
+  parseStuckLook,
   proxyStickyKey,
   type RealStepKind,
   type RunCounters,
@@ -83,12 +89,16 @@ import {
   recordRegistration,
   redactSecrets,
   resolvePersonaDisplayName,
+  STUCK_LOOK_SYSTEM,
+  type StuckLookAction,
+  type StuckRecord,
   shouldCount,
   shouldSkipDesktopPage,
   skippedHostLine,
   spamRetryDecision,
   statusAfterMissingWorkspace,
   stepCountsTowardPageGiveUp,
+  stuckLookPrompt,
   transitionHost,
   transitionPlacement,
   transitionProject,
@@ -513,6 +523,7 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
   const candidates = rows.filter((row) => {
     if (
       deny.has(row.registrableDomain) ||
+      (isNewSignupBannedHost(row.registrableDomain) && row.accounts.length === 0) ||
       isFixtureHostDomain(row.registrableDomain) ||
       isExampleRegistrableDomain(row.registrableDomain) ||
       !boardDriverFor(row.platform as LbHostPlatform)
@@ -3118,6 +3129,298 @@ async function close(ctx: StepContext): Promise<StepResult> {
     run: { status: transitionRun(ctx.run.status, status), finishedAt: ctx.now },
     afterCommit: () => ctx.closeSession(),
   };
+}
+
+const PAUSED_STUCK = "Paused, the browser step is stuck";
+
+/**
+ * A step that did not move looks at the page once and takes a different action.
+ * The same click is not repeated. A dead sandbox is left for the viewer.
+ * After that look, a still-stuck step pauses the project.
+ */
+export async function recoverStuckStep(ctx: StepContext): Promise<StepResult | null> {
+  let rows: Array<{ outcome: unknown; error: string | null; createdAt: Date }> = [];
+  try {
+    rows = await ctx.services.prisma.lbRunStep.findMany({
+      where: { runId: ctx.run.id },
+      orderBy: { stepIndex: "desc" },
+      take: 4,
+      select: { outcome: true, error: true, createdAt: true },
+    });
+  } catch {
+    return null;
+  }
+  const decision = decideStuckStep(rows.map(stuckRecordFromStep));
+  if (decision === "continue") return null;
+  if (decision === "yield") {
+    const replaced = await sandboxWasReplaced(ctx, rows[0]?.createdAt ?? ctx.now);
+    if (!replaced) return { kind: "wait", reason: "sandbox_gone" };
+    return null;
+  }
+  if (decision === "pause") return pauseStuckProject(ctx);
+  return lookAtStuckPage(ctx);
+}
+
+function stuckRecordFromStep(step: { outcome: unknown; error: string | null }): StuckRecord {
+  const outcome =
+    step.outcome && typeof step.outcome === "object"
+      ? (step.outcome as Record<string, unknown>)
+      : {};
+  const action = typeof outcome.lastAction === "string" ? outcome.lastAction : "";
+  const detail = typeof outcome.error === "string" ? outcome.error : "";
+  const error = [step.error, detail].filter(Boolean).join(" ") || null;
+  return { action, error, looked: outcome.looked === true };
+}
+
+async function sandboxWasReplaced(ctx: StepContext, failedAt: Date): Promise<boolean> {
+  try {
+    const computers = await ctx.services.prisma.computer.findMany({
+      where: { workspaceId: ctx.project.workspaceId },
+      orderBy: { updatedAt: "desc" },
+      take: 4,
+      select: { state: true, providerRef: true, updatedAt: true },
+    });
+    return computers.some(
+      (computer) =>
+        computer.state === "running" &&
+        Boolean(computer.providerRef) &&
+        computer.updatedAt.getTime() > failedAt.getTime(),
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function pauseStuckProject(ctx: StepContext): Promise<StepResult> {
+  const project = await ctx.services.prisma.lbProject.findUnique({
+    where: { id: ctx.project.id },
+    select: { status: true },
+  });
+  if (project?.status !== "active") return { kind: "wait", reason: "already_paused" };
+  return {
+    kind: "step",
+    lastAction: PAUSED_STUCK,
+    hostId: ctx.host?.id ?? null,
+    stepKind: "page_look",
+    outcome: { pauseSandbox: true, looked: true },
+    apply: async (tx) => {
+      await tx.lbProject.updateMany({
+        where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
+        data: { status: transitionProject("active", "paused") },
+      });
+    },
+  };
+}
+
+async function lookAtStuckPage(ctx: StepContext): Promise<StepResult> {
+  try {
+    const entry = await sessionForLook(ctx);
+    if (!entry) return pauseStuckProject(ctx);
+    const pageUrl = await entry.session.url().catch(() => ctx.host?.homepageUrl ?? "");
+    const fields = entry.session.formFields
+      ? await entry.session.formFields("form").catch(() => [])
+      : [];
+    const domain = ctx.host?.registrableDomain || hostnameOf(pageUrl);
+    const links = (
+      domain ? usablePageLinks(await collectPageAnchors(entry.session), pageUrl, domain) : []
+    ).filter((link) => !bannedPage(link.url));
+    const labels = emptyFieldLabels(fields);
+    const choice =
+      (await askStuckLook(
+        ctx,
+        pageUrl,
+        labels,
+        links.map((link) => link.text),
+      )) ?? localStuckChoice({ emptyFillable: labels.length, threadCount: links.length });
+    if (choice.action === "fill_fields") {
+      await entry.session.holdForm?.();
+      if (ctx.host) await fillEmptyAccountFields(ctx, entry.session, fields);
+      return looked(ctx, pageUrl, "Looking at the page to fill the form", choice.action);
+    }
+    if (choice.action === "other_thread") {
+      const next = links[choice.index];
+      if (next && next.url !== pageUrl) {
+        await entry.session.releaseForm?.();
+        await entry.session.goto(next.url);
+      }
+      return looked(ctx, pageUrl, "Looking at the page to open another thread", choice.action);
+    }
+    const visible = fields.filter((field) => !field.hidden);
+    if (visible.length === 0) {
+      const registerUrl = registrationLink(await collectPageAnchors(entry.session), pageUrl);
+      if (registerUrl && registerUrl !== pageUrl) await entry.session.goto(registerUrl);
+    }
+    await entry.session.holdForm?.();
+    return looked(ctx, pageUrl, "Looking at the page to find the form", "find_form");
+  } catch (error) {
+    if (sandboxGoneError(error)) {
+      return {
+        kind: "step",
+        lastAction: "Sandbox not found",
+        hostId: ctx.host?.id ?? null,
+        stepKind: "page_look",
+        outcome: { sandboxGone: true, looked: false },
+      };
+    }
+    return pauseStuckProject(ctx);
+  }
+}
+
+async function sessionForLook(ctx: StepContext): Promise<PoolEntry | null> {
+  const open = ctx.pool();
+  if (open) return open;
+  if (!ctx.host) return null;
+  return ctx.openSession(ctx.host);
+}
+
+function looked(
+  ctx: StepContext,
+  url: string,
+  lastAction: string,
+  choice: StuckLookAction["action"],
+): StepResult {
+  return {
+    kind: "step",
+    lastAction,
+    hostId: ctx.host?.id ?? null,
+    stepKind: "page_look",
+    outcome: { looked: true, choice, url },
+  };
+}
+
+async function askStuckLook(
+  ctx: StepContext,
+  url: string,
+  fields: readonly string[],
+  links: readonly string[],
+): Promise<StuckLookAction | null> {
+  const model = ctx.services.textModel;
+  if (!model) return null;
+  const request = {
+    lane: "classify" as const,
+    modelId: PAGE_LOOK_MODEL,
+    system: STUCK_LOOK_SYSTEM,
+    user: stuckLookPrompt({ url, fields, links }),
+    maxTokens: 120,
+    schema: {
+      safeParse(value: unknown) {
+        const parsed = parseStuckLook(value, links.length);
+        if (!parsed) return { success: false as const };
+        return { success: true as const, data: parsed };
+      },
+    },
+  };
+  try {
+    const result = await Promise.race([
+      model.complete(request as never, ctx.adapter),
+      new Promise<{ ok: false }>((resolve) => {
+        setTimeout(() => resolve({ ok: false }), PAGE_LOOK_WAIT_MS);
+      }),
+    ]);
+    if (!result.ok || !("value" in result) || !result.value) return null;
+    return parseStuckLook(result.value, links.length);
+  } catch {
+    return null;
+  }
+}
+
+async function fillEmptyAccountFields(
+  ctx: StepContext,
+  session: BrowserSession,
+  fields: readonly FormFieldInfo[],
+): Promise<void> {
+  const host = ctx.host;
+  if (!host) return;
+  const empty = fields.filter(isEmptyFillable);
+  if (empty.length === 0) return;
+  const credentials = await ensureCredentials(ctx, host);
+  for (const field of empty) {
+    const value = valueForField(field, credentials);
+    if (!value) continue;
+    await session.fill(field.selector, value.text, { secret: value.secret });
+  }
+}
+
+function isEmptyFillable(field: FormFieldInfo): boolean {
+  if (field.hidden) return false;
+  const type = (field.type ?? "").toLowerCase();
+  if (["hidden", "submit", "button", "checkbox", "radio", "file", "image"].includes(type)) {
+    return false;
+  }
+  if (field.tag === "button") return false;
+  if ((field.value ?? "").trim()) return false;
+  return field.tag === "input" || field.tag === "textarea";
+}
+
+function valueForField(
+  field: FormFieldInfo,
+  credentials: { username: string; password: string; email: string },
+): { text: string; secret: boolean } | null {
+  const blob = [
+    field.type,
+    field.name,
+    field.id,
+    field.autocomplete,
+    field.label,
+    field.placeholder,
+  ]
+    .filter((part) => part)
+    .join(" ")
+    .toLowerCase();
+  if (/password|passwort|passwd/.test(blob)) return { text: credentials.password, secret: true };
+  if (field.type === "email" || /e-?mail/.test(blob))
+    return { text: credentials.email, secret: false };
+  if (/user|nick|benutzer|username/.test(blob))
+    return { text: credentials.username, secret: false };
+  return null;
+}
+
+function emptyFieldLabels(fields: readonly FormFieldInfo[]): string[] {
+  return fields
+    .filter(isEmptyFillable)
+    .map((field) => field.label || field.name || field.autocomplete || field.type || "field")
+    .slice(0, 12);
+}
+
+function registrationLink(
+  anchors: readonly { text: string; href: string }[],
+  pageUrl: string,
+): string | null {
+  for (const item of anchors) {
+    const blob = `${item.text} ${item.href}`.toLowerCase();
+    if (!/registrier|sign[\s-]*up|create account|konto erstellen|register/.test(blob)) continue;
+    const absolute = absoluteHttpUrl(item.href, pageUrl);
+    if (!absolute || bannedPage(absolute)) continue;
+    return absolute;
+  }
+  return null;
+}
+
+function absoluteHttpUrl(href: string, pageUrl: string): string | null {
+  try {
+    const url = new URL(href, pageUrl || undefined);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
+function bannedPage(value: string): boolean {
+  return isNewSignupBannedHost(hostnameOf(value));
+}
+
+function hostnameOf(value: string): string {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return "";
+  }
+}
+
+function sandboxGoneError(error: unknown): boolean {
+  if (!(error instanceof Error)) return isSandboxGoneText(String(error));
+  return isSandboxGoneText(`${error.name} ${error.message}`);
 }
 
 export function redactAll(ctx: StepContext, values: readonly string[]): string[] {

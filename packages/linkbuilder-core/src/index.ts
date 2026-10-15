@@ -36,6 +36,7 @@ export * from "./run-state.js";
 export * from "./sandbox-workspace.js";
 export * from "./schedule.js";
 export * from "./spam.js";
+export * from "./stuck-step.js";
 export * from "./verification-link.js";
 export * from "./webhooks.js";
 export * from "./work-stage.js";
