@@ -345,8 +345,14 @@ describe("project computer screen", () => {
       deps(prisma, {
         keepAlive: vi.fn(),
         execute: async function* (_ref: unknown, request: { argv: string[] }) {
-          scripts.push(request.argv.at(-1) ?? "");
-          yield { type: "stdout" as const, data: "runner\n" };
+          const script = request.argv.at(-1) ?? "";
+          scripts.push(script);
+          const data = script.includes("xdotool search")
+            ? "4\t1\tRegistrieren\n"
+            : script.includes("x11vnc")
+              ? ":0\n"
+              : "runner\n";
+          yield { type: "stdout" as const, data };
           yield { type: "exit" as const, code: 0 };
         },
       }),

@@ -73,21 +73,96 @@ export function chromeKioskStampCommand(): string {
 }
 
 /**
- * The display x11vnc is already capturing. Chrome on another display leaves
- * the streamed pane on the desktop wallpaper.
+ * The display the vendor noVNC stream is capturing (E2B listens on rfbport
+ * 5900). Another x11vnc, or the X1 socket, is a side display: Chrome there
+ * leaves the live pane on the wallpaper.
  */
 export function streamedDisplayCommand(): string {
   return [
     "display=",
+    "vendor=",
+    "fallback=",
     "for pid in $(pgrep -x x11vnc 2>/dev/null || true); do",
     '  [ -r "/proc/$pid/cmdline" ] || continue',
-    "  found=$(tr '\\0' '\\n' < \"/proc/$pid/cmdline\" | awk 'prev==\"-display\"{print; exit} {prev=$0}')",
-    '  case "$found" in :*) display=$found; break ;; esac',
+    "  args=$(tr '\\0' '\\n' < \"/proc/$pid/cmdline\")",
+    "  found=$(printf '%s\\n' \"$args\" | awk 'prev==\"-display\"{print; exit} {prev=$0}')",
+    "  port=$(printf '%s\\n' \"$args\" | awk 'prev==\"-rfbport\"{print; exit} {prev=$0}')",
+    '  case "$found" in',
+    "    :*)",
+    '      case "$port" in',
+    "        5900) vendor=$found ;;",
+    '        *) [ -z "$fallback" ] && fallback=$found ;;',
+    "      esac",
+    "      ;;",
+    "  esac",
     "done",
-    'if [ -z "$display" ] && [ -S /tmp/.X11-unix/X1 ]; then display=:1; fi',
-    'if [ -z "$display" ] && [ -n "${DISPLAY:-}" ]; then display=$DISPLAY; fi',
-    'if [ -z "$display" ]; then display=:0; fi',
+    'if [ -n "$vendor" ]; then display=$vendor',
+    'elif [ -n "$fallback" ]; then display=$fallback',
+    "elif [ -S /tmp/.X11-unix/X0 ]; then display=:0",
+    "elif [ -S /tmp/.X11-unix/X1 ]; then display=:1",
+    'elif [ -n "${DISPLAY:-}" ]; then display=$DISPLAY',
+    "else display=:0; fi",
     "printf '%s\\n' \"$display\"",
+  ].join("\n");
+}
+
+/**
+ * Restart the x11vnc that serves this display so it samples the framebuffer
+ * instead of a stale wallpaper frame. A replaced X server keeps the old
+ * capture until that process starts again.
+ */
+export function refreshVendorStreamCommand(display: string, force = false): string {
+  const quotedDisplay = posixShellQuote(display);
+  return [
+    `export TARGET_DISPLAY=${quotedDisplay}`,
+    ...(force ? ["rm -f /tmp/rakazo-vnc-noxdamage"] : []),
+    "if [ -f /tmp/rakazo-vnc-noxdamage ]; then exit 0; fi",
+    "python3 - <<'PY'",
+    "import os, signal, subprocess, time",
+    "target = os.environ.get('TARGET_DISPLAY', ':0')",
+    "found = []",
+    "for name in os.listdir('/proc'):",
+    "    if not name.isdigit():",
+    "        continue",
+    "    try:",
+    "        raw = open('/proc/%s/cmdline' % name, 'rb').read().split(b'\\0')",
+    "    except OSError:",
+    "        continue",
+    "    if not raw or raw[0].rsplit(b'/', 1)[-1] != b'x11vnc':",
+    "        continue",
+    "    args = [part.decode('utf-8', 'replace') for part in raw if part]",
+    "    shown = ''",
+    "    port = ''",
+    "    prev = ''",
+    "    for arg in args:",
+    "        if prev == '-display':",
+    "            shown = arg",
+    "        if prev == '-rfbport':",
+    "            port = arg",
+    "        prev = arg",
+    "    if shown != target and port != '5900':",
+    "        continue",
+    "    if '-noxdamage' not in args:",
+    "        args.extend(['-noxdamage', '-noxfixes'])",
+    "    found.append((int(name), args))",
+    "restarted = False",
+    "for pid, args in found:",
+    "    try:",
+    "        os.kill(pid, signal.SIGTERM)",
+    "    except OSError:",
+    "        continue",
+    "    for _ in range(20):",
+    "        try:",
+    "            os.kill(pid, 0)",
+    "        except OSError:",
+    "            break",
+    "        time.sleep(0.1)",
+    "    subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)",
+    "    restarted = True",
+    "if restarted:",
+    "    open('/tmp/rakazo-vnc-noxdamage', 'w').write('ok')",
+    "PY",
+    "exit 0",
   ].join("\n");
 }
 
@@ -167,22 +242,24 @@ function startDesktopWatchShell(): string {
 /**
  * The desktop SDK starts Xvfb with `-nolisten unix`. Chrome and x11vnc then
  * exit 1 and noVNC stays on Reconnecting. A display clients can already open
- * is left alone. A silent display, or one started with `-nolisten`, is
- * replaced. A signup browser that is already up is left on its form.
+ * is left alone, including one started with `-nolisten`: replacing it while
+ * x11vnc is attached freezes the live pane on the last wallpaper frame.
+ * A silent display is replaced, and the vendor capture is started again on
+ * that same display. A signup browser that is already up is left on its form.
  */
 export function repairDesktopDisplayCommand(display: string): string {
   const quotedDisplay = posixShellQuote(display);
   const number = display.replace(/^:/, "") || "0";
-  const xvfbPattern = posixShellQuote(`^Xvfb ${display} `);
   return [
     `export DISPLAY=${quotedDisplay}`,
     "persona=0",
     "if pgrep -f '[r]akazo-lb-browser' >/dev/null 2>&1; then persona=1; fi",
     "if pgrep -af -- '--user-data-dir=' 2>/dev/null | grep -F '/.browser-profiles/' >/dev/null 2>&1; then persona=1; fi",
     "nolisten=0",
-    `pid=$(pgrep -f ${xvfbPattern} | awk 'NR==1{print; exit}')`,
+    `pid=$(pgrep -f ${posixShellQuote(`^Xvfb ${display} `)} | awk 'NR==1{print; exit}')`,
     'if [ -n "$pid" ] && [ -r "/proc/$pid/cmdline" ] && tr "\\0" " " < "/proc/$pid/cmdline" | grep -F -- "-nolisten" >/dev/null 2>&1; then nolisten=1; fi',
     `if xdpyinfo -display ${quotedDisplay} >/dev/null 2>&1 && { [ "$persona" = 1 ] || [ "$nolisten" = 0 ]; }; then exit 0; fi`,
+    'if [ "$persona" = 1 ]; then exit 0; fi',
     `pkill -f ${posixShellQuote(`Xvfb ${display} `)} || true`,
     "sleep 0.2",
     `rm -f /tmp/.X${number}-lock /tmp/.X11-unix/X${number}`,
@@ -198,6 +275,7 @@ export function repairDesktopDisplayCommand(display: string): string {
     "  elif command -v startxfce4 >/dev/null 2>&1; then startxfce4 >/tmp/rakazo-xfce.log 2>&1 &",
     "  fi",
     "fi",
+    refreshVendorStreamCommand(display, true),
     "exit 0",
   ].join("\n");
 }

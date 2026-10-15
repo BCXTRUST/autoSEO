@@ -21,6 +21,7 @@ import {
   parseVisibleWindows,
   prepareKioskDesktopCommand,
   raiseBrowserWindowCommand,
+  refreshVendorStreamCommand,
   repairBlackStreamCommand,
   streamedDisplayCommand,
 } from "@rakazo/core";
@@ -178,7 +179,7 @@ async function openScreen(
     }
     const cached = liveCachedUrl(computer);
     if (cached) {
-      void showForumSearch(deps, actor, project, computer);
+      void showForumSearchOnce(deps, actor, project, computer);
       return { url: cached, error: null };
     }
     let machine = computer;
@@ -193,7 +194,7 @@ async function openScreen(
       url = await connectTeamScreen(deps, actor, machine);
     }
     if (!url) return { url: null, error: null };
-    void showForumSearch(deps, actor, project, machine);
+    void showForumSearchOnce(deps, actor, project, machine);
     return { url, error: null };
   } catch (error) {
     if (error instanceof ORPCError) throw error;
@@ -385,7 +386,24 @@ async function sandboxDisplay(
   return DESKTOP_DISPLAY;
 }
 
-/** Open Chrome on Google search unless that page is already in front. */
+const kioskBusy = new Set<string>();
+
+/** One kiosk launch at a time. A second poll used to kill Chrome before it mapped. */
+function showForumSearchOnce(
+  deps: ProjectScreenDeps,
+  actor: Actor,
+  project: ScreenProject,
+  computer: TeamComputer,
+): Promise<void> {
+  const key = computer.providerRef ?? computer.id;
+  if (kioskBusy.has(key)) return Promise.resolve();
+  kioskBusy.add(key);
+  return showForumSearch(deps, actor, project, computer).finally(() => {
+    kioskBusy.delete(key);
+  });
+}
+
+/** Open Chrome on the display the vendor stream is watching. */
 async function showForumSearch(
   deps: ProjectScreenDeps,
   actor: Actor,
@@ -399,12 +417,6 @@ async function showForumSearch(
   const url = forumSearchUrlFromProject(project);
   if (!url.startsWith("https://www.google.de/search?")) return;
   const display = await sandboxDisplay(deps, actor, computer);
-  if (await personaBrowserOwnsDesktop(deps, actor, computer)) {
-    await runDesktop(deps, actor, computer, repairBlackStreamCommand(display)).catch(
-      () => undefined,
-    );
-    return;
-  }
   const query = primaryProblemQueryFromProject(project);
   const shops = shopNames(project);
   const onProblem = (titles: readonly string[]) =>
@@ -414,9 +426,15 @@ async function showForumSearch(
     const stamp = await runDesktop(deps, actor, computer, chromeKioskStampCommand()).catch(
       () => "",
     );
-    if (!onProblem(titles) || !stamp.includes("ok")) {
-      await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
+    const persona = await personaBrowserOwnsDesktop(deps, actor, computer);
+    const visibleBrowser = titles.some((title) => !isDesktopShellTitle(title));
+    let launched = false;
+    if (!(onProblem(titles) && stamp.includes("ok")) && !(persona && visibleBrowser)) {
+      if (!persona) {
+        await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
+      }
       await runDesktop(deps, actor, computer, detachedBrowserCommand(display, url));
+      launched = true;
       titles = await visibleTitles(deps, actor, computer, display);
       if (!onProblem(titles)) {
         await runDesktop(deps, actor, computer, typeSearchUrlCommand(display, url));
@@ -431,13 +449,32 @@ async function showForumSearch(
     await runDesktop(deps, actor, computer, repairBlackStreamCommand(display)).catch(
       () => undefined,
     );
+    await runDesktop(deps, actor, computer, refreshVendorStreamCommand(display, launched)).catch(
+      () => undefined,
+    );
     titles = await visibleTitles(deps, actor, computer, display);
+    console.info(
+      "link builder screen browser",
+      `display=${display}`,
+      `windows=${titles.length}`,
+      launched ? "opened" : "raised",
+    );
     if (query && desktopShowsProblemSearch(titles, query, shops)) {
       await noteDesktopSearch(deps, actor, project.id, query);
     }
   } catch (error) {
     console.error("link builder screen", "forum search", publicScreenError(error));
   }
+}
+
+/** Wallpaper, icons, and panels are the desktop shell, not the browser window. */
+function isDesktopShellTitle(title: string): boolean {
+  const text = title.trim();
+  if (!text) return true;
+  return (
+    /^(home|trash|file system|desktop|xfce4-panel|xfdesktop)$/i.test(text) ||
+    /fluxbox|xfce|e2b/i.test(text)
+  );
 }
 
 /** The link-builder persona browser is already on this display. Replacing it would close the registration. */

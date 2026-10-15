@@ -113,7 +113,12 @@ describe("computer desktop window helpers", () => {
     const streamed = streamedDisplayCommand();
     expect(streamed).toContain("x11vnc");
     expect(streamed).toContain("-display");
-    expect(streamed).toContain("/tmp/.X11-unix/X1");
+    expect(streamed).toContain("-rfbport");
+    expect(streamed).toContain("5900");
+    expect(streamed.indexOf("5900")).toBeLessThan(streamed.indexOf("/tmp/.X11-unix/X0"));
+    expect(streamed.indexOf("/tmp/.X11-unix/X0")).toBeLessThan(
+      streamed.indexOf("/tmp/.X11-unix/X1"),
+    );
     expect(streamed).toContain("display=:1");
     const black = repairBlackStreamCommand(":0");
     expect(black).toContain("windowmap");
@@ -133,6 +138,7 @@ describe("computer desktop window helpers", () => {
     expect(repair).toContain("xdpyinfo -display ':0'");
     expect(repair).toContain("Xvfb ':0'");
     expect(repair).toContain("[r]akazo-lb-browser");
+    expect(repair).toContain("-noxdamage");
     expect(repair).not.toMatch(/Xvfb ':0' -ac[^\n]*-nolisten/);
     expect(command).not.toContain("nohup");
   });
