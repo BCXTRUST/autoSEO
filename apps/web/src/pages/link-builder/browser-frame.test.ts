@@ -6,6 +6,7 @@ import {
   connectionStatusText,
   LIVE_PANE_BG,
   livePaneStatus,
+  livePaneView,
 } from "./browser-frame.js";
 
 function paint(
@@ -33,9 +34,9 @@ const checker = (x: number, y: number): [number, number, number] =>
 describe("live pane status", () => {
   it("turns the dead sandbox sentence into a short status", () => {
     expect(livePaneStatus("Sandbox is probably not running anymore")).toBe("Computer is off");
-    expect(
-      connectionStatusText("", "Sandbox is probably not running anymore"),
-    ).toContain("not running");
+    expect(connectionStatusText("", "Sandbox is probably not running anymore")).toContain(
+      "not running",
+    );
   });
 
   it("treats reconnecting as a short status and leaves a connected browser alone", () => {
@@ -45,12 +46,52 @@ describe("live pane status", () => {
     expect(livePaneStatus("Connected")).toBeNull();
     expect(livePaneStatus("Connected (unencrypted)")).toBeNull();
   });
+
+  it("covers a dead pane and shows a live browser, including a black frame", () => {
+    expect(livePaneView("Computer is off", null)).toEqual({
+      cover: true,
+      showingBrowser: false,
+      status: "Computer is off",
+    });
+    expect(
+      livePaneView("Reconnecting", { kind: "browser", rect: { x: 0, y: 0, width: 8, height: 8 } }),
+    ).toMatchObject({ cover: true, showingBrowser: false, status: "Reconnecting" });
+    expect(livePaneView(null, { kind: "desktop" })).toEqual({
+      cover: true,
+      showingBrowser: false,
+      status: "Opening the browser",
+    });
+    expect(livePaneView(null, { kind: "blank" })).toEqual({
+      cover: false,
+      showingBrowser: true,
+      status: "Opening the browser",
+    });
+    expect(
+      livePaneView(null, { kind: "browser", rect: { x: 0, y: 0, width: 80, height: 50 } }),
+    ).toEqual({ cover: false, showingBrowser: true, status: null });
+  });
 });
 
 describe("browserCrop", () => {
-  it("hides a blank white page", () => {
-    const frame = paint(80, 50, () => [250, 250, 250]);
-    expect(browserCrop(frame, 80, 50).kind).toBe("desktop");
+  it("shows a white kiosk page and treats a black frame as a stream, not the desktop", () => {
+    const white = paint(80, 50, () => [250, 250, 250]);
+    expect(browserCrop(white, 80, 50)).toEqual({
+      kind: "browser",
+      rect: { x: 0, y: 0, width: 80, height: 50 },
+    });
+    const black = paint(80, 50, () => [0, 0, 0]);
+    expect(browserCrop(black, 80, 50).kind).toBe("blank");
+    const wallpaper = paint(80, 50, () => [30, 90, 160]);
+    expect(browserCrop(wallpaper, 80, 50).kind).toBe("desktop");
+  });
+
+  it("crops a white page out from under a taskbar", () => {
+    const page = paint(80, 50, (_x, y) => (y >= 46 ? [28, 28, 32] : [248, 248, 248]));
+    const shown = browserCrop(page, 80, 50);
+    expect(shown.kind).toBe("browser");
+    if (shown.kind !== "browser") return;
+    expect(shown.rect.y).toBe(0);
+    expect(shown.rect.y + shown.rect.height).toBeLessThan(48);
   });
 
   it("shows a fullscreen browser and hides wallpaper, icons, and the taskbar", () => {
@@ -111,6 +152,7 @@ describe("browserOnlyCss", () => {
       width: "200.00%",
       height: "250.00%",
     });
-    expect(browserOnlyCss(null)).toContain("visibility: hidden");
+    expect(browserOnlyCss(null)).toContain("#noVNC_status");
+    expect(browserOnlyCss(null)).not.toContain("canvas { visibility: hidden");
   });
 });

@@ -29,6 +29,7 @@ import {
   Shimmer,
   SuccessPop,
 } from "../../components/beautiful-ui/primitives";
+import { BrowserOnlyFrame } from "./browser-only-frame.js";
 import {
   addWizardPage,
   disclosureLabel,
@@ -46,7 +47,6 @@ import {
   warmupNote,
   wizardStepIssues,
 } from "./model.js";
-import { BrowserOnlyFrame } from "./browser-only-frame.js";
 import {
   cornerLabel,
   dashboardSummary,
@@ -960,12 +960,12 @@ function ComputerPane({
             );
           })}
         </ol>
-        {stripStatus ? (
+        {stripStatus || (frame && label) ? (
           <span
             data-live-status="strip"
             className="shrink-0 font-mono text-[11px] leading-none tracking-[0.04em] text-[#C8C4B8]"
           >
-            {stripStatus}
+            {stripStatus || label}
           </span>
         ) : null}
         <span className="hidden shrink-0 sm:flex">
@@ -998,18 +998,6 @@ function ComputerPane({
             untilReady="blank"
             className="absolute inset-0 z-[1] h-full w-full bg-[#0c0c0e] object-contain"
           />
-        ) : null}
-        {frame && label ? (
-          <div
-            data-live-status="corner"
-            className="pointer-events-none absolute top-3 right-3 z-20 max-w-[min(100%-1.5rem,24rem)] border border-[#3A382F] bg-[#12110E] px-2 py-1.5 font-mono text-[12px]"
-          >
-            {working ? (
-              <LoadingState label={label} />
-            ) : (
-              <p className="text-[13.5px] font-medium leading-snug text-[#ECECEE]">{label}</p>
-            )}
-          </div>
         ) : null}
       </div>
     </section>

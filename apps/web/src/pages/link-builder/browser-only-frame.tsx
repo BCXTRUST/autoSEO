@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import {
   browserCrop,
   browserOnlyCss,
+  type CropRect,
   connectionStatusText,
   LIVE_PANE_BG,
+  type LivePaneView,
   livePaneStatus,
-  type CropRect,
+  livePaneView,
 } from "./browser-frame.js";
 
 /**
@@ -25,20 +27,24 @@ export function BrowserOnlyFrame({
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const statusRef = useRef<string | null>(null);
-  const [showingBrowser, setShowingBrowser] = useState(false);
+  const [view, setView] = useState<LivePaneView>({
+    cover: true,
+    showingBrowser: false,
+    status: null,
+  });
 
   useEffect(() => {
     statusRef.current = null;
-    setShowingBrowser(false);
+    setView({ cover: true, showingBrowser: false, status: null });
     onStatus(null);
     let stopped = false;
     let timer = 0;
-    const publish = (status: string | null, browser: boolean) => {
+    const publish = (next: LivePaneView) => {
       if (stopped) return;
-      setShowingBrowser(browser);
-      if (statusRef.current === status) return;
-      statusRef.current = status;
-      onStatus(status);
+      setView(next);
+      if (statusRef.current === next.status) return;
+      statusRef.current = next.status;
+      onStatus(next.status);
     };
     const read = () => {
       if (stopped) return;
@@ -46,7 +52,7 @@ export function BrowserOnlyFrame({
       try {
         const doc = iframe?.contentDocument ?? null;
         if (!doc) {
-          publish("Reconnecting", false);
+          publish(livePaneView("Reconnecting", null));
         } else {
           const stated = livePaneStatus(
             connectionStatusText(
@@ -56,28 +62,35 @@ export function BrowserOnlyFrame({
           );
           if (stated) {
             writeStyle(doc, null);
-            publish(stated, false);
+            publish(livePaneView(stated, null));
           } else {
-            const canvas = largestCanvas(doc);
-            const sample = canvas ? sampleCanvas(canvas) : null;
-            const crop = sample
-              ? browserCrop(sample.pixels, sample.width, sample.height)
-              : { kind: "desktop" as const };
-            if (!sample || crop.kind === "desktop") {
-              writeStyle(doc, null);
-              publish("Opening the browser", false);
-            } else {
+            let crop: ReturnType<typeof browserCrop> | null = null;
+            let sample: { width: number; height: number } | null = null;
+            try {
+              const canvas = largestCanvas(doc);
+              const readSample = canvas ? sampleCanvas(canvas) : null;
+              sample = readSample;
+              crop = readSample
+                ? browserCrop(readSample.pixels, readSample.width, readSample.height)
+                : null;
+            } catch {
+              crop = { kind: "blank" };
+            }
+            const next = livePaneView(null, crop);
+            if (crop?.kind === "browser" && sample) {
               writeStyle(doc, {
                 rect: crop.rect,
                 frameWidth: sample.width,
                 frameHeight: sample.height,
               });
-              publish(null, true);
+            } else {
+              writeStyle(doc, null);
             }
+            publish(next);
           }
         }
       } catch {
-        publish("Reconnecting", false);
+        publish(livePaneView("Reconnecting", null));
       }
       timer = window.setTimeout(read, 800);
     };
@@ -97,21 +110,20 @@ export function BrowserOnlyFrame({
         src={url}
         sandbox={sandbox}
         allow="fullscreen"
-        data-desktop={showingBrowser ? "browser" : "hidden"}
+        data-desktop={view.showingBrowser ? "browser" : "hidden"}
         className="absolute inset-0 h-full w-full border-0"
         style={{
           background: LIVE_PANE_BG,
           pointerEvents: "none",
-          visibility: showingBrowser ? "visible" : "hidden",
         }}
       />
-      {showingBrowser ? null : (
+      {view.cover ? (
         <div
           data-live-pane="dark"
           className="absolute inset-0"
           style={{ background: LIVE_PANE_BG }}
         />
-      )}
+      ) : null}
     </div>
   );
 }

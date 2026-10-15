@@ -303,7 +303,8 @@ describe("project computer screen", () => {
     expect(opened).toContain("exec /usr/bin/google-chrome");
     expect(opened).toContain("--kiosk");
     expect(opened).toContain("TranslateEnabled");
-    expect(opened).toContain("rakazo-chrome-kiosk-v3");
+    expect(opened).toContain("--disable-gpu");
+    expect(opened).toContain("rakazo-chrome-kiosk-v4");
     expect(opened).not.toContain("key --window");
     expect(scripts.join("\n")).not.toContain("key Escape");
     expect(opened).toContain("--start-fullscreen");
@@ -387,7 +388,7 @@ describe("project computer screen", () => {
           scripts.push(request.argv.at(-1) ?? "");
           yield {
             type: "stdout" as const,
-            data: request.argv.at(-1)?.includes("rakazo-chrome-kiosk-v3")
+            data: request.argv.at(-1)?.includes("rakazo-chrome-kiosk-v4")
               ? "ok\n"
               : "9\t1\tMagnesium Krämpfe Forum - Google Suche\n",
           };

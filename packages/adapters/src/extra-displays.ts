@@ -171,7 +171,7 @@ export function ensurePrimaryViewCommand(layout: ExtraDisplayLayout, viewPasswor
     `fuser -k ${viewPort}/tcp >/dev/null 2>&1 || true`,
     `x11vnc -storepasswd "$view_password" ${shellQuote(passwordAuthFile)} >/dev/null`,
     detachServer(
-      `x11vnc -display ${layout.display} -forever -shared -viewonly -rfbauth ${shellQuote(passwordAuthFile)} -listen 127.0.0.1 -rfbport ${viewVncPort} -xkb -ncache 0`,
+      `x11vnc -display ${layout.display} -forever -shared -viewonly -noxdamage -noxfixes -rfbauth ${shellQuote(passwordAuthFile)} -listen 127.0.0.1 -rfbport ${viewVncPort} -xkb -ncache 0`,
       `${log}-x11vnc.log`,
     ),
     `if command -v websockify >/dev/null 2>&1; then`,
@@ -235,7 +235,7 @@ export function ensureExtraDisplayCommand(
     `pkill -f '[n]ovnc_proxy.*--listen ${layout.viewPort}' || true`,
     `x11vnc -storepasswd "$view_password" ${shellQuote(passwordAuthFile)} >/dev/null`,
     detachServer(
-      `x11vnc -display ${layout.display} -forever -shared -viewonly -rfbauth ${shellQuote(passwordAuthFile)} -listen 127.0.0.1 -rfbport ${layout.viewVncPort} -xkb -ncache 0`,
+      `x11vnc -display ${layout.display} -forever -shared -viewonly -noxdamage -noxfixes -rfbauth ${shellQuote(passwordAuthFile)} -listen 127.0.0.1 -rfbport ${layout.viewVncPort} -xkb -ncache 0`,
       `${log}-x11vnc.log`,
     ),
     `if command -v websockify >/dev/null 2>&1; then`,

@@ -21,6 +21,7 @@ import {
   parseVisibleWindows,
   prepareKioskDesktopCommand,
   raiseBrowserWindowCommand,
+  repairBlackStreamCommand,
 } from "@rakazo/core";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
 import {
@@ -364,6 +365,25 @@ function withViewOnly(url: string, viewOnly: boolean) {
 
 const DESKTOP_DISPLAY = ":0";
 
+/** The display the sandbox is already streaming. A second display would show a black pane. */
+async function sandboxDisplay(
+  deps: ProjectScreenDeps,
+  actor: Actor,
+  computer: TeamComputer,
+): Promise<string> {
+  try {
+    const out = await runDesktop(deps, actor, computer, "printf '%s\\n' \"${DISPLAY:-:0}\"");
+    const found = out
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => /^:\d+(?:\.\d+)?$/.test(line));
+    if (found) return found;
+  } catch {
+    // The primary desktop is still the one Chrome and the stream share.
+  }
+  return DESKTOP_DISPLAY;
+}
+
 /** Open Chrome on Google search unless that page is already in front. */
 async function showForumSearch(
   deps: ProjectScreenDeps,
@@ -377,31 +397,40 @@ async function showForumSearch(
   if (typeof deps.sandbox.execute !== "function") return;
   const url = forumSearchUrlFromProject(project);
   if (!url.startsWith("https://www.google.de/search?")) return;
-  if (await personaBrowserOwnsDesktop(deps, actor, computer)) return;
+  const display = await sandboxDisplay(deps, actor, computer);
+  if (await personaBrowserOwnsDesktop(deps, actor, computer)) {
+    await runDesktop(deps, actor, computer, repairBlackStreamCommand(display)).catch(
+      () => undefined,
+    );
+    return;
+  }
   const query = primaryProblemQueryFromProject(project);
   const shops = shopNames(project);
   const onProblem = (titles: readonly string[]) =>
     query ? desktopShowsProblemSearch(titles, query, shops) : desktopShowsForumSearch(titles);
   try {
-    let titles = await visibleTitles(deps, actor, computer);
+    let titles = await visibleTitles(deps, actor, computer, display);
     const stamp = await runDesktop(deps, actor, computer, chromeKioskStampCommand()).catch(
       () => "",
     );
     if (!onProblem(titles) || !stamp.includes("ok")) {
-      await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(DESKTOP_DISPLAY));
-      await runDesktop(deps, actor, computer, detachedBrowserCommand(DESKTOP_DISPLAY, url));
-      titles = await visibleTitles(deps, actor, computer);
+      await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
+      await runDesktop(deps, actor, computer, detachedBrowserCommand(display, url));
+      titles = await visibleTitles(deps, actor, computer, display);
       if (!onProblem(titles)) {
-        await runDesktop(deps, actor, computer, typeSearchUrlCommand(DESKTOP_DISPLAY, url));
-        titles = await visibleTitles(deps, actor, computer);
+        await runDesktop(deps, actor, computer, typeSearchUrlCommand(display, url));
+        titles = await visibleTitles(deps, actor, computer, display);
       }
     }
     try {
-      await runDesktop(deps, actor, computer, raiseBrowserWindowCommand(DESKTOP_DISPLAY));
+      await runDesktop(deps, actor, computer, raiseBrowserWindowCommand(display));
     } catch {
       // The kiosk window can still be opening. The next screen open tries again.
     }
-    titles = await visibleTitles(deps, actor, computer);
+    await runDesktop(deps, actor, computer, repairBlackStreamCommand(display)).catch(
+      () => undefined,
+    );
+    titles = await visibleTitles(deps, actor, computer, display);
     if (query && desktopShowsProblemSearch(titles, query, shops)) {
       await noteDesktopSearch(deps, actor, project.id, query);
     }
@@ -433,14 +462,10 @@ async function visibleTitles(
   deps: ProjectScreenDeps,
   actor: Actor,
   computer: TeamComputer,
+  display: string,
 ): Promise<string[]> {
   try {
-    const listed = await runDesktop(
-      deps,
-      actor,
-      computer,
-      listVisibleWindowsCommand(DESKTOP_DISPLAY),
-    );
+    const listed = await runDesktop(deps, actor, computer, listVisibleWindowsCommand(display));
     return parseVisibleWindows(listed).flatMap((window) => (window.title ? [window.title] : []));
   } catch {
     return [];

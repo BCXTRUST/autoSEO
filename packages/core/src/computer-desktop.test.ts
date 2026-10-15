@@ -13,6 +13,7 @@ import {
   prepareKioskDesktopCommand,
   raiseBrowserWindowCommand,
   refuseBrowserHuntShell,
+  repairBlackStreamCommand,
   repairDesktopDisplayCommand,
 } from "./computer-desktop.js";
 
@@ -99,11 +100,21 @@ describe("computer desktop window helpers", () => {
     expect(command).toContain("TranslateEnabled");
     expect(command).toContain("translate_blocked_languages");
     expect(command).toContain("app_locale");
-    expect(command).toContain("rakazo-chrome-kiosk-v3");
+    expect(command).toContain("--disable-gpu");
+    expect(command).toContain("--ozone-platform=x11");
+    expect(command).toContain("VizDisplayCompositor");
+    expect(command).toContain("rakazo-chrome-kiosk-v4");
     expect(command).toContain("Translate this page");
     expect(command).toContain("Diese Seite übersetzen");
     expect(command).toContain("Toolbar");
-    expect(command).not.toContain("rakazo-chrome-kiosk-v2");
+    expect(command).not.toContain("rakazo-chrome-kiosk-v3");
+    expect(command).toContain("windowmap");
+    const black = repairBlackStreamCommand(":0");
+    expect(black).toContain("windowmap");
+    expect(black).toContain("-noxdamage");
+    expect(black).toContain("FULLSCREEN");
+    expect(black).not.toContain("killall");
+    expect(black).not.toContain("google.de");
     expect(command).toContain("TranslateUI");
     expect(raised).toContain("Google Translate");
     expect(raised).toContain("Translate this page");

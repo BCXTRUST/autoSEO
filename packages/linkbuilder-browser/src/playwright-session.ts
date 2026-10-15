@@ -1004,6 +1004,8 @@ export async function launchPlaywrightSession(
     "--disable-session-crashed-bubble",
     "--hide-crash-restore-bubble",
     "--disable-infobars",
+    // GPU compositing paints a black window into x11vnc. Software frames stay visible.
+    ...(env.DISPLAY ? ["--disable-gpu", "--disable-gpu-compositing", "--ozone-platform=x11"] : []),
     // Chromium skips the proxy for loopback unless this token removes that bypass.
     ...(options.proxy ? ["--proxy-bypass-list=<-loopback>"] : []),
   ];
