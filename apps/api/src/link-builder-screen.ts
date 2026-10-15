@@ -1,45 +1,20 @@
-import { join } from "node:path";
 import { ORPCError } from "@orpc/server";
 import type {
   AdapterContext,
   AgentHomeStore,
-  ComputerRef,
   JobPublisher,
   SandboxProvider,
 } from "@rakazo/adapter-kit";
 import {
   ComputerBusyError,
+  type E2BFleet,
   isUnrecoverableSandboxError,
   provisionComputer,
   toComputerRef,
 } from "@rakazo/adapters";
 import type { Actor } from "@rakazo/contracts";
-import {
-  attachBrowserWindowStreamCommand,
-  browserProcessCommand,
-  recoverWindowlessBrowserCommand,
-  browserWindowPresentCommand,
-  detachedBrowserCommand,
-  listVisibleWindowsCommand,
-  parseVisibleWindows,
-  prepareKioskDesktopCommand,
-  raiseBrowserWindowCommand,
-  signupFormHeldCommand,
-  streamedDisplayCommand,
-} from "@rakazo/core";
 import type { PrismaClient, ThreadEvents } from "@rakazo/db";
-import {
-  choosePersonaComputer,
-  desktopShowsForumSearch,
-  desktopShowsProblemSearch,
-  forumResultClickCommand,
-  forumSearchUrlFromProject,
-  isCannedResearchLine,
-  isStaleResearchLine,
-  primaryProblemQueryFromProject,
-  searchedGoogleLine,
-  shopNames,
-} from "@rakazo/linkbuilder-core";
+import { choosePersonaComputer } from "@rakazo/linkbuilder-core";
 import { addScreenProxyCapability, shouldProxyComputerScreen } from "./screen-proxy.js";
 
 /** Must match SCREEN_PROXY_TTL_MS in screen-proxy.ts. A stored URL older than this is dead. */
@@ -47,6 +22,14 @@ const SCREEN_CAPABILITY_TTL_MS = 60 * 60_000;
 const SCREEN_URL_MAX_AGE_MS = 15_000;
 /** How long this request waits. The sandbox call keeps running so an abort cannot kill it. */
 const SCREEN_REQUEST_MS = 90_000;
+
+export type ScreenState = "off" | "starting" | "no_browser" | "live";
+
+export interface ScreenResult {
+  url: string | null;
+  error: string | null;
+  state: ScreenState;
+}
 
 export interface ProjectScreenDeps {
   prisma: PrismaClient;
@@ -60,6 +43,8 @@ export interface ProjectScreenDeps {
     screenProxySecret: string;
     sandboxProvider: string;
   };
+  /** Absent in tests and Docker, where there is no E2B key. The liveness check is skipped. */
+  fleet?: E2BFleet;
 }
 
 type TeamComputer = {
@@ -71,6 +56,8 @@ type TeamComputer = {
   screenUrl: string | null;
   scope: string;
 };
+
+const goneSandboxLogs = new Set<string>();
 
 /**
  * A proxied noVNC URL minted in the last few seconds. An older address can point
@@ -123,35 +110,23 @@ export function publicScreenError(error: unknown): string {
   return cleaned || "Could not open the computer";
 }
 
-type ScreenProject = {
-  id: string;
-  name: string | null;
-  brandName: string | null;
-  topicLanes: unknown;
-  targets: unknown;
-};
-
-/**
- * The dashboard computer. Reuses the workspace team machine and the existing
- * screen proxy. Opens Google search for the stored topic. Does not change the
- * link-builder driver, register an account, post, or place a link.
- */
+/** The dashboard computer. Reads the team machine. It does not create or replace a sandbox. */
 export async function openProjectComputerScreen(
   deps: ProjectScreenDeps,
   actor: Actor,
   projectId: string,
-  boot: typeof provisionComputer = provisionComputer,
-): Promise<{ url: string | null; error: string | null }> {
+  _boot: typeof provisionComputer = provisionComputer,
+): Promise<ScreenResult> {
   const project = await deps.prisma.lbProject.findFirst({
     where: { id: projectId, workspaceId: actor.workspaceId, archivedAt: null },
-    select: { id: true, name: true, brandName: true, topicLanes: true, targets: true },
+    select: { id: true },
   });
   if (!project) throw new ORPCError("NOT_FOUND");
   const flightKey = `${actor.workspaceId}:${projectId}`;
   const existing = screenFlights.get(flightKey);
   const flight =
     existing ??
-    openScreen(deps, actor, project, boot).finally(() => {
+    openScreen(deps, actor).finally(() => {
       screenFlights.delete(flightKey);
     });
   if (!existing) screenFlights.set(flightKey, flight);
@@ -160,76 +135,49 @@ export async function openProjectComputerScreen(
     return await Promise.race([flight, deadline.promise]);
   } catch (error) {
     if (error instanceof ORPCError) throw error;
-    if (isStillStarting(error)) return { url: null, error: null };
+    if (isStillStarting(error)) return { url: null, error: null, state: "starting" };
     return quietScreenFailure(error);
   } finally {
     deadline.cancel();
   }
 }
 
-const screenFlights = new Map<string, Promise<{ url: string | null; error: string | null }>>();
+const screenFlights = new Map<string, Promise<ScreenResult>>();
 
-async function openScreen(
-  deps: ProjectScreenDeps,
-  actor: Actor,
-  project: ScreenProject,
-  _boot: typeof provisionComputer,
-): Promise<{ url: string | null; error: string | null }> {
+async function openScreen(deps: ProjectScreenDeps, actor: Actor): Promise<ScreenResult> {
   try {
     const computer = await teamComputer(deps, actor);
-    if (!computer?.providerRef) return { url: null, error: null };
-    let machine = computer;
-    if (machine.state !== "running" && machine.state !== "booting") {
-      // stop() pauses the sandbox. The row stays stopped, so the pane used to
-      // stay dark while that same machine still existed.
-      if (machine.state !== "stopped" && machine.state !== "suspended") {
-        return { url: null, error: null };
-      }
-      const woke = await deps.prisma.computer.updateMany({
-        where: { id: machine.id, providerRef: machine.providerRef, state: machine.state },
-        data: { state: "running" },
-      });
-      if (woke.count !== 1) return { url: null, error: null };
-      machine = { ...machine, state: "running" };
+    if (computer?.state !== "running" || !computer.providerRef) {
+      return { url: null, error: null, state: "off" };
     }
-    let url = liveCachedUrl(machine);
-    if (url && typeof deps.sandbox.execute === "function") {
-      try {
-        await runDesktop(deps, actor, machine, "printf '%s\\n' ok");
-      } catch (error) {
-        if (!isDeadSandboxError(error)) throw error;
-        url = null;
-        const replaced = await replaceDeadTeamSandbox(deps, actor, machine);
-        if (!replaced) return { url: null, error: null };
-        machine = replaced;
+    if (deps.fleet) {
+      const info = await deps.fleet.info(computer.providerRef);
+      if (info?.state !== "running") {
+        noteGoneSandbox(computer.providerRef);
+        return { url: null, error: null, state: "off" };
       }
     }
-    if (!url) {
-      try {
-        url = await connectTeamScreen(deps, actor, machine);
-      } catch (error) {
-        if (!isDeadSandboxError(error)) throw error;
-        const replaced = await replaceDeadTeamSandbox(deps, actor, machine);
-        if (!replaced) return { url: null, error: null };
-        machine = replaced;
-        url = await connectTeamScreen(deps, actor, machine);
-      }
-    }
-    if (!url) return { url: null, error: null };
-    await showForumSearchOnce(deps, actor, project, machine);
-    return { url, error: null };
+    const url = await connectTeamScreen(deps, actor, computer);
+    if (!url) return { url: null, error: null, state: "off" };
+    return { url, error: null, state: "live" };
   } catch (error) {
     if (error instanceof ORPCError) throw error;
-    if (error instanceof ComputerBusyError) return { url: null, error: null };
+    if (error instanceof ComputerBusyError) return { url: null, error: null, state: "off" };
     return quietScreenFailure(error);
   }
 }
 
-function quietScreenFailure(error: unknown): { url: null; error: string | null } {
+function noteGoneSandbox(id: string): void {
+  if (goneSandboxLogs.has(id)) return;
+  goneSandboxLogs.add(id);
+  console.info("screen saw gone sandbox");
+}
+
+function quietScreenFailure(error: unknown): ScreenResult {
   const message = publicScreenError(error);
   console.error("link builder screen", error instanceof Error ? error.name : "Error", message);
-  if (message === "Failed to connect to server") return { url: null, error: null };
-  return { url: null, error: message };
+  if (message === "Failed to connect to server") return { url: null, error: null, state: "off" };
+  return { url: null, error: message, state: "off" };
 }
 
 function isStillStarting(error: unknown): boolean {
@@ -240,11 +188,6 @@ function isStillStarting(error: unknown): boolean {
 export function isDeadSandboxError(error: unknown): boolean {
   if (isUnrecoverableSandboxError(error)) return true;
   return error instanceof Error && error.name === "SandboxNotFoundError";
-}
-
-function liveCachedUrl(computer: TeamComputer): string | null {
-  if (computer.state !== "running" || !computer.providerRef) return null;
-  return reusableScreenUrl(computer.screenUrl);
 }
 
 async function teamComputer(deps: ProjectScreenDeps, actor: Actor): Promise<TeamComputer | null> {
@@ -289,74 +232,6 @@ async function connectTeamScreen(
   return published;
 }
 
-/**
- * The stored id is gone. Start one fresh sandbox, save it, then destroy the
- * dead id. A second caller that loses the claim does not create another.
- */
-async function replaceDeadTeamSandbox(
-  deps: ProjectScreenDeps,
-  actor: Actor,
-  computer: TeamComputer,
-): Promise<TeamComputer | null> {
-  const deadRef = computer.providerRef;
-  if (!deadRef) return null;
-  const claimed = await deps.prisma.computer.updateMany({
-    where: { id: computer.id, state: "running", providerRef: deadRef },
-    data: { state: "booting", providerRef: null, screenUrl: null },
-  });
-  if (claimed.count !== 1) return null;
-  const context = screenContext(actor, undefined, new AbortController().signal);
-  let created: ComputerRef | null = null;
-  try {
-    created = await deps.sandbox.provision(
-      {
-        botId: computer.homeKey,
-        homePath: join(deps.dataDir, "computer-home", computer.homeKey),
-      },
-      context,
-    );
-    if (!created.providerRef) throw new Error("replacement sandbox has no id");
-    const saved = await deps.prisma.computer.updateMany({
-      where: { id: computer.id, state: "booting", providerRef: null },
-      data: {
-        state: "running",
-        providerRef: created.providerRef,
-        kind: created.kind,
-        screenUrl: null,
-      },
-    });
-    if (saved.count !== 1) {
-      await deps.sandbox.destroy(created, context).catch(() => undefined);
-      return null;
-    }
-    await deps.sandbox
-      .destroy(toComputerRef({ ...computer, providerRef: deadRef }), context)
-      .catch(() => undefined);
-    console.info("link builder screen replaced dead sandbox");
-    return {
-      ...computer,
-      state: "running",
-      providerRef: created.providerRef,
-      kind: created.kind,
-      screenUrl: null,
-    };
-  } catch (error) {
-    if (created?.providerRef) {
-      await deps.sandbox.destroy(created, context).catch(() => undefined);
-    }
-    await deps.sandbox
-      .destroy(toComputerRef({ ...computer, providerRef: deadRef }), context)
-      .catch(() => undefined);
-    await deps.prisma.computer
-      .updateMany({
-        where: { id: computer.id, state: "booting", providerRef: null },
-        data: { state: "stopped", providerRef: null, screenUrl: null },
-      })
-      .catch(() => undefined);
-    throw error;
-  }
-}
-
 function publishableScreenUrl(url: string): string | null {
   if (!url.startsWith("/novnc/") && !url.includes("/novnc/")) return null;
   if (/password=|api[_-]?key=|token=/i.test(url)) return null;
@@ -388,285 +263,6 @@ function withViewOnly(url: string, viewOnly: boolean) {
     const join = url.includes("?") ? "&" : "?";
     return `${url}${join}view_only=${viewOnly ? "true" : "false"}`;
   }
-}
-
-const DESKTOP_DISPLAY = ":0";
-
-/** The display the sandbox is already streaming. A second display would show a black pane. */
-async function sandboxDisplay(
-  deps: ProjectScreenDeps,
-  actor: Actor,
-  computer: TeamComputer,
-): Promise<string> {
-  try {
-    const out = await runDesktop(deps, actor, computer, streamedDisplayCommand());
-    const found = out
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => /^:\d+(?:\.\d+)?$/.test(line));
-    if (found) return found;
-  } catch {
-    // The primary desktop is still the one Chrome and the stream share.
-  }
-  return DESKTOP_DISPLAY;
-}
-
-const kioskBusy = new Set<string>();
-
-/** One kiosk launch at a time. A second poll used to kill Chrome before it mapped. */
-function showForumSearchOnce(
-  deps: ProjectScreenDeps,
-  actor: Actor,
-  project: ScreenProject,
-  computer: TeamComputer,
-): Promise<void> {
-  const key = computer.providerRef ?? computer.id;
-  if (kioskBusy.has(key)) return Promise.resolve();
-  kioskBusy.add(key);
-  return showForumSearch(deps, actor, project, computer).finally(() => {
-    kioskBusy.delete(key);
-  });
-}
-
-/** Open Chrome on the display the vendor stream is watching. */
-async function showForumSearch(
-  deps: ProjectScreenDeps,
-  actor: Actor,
-  project: ScreenProject,
-  computer: TeamComputer,
-): Promise<void> {
-  if (!computer.providerRef || (computer.state !== "running" && computer.state !== "booting")) {
-    return;
-  }
-  if (typeof deps.sandbox.execute !== "function") return;
-  const url = forumSearchUrlFromProject(project);
-  if (!url.startsWith("https://www.google.de/search?")) return;
-  const display = await sandboxDisplay(deps, actor, computer);
-  const query = primaryProblemQueryFromProject(project);
-  const shops = shopNames(project);
-  const onProblem = (titles: readonly string[]) =>
-    query ? desktopShowsProblemSearch(titles, query, shops) : desktopShowsForumSearch(titles);
-  try {
-    const held = await runDesktop(deps, actor, computer, signupFormHeldCommand()).catch(() => "");
-    let titles = await visibleTitles(deps, actor, computer, display);
-    const persona = await personaBrowserOwnsDesktop(deps, actor, computer);
-    const present = await runDesktop(
-      deps,
-      actor,
-      computer,
-      browserWindowPresentCommand(display),
-    ).catch(() => "");
-    const browserUp = present.includes("browser");
-    const formOnScreen = held.includes("held") || titlesShowSignupForm(titles);
-    if (browserUp && (formOnScreen || persona)) {
-      await runDesktop(deps, actor, computer, attachBrowserWindowStreamCommand(display)).catch(
-        () => undefined,
-      );
-      return;
-    }
-    const starting = await runDesktop(deps, actor, computer, browserProcessCommand()).catch(
-      () => "",
-    );
-    const processUp =
-      starting.trim() === "up" || starting.includes("\nup\n") || starting.startsWith("up");
-    if (processUp && !formOnScreen && !persona) {
-      await runDesktop(deps, actor, computer, recoverWindowlessBrowserCommand(display, url)).catch(
-        () => undefined,
-      );
-    }
-    let launched = false;
-    if (!browserUp && !processUp && !formOnScreen) {
-      if (!persona) await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
-      await runDesktop(deps, actor, computer, detachedBrowserCommand(display, url));
-      launched = true;
-      titles = await visibleTitles(deps, actor, computer, display);
-      if (!persona && !titlesShowSignupForm(titles) && !onProblem(titles)) {
-        await runDesktop(deps, actor, computer, typeSearchUrlCommand(display, url));
-        titles = await visibleTitles(deps, actor, computer, display);
-      }
-    } else if (
-      !persona &&
-      browserUp &&
-      !titlesShowSignupForm(titles) &&
-      !onProblem(titles) &&
-      titlesLookLikeShell(titles)
-    ) {
-      await runDesktop(deps, actor, computer, typeSearchUrlCommand(display, url));
-      titles = await visibleTitles(deps, actor, computer, display);
-    }
-    if (!persona && !titlesShowSignupForm(titles)) {
-      try {
-        await runDesktop(deps, actor, computer, raiseBrowserWindowCommand(display));
-      } catch {
-        // The window can still be mapping. The stream attach waits for it.
-      }
-    }
-    await runDesktop(deps, actor, computer, attachBrowserWindowStreamCommand(display)).catch(
-      () => undefined,
-    );
-    titles = await visibleTitles(deps, actor, computer, display);
-    const paint = await runDesktop(
-      deps,
-      actor,
-      computer,
-      'printf \'paint:%s ff:%s up:%s names:%s log:%s\\n\' "$(cat /tmp/rakazo-paint 2>/dev/null)" "$(command -v firefox-esr || command -v firefox || echo missing)" "$(pgrep -x firefox-esr >/dev/null && echo ff || echo none)" "$(DISPLAY=:0 xdotool search --name . 2>/dev/null | head -6 | while read -r id; do xdotool getwindowname "$id" 2>/dev/null | tr \'\\n\' \' \'; done)" "$(tail -c 120 /tmp/rakazo-firefox.log 2>/dev/null | tr \'\\n\' \' \')"',
-    ).catch(() => "");
-    console.info(
-      "link builder screen browser",
-      `display=${display}`,
-      `windows=${titles.length}`,
-      persona ? "persona" : "desktop",
-      launched ? "opened" : "raised",
-      `paint=${paint.replace(/\s+/g, " ").trim().slice(0, 360) || "unknown"}`,
-    );
-    if (!persona && !held.includes("held") && !titlesShowSignupForm(titles) && onProblem(titles)) {
-      await runDesktop(deps, actor, computer, forumResultClickCommand(display)).catch(
-        () => undefined,
-      );
-    }
-    if (query && desktopShowsProblemSearch(titles, query, shops)) {
-      await noteDesktopSearch(deps, actor, project.id, query);
-    }
-  } catch (error) {
-    console.error("link builder screen", "forum search", publicScreenError(error));
-  }
-}
-
-/** A blank desktop or a new tab. A forum page is not a shell, so the search URL stays out of the bar. */
-function titlesLookLikeShell(titles: readonly string[]): boolean {
-  if (titles.length === 0) return true;
-  return titles.every((title) =>
-    /xfce|xfwm|thunar|screensaver|desktop|^home$|^new tab$|^mozilla firefox$|^firefox$/i.test(
-      title.trim(),
-    ),
-  );
-}
-
-/** The signup form is the active page. Do not type a URL, resize, or relaunch over it. */
-function titlesShowSignupForm(titles: readonly string[]): boolean {
-  return titles.some((title) =>
-    /registrier|anmeld|sign[\s-]*up|create account|konto erstellen/i.test(title),
-  );
-}
-
-/** The link-builder persona browser is already on this display. Replacing it would close the registration. */
-async function personaBrowserOwnsDesktop(
-  deps: ProjectScreenDeps,
-  actor: Actor,
-  computer: TeamComputer,
-): Promise<boolean> {
-  try {
-    const out = await runDesktop(
-      deps,
-      actor,
-      computer,
-      "pgrep -f '[r]akazo-lb-browser' >/dev/null && printf '%s\\n' runner || true",
-    );
-    return out.includes("runner");
-  } catch {
-    return false;
-  }
-}
-
-async function visibleTitles(
-  deps: ProjectScreenDeps,
-  actor: Actor,
-  computer: TeamComputer,
-  display: string,
-): Promise<string[]> {
-  try {
-    const listed = await runDesktop(deps, actor, computer, listVisibleWindowsCommand(display));
-    return parseVisibleWindows(listed).flatMap((window) => (window.title ? [window.title] : []));
-  } catch {
-    return [];
-  }
-}
-
-/** Put the search URL in the address bar when Chrome opened on a welcome or blank tab. */
-function typeSearchUrlCommand(display: string, url: string): string {
-  const quotedDisplay = `'${display.replace(/'/g, `'"'"'`)}'`;
-  const quotedUrl = `'${url.replace(/'/g, `'"'"'`)}'`;
-  return [
-    `export DISPLAY=${quotedDisplay}`,
-    "id=$(xdotool search --onlyvisible --class google-chrome 2>/dev/null | awk 'NR==1{print; exit}')",
-    "if [ -z \"$id\" ]; then id=$(xdotool search --onlyvisible --class Chromium 2>/dev/null | awk 'NR==1{print; exit}'); fi",
-    "if [ -z \"$id\" ]; then id=$(xdotool search --onlyvisible --class firefox-esr 2>/dev/null | awk 'NR==1{print; exit}'); fi",
-    "if [ -z \"$id\" ]; then id=$(xdotool search --onlyvisible --class Firefox-esr 2>/dev/null | awk 'NR==1{print; exit}'); fi",
-    "if [ -z \"$id\" ]; then id=$(xdotool search --onlyvisible --class firefox 2>/dev/null | awk 'NR==1{print; exit}'); fi",
-    'if [ -z "$id" ]; then exit 0; fi',
-    'xdotool windowactivate --sync "$id"',
-    "sleep 0.2",
-    "xdotool key ctrl+l",
-    "sleep 0.15",
-    `xdotool type --delay 1 -- ${quotedUrl}`,
-    "xdotool key Return",
-    "sleep 2",
-  ].join("\n");
-}
-
-/** Count the search once the Google results page is actually on the computer. */
-async function noteDesktopSearch(
-  deps: ProjectScreenDeps,
-  actor: Actor,
-  projectId: string,
-  query: string,
-): Promise<void> {
-  const create = deps.prisma.lbCostEntry?.create;
-  if (!create) return;
-  const now = new Date();
-  const day = now.toISOString().slice(0, 10);
-  try {
-    await create({
-      data: {
-        workspaceId: actor.workspaceId,
-        projectId,
-        kind: "search_query",
-        quantity: 1,
-        sourceKey: `desktop-google:${projectId}:${day}`,
-        occurredAt: now,
-      },
-    });
-  } catch (error) {
-    const code = typeof error === "object" && error && "code" in error ? error.code : "";
-    if (code !== "P2002") throw error;
-  }
-  const run = await deps.prisma.lbRun?.findFirst?.({
-    where: { projectId, workspaceId: actor.workspaceId },
-    orderBy: { date: "desc" },
-    select: { id: true, lastAction: true },
-  });
-  const line = searchedGoogleLine(query);
-  const current = run?.lastAction ?? "";
-  const replace =
-    !current ||
-    isCannedResearchLine(current) ||
-    isStaleResearchLine(current) ||
-    /^opened google search$/i.test(current) ||
-    /google/i.test(current);
-  if (!run || !replace || current === line) return;
-  await deps.prisma.lbRun.update({
-    where: { id: run.id },
-    data: { lastAction: line },
-  });
-}
-
-async function runDesktop(
-  deps: ProjectScreenDeps,
-  actor: Actor,
-  computer: TeamComputer,
-  script: string,
-): Promise<string> {
-  let stdout = "";
-  const events = deps.sandbox.execute(
-    toComputerRef(computer),
-    { argv: ["bash", "-lc", script], timeoutMs: 45_000 },
-    screenContext(actor, undefined, new AbortController().signal),
-  );
-  for await (const event of events) {
-    if (event.type === "stdout") stdout += event.data;
-    if (event.type === "exit" && event.code !== 0) throw new Error("desktop command failed");
-  }
-  return stdout;
 }
 
 function startDeadline(ms: number, message: string) {

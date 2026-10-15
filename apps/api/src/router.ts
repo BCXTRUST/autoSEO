@@ -30,6 +30,7 @@ import {
   createVoiceProvider,
   destroyBot,
   displayBotWorkspacePath,
+  type E2BFleet,
   type EncryptedSecretStore,
   enqueueTakeoverContinuation,
   expireComputerControl,
@@ -342,6 +343,8 @@ export interface RouterDeps {
   /** Billing stub. Absent means the static starter plan. */
   plan?: PlanProvider;
   dataDir: string;
+  /** Set when E2B_API_KEY is present. The screen route only reads this fleet. */
+  fleet?: E2BFleet;
   env: {
     defaultProvider: string;
     defaultModel: string;

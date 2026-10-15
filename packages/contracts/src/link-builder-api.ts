@@ -429,6 +429,7 @@ export const linkBuilderContract = {
       z.object({
         url: z.string().nullable(),
         error: z.string().nullable(),
+        state: z.enum(["off", "starting", "no_browser", "live"]).optional(),
       }),
     ),
     seedDemo: oc.output(LbProjectDetailSchema),

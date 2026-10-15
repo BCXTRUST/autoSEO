@@ -262,8 +262,10 @@ export async function createApp(
           )
         : undefined;
 
+  const fleet = process.env.E2B_API_KEY ? createE2BFleet(process.env.E2B_API_KEY) : undefined;
   const router = createRouter({
     prisma,
+    fleet,
     events,
     auth,
     jobs,
@@ -400,13 +402,11 @@ export async function createApp(
   });
   mountOpsRoutes(app, {
     prisma,
-    fleet: process.env.E2B_API_KEY
-      ? createE2BFleet(process.env.E2B_API_KEY)
-      : {
-          listComputers: async () => [],
-          info: async () => null,
-          kill: async () => false,
-        },
+    fleet: fleet ?? {
+      listComputers: async () => [],
+      info: async () => null,
+      kill: async () => false,
+    },
   });
   app.get("/health", (c) =>
     c.json({
