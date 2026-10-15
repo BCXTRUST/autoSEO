@@ -2,7 +2,13 @@ import type { E2BFleet } from "@rakazo/adapters";
 import type { PrismaClient } from "@rakazo/db";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
-import { mountOpsRoutes, type OpsDeps, stopEverything } from "./ops.js";
+import {
+  mountOpsRoutes,
+  type OpsDeps,
+  resetE2BTemplateBuildForTests,
+  setE2BTemplateBuildForTests,
+  stopEverything,
+} from "./ops.js";
 
 const RIGHT = "0123456789abcdef0123456789abcdef";
 
@@ -221,6 +227,99 @@ describe("ops routes", () => {
       expect(stoppedBody).not.toContain(RIGHT);
     } finally {
       restore();
+    }
+  });
+
+  it("builds the browser template in the background and redacts secrets from logs", async () => {
+    resetE2BTemplateBuildForTests();
+    const calls: Recorded[] = [];
+    const deps = {
+      prisma: recordingPrisma(calls),
+      fleet: recordingFleet(calls, [[]]),
+    };
+    const app = appFor(deps);
+    let finish: (() => void) | undefined;
+    let fail: ((error: Error) => void) | undefined;
+    const seen: Array<Record<string, unknown>> = [];
+    setE2BTemplateBuildForTests((_template, options) => {
+      seen.push({ ...options, onBuildLogs: undefined });
+      options.onBuildLogs?.({
+        message: `using ${process.env.E2B_API_KEY}`,
+        timestamp: new Date(),
+        level: "info",
+      } as never);
+      return new Promise((resolve, reject) => {
+        finish = () => resolve(undefined);
+        fail = reject;
+      });
+    });
+    const savedToken = process.env.OPS_TOKEN;
+    const savedKey = process.env.E2B_API_KEY;
+    process.env.OPS_TOKEN = RIGHT;
+    process.env.E2B_API_KEY = "e2b-secret-value-not-for-output";
+    try {
+      const denied = await app.request("/api/ops/e2b-template");
+      expect(denied.status).toBe(401);
+
+      const started = await app.request("/api/ops/e2b-template", {
+        method: "POST",
+        headers: { authorization: `Bearer ${RIGHT}` },
+      });
+      expect(started.status).toBe(200);
+      expect(await started.json()).toEqual({ status: "building" });
+      expect(seen[0]).toMatchObject({
+        alias: "autoseo-browser-v1",
+        cpuCount: 2,
+        memoryMB: 4096,
+        apiKey: "e2b-secret-value-not-for-output",
+      });
+
+      const again = await app.request("/api/ops/e2b-template", {
+        method: "POST",
+        headers: { authorization: `Bearer ${RIGHT}` },
+      });
+      expect(await again.json()).toEqual({ status: "building" });
+      expect(seen).toHaveLength(1);
+
+      const during = await app.request("/api/ops/e2b-template", {
+        headers: { authorization: `Bearer ${RIGHT}` },
+      });
+      const duringBody = await during.text();
+      assertNoSecrets(duringBody);
+      expect(duringBody).not.toContain("e2b-secret-value-not-for-output");
+      expect(JSON.parse(duringBody)).toMatchObject({
+        status: "building",
+        logs: ["using [redacted]"],
+      });
+
+      finish?.();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const ready = await app.request("/api/ops/e2b-template", {
+        headers: { authorization: `Bearer ${RIGHT}` },
+      });
+      expect(await ready.json()).toMatchObject({ status: "ready" });
+
+      resetE2BTemplateBuildForTests();
+      setE2BTemplateBuildForTests(() => Promise.reject(new Error("build broke")));
+      const failing = await app.request("/api/ops/e2b-template", {
+        method: "POST",
+        headers: { authorization: `Bearer ${RIGHT}` },
+      });
+      expect(failing.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const errored = await app.request("/api/ops/e2b-template", {
+        headers: { authorization: `Bearer ${RIGHT}` },
+      });
+      const erroredBody = await errored.text();
+      assertNoSecrets(erroredBody);
+      expect(JSON.parse(erroredBody).status).toBe("error");
+      expect(fail).toBeTypeOf("function");
+    } finally {
+      resetE2BTemplateBuildForTests();
+      if (savedToken === undefined) delete process.env.OPS_TOKEN;
+      else process.env.OPS_TOKEN = savedToken;
+      if (savedKey === undefined) delete process.env.E2B_API_KEY;
+      else process.env.E2B_API_KEY = savedKey;
     }
   });
 });

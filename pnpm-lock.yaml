@@ -63,6 +63,9 @@ importers:
       '@rakazo/memory':
         specifier: workspace:*
         version: link:../../packages/memory
+      e2b:
+        specifier: 2.38.3
+        version: 2.38.3
       hono:
         specifier: ^4.9.6
         version: 4.13.1
@@ -372,6 +375,12 @@ importers:
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
+
+  infra/sandboxes/e2b-browser:
+    dependencies:
+      e2b:
+        specifier: 2.38.3
+        version: 2.38.3
 
   infra/sandboxes/supervisor:
     dependencies:

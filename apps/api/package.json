@@ -28,6 +28,7 @@
     "@rakazo/db": "workspace:*",
     "@rakazo/linkbuilder-core": "workspace:*",
     "@rakazo/memory": "workspace:*",
+    "e2b": "2.38.3",
     "hono": "^4.9.6"
   },
   "devDependencies": {

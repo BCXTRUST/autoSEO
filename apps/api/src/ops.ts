@@ -1,7 +1,9 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { type E2BFleet, type E2BFleetComputer, sandboxIdleMs } from "@rakazo/adapters";
 import type { PrismaClient } from "@rakazo/db";
+import { type BuildOptions, type LogEntry, Template } from "e2b";
 import type { Hono } from "hono";
+import { autoseoBrowserTemplate } from "../../../infra/sandboxes/e2b-browser/template.js";
 
 export interface OpsDeps {
   prisma: PrismaClient;
@@ -170,6 +172,91 @@ function opsStatus(header: string | undefined): 200 | 401 | 404 {
   return 200;
 }
 
+const SECRET_NAME = /KEY|SECRET|TOKEN|PASSWORD|DATABASE_URL/;
+const TEMPLATE_LOG_LIMIT = 200;
+
+export type E2BTemplateBuildStatus = "idle" | "building" | "ready" | "error";
+
+export interface E2BTemplateBuildSnapshot {
+  status: E2BTemplateBuildStatus;
+  logs: string[];
+}
+
+type TemplateBuild = (
+  template: ReturnType<typeof autoseoBrowserTemplate>,
+  options: BuildOptions,
+) => Promise<unknown>;
+
+const templateBuild: E2BTemplateBuildSnapshot = { status: "idle", logs: [] };
+
+function defaultTemplateBuild(
+  template: ReturnType<typeof autoseoBrowserTemplate>,
+  options: BuildOptions,
+): Promise<unknown> {
+  return Template.build(template, options);
+}
+
+let templateBuildImpl: TemplateBuild = defaultTemplateBuild;
+
+export function redactOpsSecrets(line: string, env: NodeJS.ProcessEnv = process.env): string {
+  let redacted = line;
+  for (const [name, value] of Object.entries(env)) {
+    if (!value || value.length < 8 || !SECRET_NAME.test(name)) continue;
+    redacted = redacted.split(value).join("[redacted]");
+  }
+  return redacted;
+}
+
+function appendTemplateLog(line: string): void {
+  templateBuild.logs.push(redactOpsSecrets(line));
+  if (templateBuild.logs.length > TEMPLATE_LOG_LIMIT) {
+    templateBuild.logs.splice(0, templateBuild.logs.length - TEMPLATE_LOG_LIMIT);
+  }
+}
+
+export function e2bTemplateBuildSnapshot(): E2BTemplateBuildSnapshot {
+  return { status: templateBuild.status, logs: [...templateBuild.logs] };
+}
+
+export function resetE2BTemplateBuildForTests(): void {
+  templateBuild.status = "idle";
+  templateBuild.logs = [];
+  templateBuildImpl = defaultTemplateBuild;
+}
+
+export function setE2BTemplateBuildForTests(build: TemplateBuild): void {
+  templateBuildImpl = build;
+}
+
+export function startE2BTemplateBuild(): { status: E2BTemplateBuildStatus } {
+  if (templateBuild.status === "building") return { status: "building" };
+  templateBuild.status = "building";
+  templateBuild.logs = [];
+  const apiKey = process.env.E2B_API_KEY;
+  try {
+    const pending = templateBuildImpl(autoseoBrowserTemplate(), {
+      alias: "autoseo-browser-v1",
+      cpuCount: 2,
+      memoryMB: 4096,
+      apiKey,
+      onBuildLogs: (entry: LogEntry) => appendTemplateLog(entry.message),
+    });
+    void Promise.resolve(pending).then(
+      () => {
+        if (templateBuild.status === "building") templateBuild.status = "ready";
+      },
+      (error: unknown) => {
+        templateBuild.status = "error";
+        appendTemplateLog(error instanceof Error ? error.message : "template build failed");
+      },
+    );
+  } catch (error) {
+    templateBuild.status = "error";
+    appendTemplateLog(error instanceof Error ? error.message : "template build failed");
+  }
+  return { status: templateBuild.status };
+}
+
 export function mountOpsRoutes(app: Hono, deps: OpsDeps): void {
   app.get("/api/ops/state", async (c) => {
     const status = opsStatus(c.req.header("authorization"));
@@ -188,5 +275,17 @@ export function mountOpsRoutes(app: Hono, deps: OpsDeps): void {
     if (status !== 200)
       return c.json({ error: status === 404 ? "not found" : "unauthorized" }, status);
     return c.json(await stopEverything(deps));
+  });
+  app.post("/api/ops/e2b-template", (c) => {
+    const status = opsStatus(c.req.header("authorization"));
+    if (status !== 200)
+      return c.json({ error: status === 404 ? "not found" : "unauthorized" }, status);
+    return c.json(startE2BTemplateBuild());
+  });
+  app.get("/api/ops/e2b-template", (c) => {
+    const status = opsStatus(c.req.header("authorization"));
+    if (status !== 200)
+      return c.json({ error: status === 404 ? "not found" : "unauthorized" }, status);
+    return c.json(e2bTemplateBuildSnapshot());
   });
 }
