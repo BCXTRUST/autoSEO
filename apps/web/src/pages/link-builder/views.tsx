@@ -21,7 +21,7 @@ import {
   WORK_STAGE_LABELS,
   WORK_STAGES,
 } from "@rakazo/linkbuilder-core";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BuiButton,
   BuiCard,
@@ -46,6 +46,7 @@ import {
   warmupNote,
   wizardStepIssues,
 } from "./model.js";
+import { BrowserOnlyFrame } from "./browser-only-frame.js";
 import {
   cornerLabel,
   dashboardSummary,
@@ -916,6 +917,14 @@ function ComputerPane({
   const label = action || WORK_STAGE_LABELS[stage];
   const stageIndex = WORK_STAGES.indexOf(stage);
   const session = frame ? "open" : "closed";
+  const [stripStatus, setStripStatus] = useState<string | null>(null);
+  const onPaneStatus = useCallback((status: string | null) => {
+    setStripStatus(status);
+  }, []);
+  const frameUrl = frame?.kind === "url" ? frame.url : "";
+  useEffect(() => {
+    setStripStatus(null);
+  }, [frameUrl]);
   return (
     <section
       aria-label="Computer"
@@ -951,20 +960,25 @@ function ComputerPane({
             );
           })}
         </ol>
+        {stripStatus ? (
+          <span
+            data-live-status="strip"
+            className="shrink-0 font-mono text-[11px] leading-none tracking-[0.04em] text-[#C8C4B8]"
+          >
+            {stripStatus}
+          </span>
+        ) : null}
         <span className="hidden shrink-0 sm:flex">
           <PixelTrail live={working && session === "closed"} />
         </span>
       </div>
       <div className="relative min-h-0 flex-1">
         {frame?.kind === "url" ? (
-          <iframe
-            key={frame.url}
+          <BrowserOnlyFrame
+            url={watchingFrameSrc(frame.url)}
             title="Computer"
-            src={watchingFrameSrc(frame.url)}
-            className="absolute inset-0 h-full w-full border-0 bg-black"
             sandbox={computerFrameSandbox(frame.url)}
-            allow="fullscreen"
-            style={{ pointerEvents: "none" }}
+            onStatus={onPaneStatus}
           />
         ) : (
           <WorkingScreen

@@ -198,6 +198,8 @@ describe("link builder screens", () => {
     expect(watchingFrameSrc(stream)).toContain("reconnect=true");
     expect(watchingFrameSrc(stream)).toContain("path=novnc%2Fremote%2Fview%2F9.abc%2Fwebsockify");
     expect(html).toContain('title="Computer"');
+    expect(html).toContain('data-desktop="hidden"');
+    expect(html).toContain('data-live-pane="dark"');
     expect(html).toContain("allow-scripts allow-same-origin");
     expect(html).not.toContain("No session");
     const failed = renderToStaticMarkup(
