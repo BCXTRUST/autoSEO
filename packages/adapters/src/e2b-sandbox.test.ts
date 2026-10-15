@@ -1,7 +1,7 @@
 import { type Sandbox, TimeoutError } from "@e2b/desktop";
 import { describe, expect, it, vi } from "vitest";
 import { shouldSkipPortableWorkspaceFile } from "./computer-workspace.js";
-import { E2BSandboxProvider, type E2BSandboxSdk } from "./e2b-sandbox.js";
+import { E2BSandboxProvider, type E2BSandboxSdk, e2bCreateOptions } from "./e2b-sandbox.js";
 
 const context = {
   operationId: "e2b-test",
@@ -12,6 +12,28 @@ const context = {
 };
 
 describe("E2B computer backend", () => {
+  it("kills a sandbox at the hard timeout instead of pausing it", () => {
+    const previousTemplate = process.env.E2B_TEMPLATE;
+    const previousHard = process.env.SANDBOX_HARD_TIMEOUT_MS;
+    delete process.env.E2B_TEMPLATE;
+    delete process.env.SANDBOX_HARD_TIMEOUT_MS;
+    try {
+      const options = e2bCreateOptions("bot-1", "test-key");
+      expect(options.timeoutMs).toBe(300000);
+      expect(options.lifecycle.onTimeout).toBe("kill");
+      expect(options.metadata).toMatchObject({
+        botId: "bot-1",
+        rakazo: "computer",
+        template: "desktop",
+      });
+    } finally {
+      if (previousTemplate === undefined) delete process.env.E2B_TEMPLATE;
+      else process.env.E2B_TEMPLATE = previousTemplate;
+      if (previousHard === undefined) delete process.env.SANDBOX_HARD_TIMEOUT_MS;
+      else process.env.SANDBOX_HARD_TIMEOUT_MS = previousHard;
+    }
+  });
+
   it("only filters transient cache files inside portable browser profiles", () => {
     expect(shouldSkipPortableWorkspaceFile("project/Cache/important.txt")).toBe(false);
     expect(shouldSkipPortableWorkspaceFile("project/lock")).toBe(false);

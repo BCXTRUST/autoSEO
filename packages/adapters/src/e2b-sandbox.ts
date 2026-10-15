@@ -28,7 +28,7 @@ import {
   parseVisibleWindows,
   repairDesktopDisplayCommand,
 } from "@rakazo/core";
-import { sandboxIdleMs } from "./computer-idle.js";
+import { sandboxHardTimeoutMs, sandboxIdleMs } from "./computer-idle.js";
 import { ComputerScreenUnavailableError, screenSessionKey } from "./computer-screens.js";
 import {
   boundedComputerActions,
@@ -94,13 +94,17 @@ function commandFailure(
   };
 }
 
+export function e2bTemplate(): string {
+  return process.env.E2B_TEMPLATE?.trim() || "desktop";
+}
+
 export function e2bCreateOptions(botId: string, apiKey: string) {
   return {
     apiKey,
-    timeoutMs: sandboxIdleMs(),
-    metadata: { botId, rakazo: "computer" },
+    timeoutMs: sandboxHardTimeoutMs(),
+    metadata: { botId, rakazo: "computer", template: e2bTemplate() },
     resolution: [1280, 800] as [number, number],
-    lifecycle: { onTimeout: "pause" as const, autoResume: false },
+    lifecycle: { onTimeout: "kill" as const, autoResume: false },
   };
 }
 
@@ -197,14 +201,14 @@ export class E2BSandboxProvider implements SandboxProvider {
     if (existing) {
       const lastTouched = this.lastTouchedAt.get(id) ?? 0;
       if (Date.now() - lastTouched >= 60_000) {
-        await existing.setTimeout(sandboxIdleMs()).catch(() => undefined);
+        await existing.setTimeout(sandboxHardTimeoutMs()).catch(() => undefined);
         this.lastTouchedAt.set(id, Date.now());
       }
       return existing;
     }
     const connected = await this.sdk.connect(id, {
       apiKey: this.apiKey,
-      timeoutMs: sandboxIdleMs(),
+      timeoutMs: sandboxHardTimeoutMs(),
     });
     this.boxes.set(connected.sandboxId, connected);
     this.lastTouchedAt.set(connected.sandboxId, Date.now());
@@ -642,7 +646,7 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   async keepAlive(computer: ComputerRef): Promise<void> {
     const desktop = await this.box(computer);
-    await desktop.setTimeout(sandboxIdleMs()).catch(() => undefined);
+    await desktop.setTimeout(sandboxHardTimeoutMs()).catch(() => undefined);
     this.lastTouchedAt.set(desktop.sandboxId, Date.now());
   }
 

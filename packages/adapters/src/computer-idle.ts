@@ -11,10 +11,16 @@ import { toComputerRef } from "./computer-lifecycle.js";
 import { checkpointComputerWorkspace } from "./computer-workspace.js";
 
 export const DEFAULT_SANDBOX_IDLE_MS = 10 * 60 * 1000;
+export const DEFAULT_SANDBOX_HARD_TIMEOUT_MS = 300_000;
 
 export function sandboxIdleMs(): number {
   const raw = Number(process.env.SANDBOX_IDLE_MS ?? DEFAULT_SANDBOX_IDLE_MS);
   return Number.isFinite(raw) && raw >= 30_000 ? raw : DEFAULT_SANDBOX_IDLE_MS;
+}
+
+export function sandboxHardTimeoutMs(): number {
+  const raw = Number(process.env.SANDBOX_HARD_TIMEOUT_MS ?? DEFAULT_SANDBOX_HARD_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw >= 120_000 ? raw : DEFAULT_SANDBOX_HARD_TIMEOUT_MS;
 }
 
 export function scheduleComputerSleep(jobs: JobPublisher, computerId: string): void {

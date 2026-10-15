@@ -115,11 +115,19 @@ describe("sandbox idle", () => {
 });
 
 describe("e2b create options", () => {
-  it("pauses on timeout instead of killing the sandbox", () => {
-    const opts = e2bCreateOptions("bot-1", "e2b_test");
-    expect(opts.lifecycle).toEqual({ onTimeout: "pause", autoResume: false });
-    expect(opts.timeoutMs).toBe(sandboxIdleMs());
-    expect(opts.metadata.botId).toBe("bot-1");
+  it("kills on timeout instead of pausing the sandbox", () => {
+    const previous = process.env.SANDBOX_HARD_TIMEOUT_MS;
+    delete process.env.SANDBOX_HARD_TIMEOUT_MS;
+    try {
+      const opts = e2bCreateOptions("bot-1", "e2b_test");
+      expect(opts.lifecycle).toEqual({ onTimeout: "kill", autoResume: false });
+      expect(opts.timeoutMs).toBe(300000);
+      expect(opts.metadata.botId).toBe("bot-1");
+      expect(opts.metadata.template).toBe("desktop");
+    } finally {
+      if (previous === undefined) delete process.env.SANDBOX_HARD_TIMEOUT_MS;
+      else process.env.SANDBOX_HARD_TIMEOUT_MS = previous;
+    }
   });
 
   it("only recreates when the sandbox is actually gone", () => {
