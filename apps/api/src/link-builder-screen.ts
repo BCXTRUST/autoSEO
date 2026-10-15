@@ -15,6 +15,7 @@ import {
 } from "@rakazo/adapters";
 import type { Actor } from "@rakazo/contracts";
 import {
+  browserProcessCommand,
   browserWindowPresentCommand,
   chromeKioskStampCommand,
   detachedBrowserCommand,
@@ -433,8 +434,11 @@ async function showForumSearch(
       () => "",
     );
     const browserUp = present.includes("browser");
+    const starting = await runDesktop(deps, actor, computer, browserProcessCommand()).catch(
+      () => "",
+    );
     let launched = false;
-    if (!persona && !(browserUp && stamp.includes("ok"))) {
+    if (!persona && !(browserUp && stamp.includes("ok")) && !starting.includes("ff-up")) {
       await runDesktop(deps, actor, computer, prepareKioskDesktopCommand(display));
       await runDesktop(deps, actor, computer, detachedBrowserCommand(display, url));
       launched = true;
@@ -468,7 +472,7 @@ async function showForumSearch(
       deps,
       actor,
       computer,
-      "printf 'paint:%s names:%s\\n' \"$(cat /tmp/rakazo-paint 2>/dev/null)\" \"$(DISPLAY=:0 xdotool search --name . 2>/dev/null | head -5 | while read -r id; do xdotool getwindowname \"$id\" 2>/dev/null | tr '\\n' ' '; done)\"",
+      "printf 'paint:%s ff:%s up:%s names:%s\\n' \"$(cat /tmp/rakazo-paint 2>/dev/null)\" \"$(command -v firefox-esr || command -v firefox || echo missing)\" \"$(pgrep -x firefox-esr >/dev/null && echo ff || echo none)\" \"$(DISPLAY=:0 xdotool search --name . 2>/dev/null | head -5 | while read -r id; do xdotool getwindowname \"$id\" 2>/dev/null | tr '\\n' ' '; done)\"",
     ).catch(() => "");
     console.info(
       "link builder screen browser",

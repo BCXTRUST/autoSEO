@@ -63,6 +63,7 @@ describe("computer desktop window helpers", () => {
     );
     expect(command).toContain("--kiosk");
     expect(command).toContain("exec /usr/bin/google-chrome");
+    expect(command).toContain("firefox-esr");
     expect(command).toContain("firefox --kiosk");
     expect(command).not.toContain(">/tmp/rakazo-browser.log");
     expect(command.trimEnd().endsWith("&")).toBe(false);
@@ -103,6 +104,7 @@ describe("computer desktop window helpers", () => {
     expect(command).toContain("translate_blocked_languages");
     expect(command).toContain("app_locale");
     expect(command).toContain("--disable-gpu");
+    expect(command).toContain("/usr/bin/firefox-esr");
     expect(command).toContain("exec firefox --kiosk");
     expect(command).toContain("--ozone-platform=x11");
     expect(command).not.toContain("VizDisplayCompositor");
