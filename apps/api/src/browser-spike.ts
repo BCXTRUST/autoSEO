@@ -33,7 +33,12 @@ const SPIKE_CONTEXT: AdapterContext = {
 };
 
 export function chromiumWindowAtOrigin(tree: string): boolean {
-  return /1280x800\+0\+0/.test(tree) && /chromium/i.test(tree);
+  return tree.split("\n").some((line) => {
+    if (!/chromium/i.test(line)) return false;
+    const size = line.match(/(\d+)x(\d+)\+0\+0/);
+    if (!size) return false;
+    return Number(size[1]) >= 1270 && Number(size[2]) >= 790;
+  });
 }
 
 export function ppmMean(bytes: Uint8Array): number | null {
@@ -176,11 +181,20 @@ export async function runBrowserSpike(env: NodeJS.ProcessEnv = process.env): Pro
       await ensureBrowserRunner(desktop);
     },
     async openExample() {
-      const session = await factory.open(SPIKE_PERSONA, SPIKE_CONTEXT);
       try {
-        await session.goto("https://example.org/");
-      } finally {
-        await session.close().catch(() => undefined);
+        const session = await factory.open(SPIKE_PERSONA, SPIKE_CONTEXT);
+        try {
+          await session.goto("https://example.org/");
+        } finally {
+          await session.close().catch(() => undefined);
+        }
+      } catch (error) {
+        const log = await desktop.commands
+          .run("tail -n 40 /tmp/rakazo-lb/spike.json.log", { timeoutMs: 30_000 })
+          .catch(() => ({ stdout: "" }));
+        const text = typeof log.stdout === "string" ? log.stdout : "";
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${message}\nrunner log:\n${text}`);
       }
     },
     async kill() {

@@ -19,8 +19,13 @@ describe("autoseo browser template", () => {
     expect(serialized).toContain("netcat-openbsd");
     expect(serialized).toContain("de_DE.UTF-8");
     expect(serialized).toContain("setup_22.x");
-    expect(serialized).toContain("playwright@1.62.1");
-    expect(serialized).toContain("install --with-deps chromium");
+    expect(serialized).toContain(
+      "mkdir -p /home/user/.autoseo && cd /home/user/.autoseo && npm install --no-save --no-package-lock playwright@1.62.1 && chown -R user:user /home/user/.autoseo",
+    );
+    expect(serialized).toContain(
+      "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright /home/user/.autoseo/node_modules/.bin/playwright install --with-deps chromium && chmod -R a+rX /ms-playwright",
+    );
+    expect(serialized).not.toContain("npmInstall");
     expect(serialized).toContain("/opt/autoseo/start.sh");
     expect(serialized).toContain("/tmp/autoseo-display-ready");
   });

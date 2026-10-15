@@ -17,7 +17,13 @@ describe("browser spike checks", () => {
     expect(chromiumWindowAtOrigin('0x1 "Example - Chromium": ("chromium") 1280x800+0+0')).toBe(
       true,
     );
+    expect(
+      chromiumWindowAtOrigin(
+        '0x200003 "Example Domain - Google Chrome for Testing": ("chromium-browser (/home/user/.browser-profiles/spike)" "Chromium-browser")  1279x799+0+0  +0+0',
+      ),
+    ).toBe(true);
     expect(chromiumWindowAtOrigin("1280x800+10+0 chromium")).toBe(false);
+    expect(chromiumWindowAtOrigin("1288x991+10+10")).toBe(false);
     expect(ppmMean(ppm([20, 20, 20]))).toBe(20);
     expect(ppmMean(ppm([0, 0, 0]))).toBe(0);
   });

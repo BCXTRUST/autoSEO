@@ -72,8 +72,9 @@ const E2B_BROWSER_PROFILES = `${E2B_WORKSPACE}/.browser-profiles`;
 const RUNNER_BUNDLE = "/home/user/.autoseo/rakazo-lb-browser.cjs";
 const RUNNER_HASH = "/home/user/.autoseo/runner.sha256";
 const RUNNER_WRAPPER = "/home/user/.autoseo/bin/rakazo-lb-browser";
-const RUNNER_WRAPPER_SCRIPT = `#!/bin/sh
-export NODE_PATH="$(npm root -g)"
+export const RUNNER_WRAPPER_SCRIPT = `#!/bin/sh
+export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+export LINK_BUILDER_BROWSER_ENGINE=playwright
 exec node /home/user/.autoseo/rakazo-lb-browser.cjs "$@"
 `;
 

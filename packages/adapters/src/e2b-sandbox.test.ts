@@ -9,6 +9,7 @@ import {
   type E2BSandboxSdk,
   e2bCreateOptions,
   ensureBrowserRunner,
+  RUNNER_WRAPPER_SCRIPT,
 } from "./e2b-sandbox.js";
 
 const context = {
@@ -937,6 +938,12 @@ describe("E2B sandbox liveness", () => {
 });
 
 describe("autoseo browser runner", () => {
+  it("starts the runner with the shared browser path and local playwright", () => {
+    expect(RUNNER_WRAPPER_SCRIPT).toContain("export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright");
+    expect(RUNNER_WRAPPER_SCRIPT).toContain("export LINK_BUILDER_BROWSER_ENGINE=playwright");
+    expect(RUNNER_WRAPPER_SCRIPT).not.toContain("NODE_PATH");
+  });
+
   it("does not call the desktop SDK create for autoseo-browser-v1", async () => {
     const previous = process.env.E2B_TEMPLATE;
     delete process.env.E2B_TEMPLATE;
