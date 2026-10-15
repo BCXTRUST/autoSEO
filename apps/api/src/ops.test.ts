@@ -206,6 +206,7 @@ describe("ops routes", () => {
         search: "dataforseo",
         sandboxProvider: "e2b",
         template: "desktop",
+        idleMs: 120000,
       });
       expect(json.hosts).toEqual([{ domain: "forum.example", status: "active", logins: 1 }]);
       expect(json.computers[0]?.browserSeenAt).toBeNull();

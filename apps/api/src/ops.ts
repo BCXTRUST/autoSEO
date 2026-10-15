@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import type { E2BFleet, E2BFleetComputer } from "@rakazo/adapters";
+import { type E2BFleet, type E2BFleetComputer, sandboxIdleMs } from "@rakazo/adapters";
 import type { PrismaClient } from "@rakazo/db";
 import type { Hono } from "hono";
 
@@ -30,6 +30,7 @@ export interface OpsState {
     search: string | null;
     sandboxProvider: string | null;
     template: string | null;
+    idleMs: number;
   };
   hosts?: Array<{ domain: string; status: string; logins: number }>;
 }
@@ -64,6 +65,7 @@ export function opsConfig(env: NodeJS.ProcessEnv): OpsState["config"] {
     search: env.LINK_BUILDER_SEARCH?.trim() || null,
     sandboxProvider: env.SANDBOX_PROVIDER?.trim() || null,
     template: env.E2B_TEMPLATE?.trim() || null,
+    idleMs: sandboxIdleMs(),
   };
 }
 

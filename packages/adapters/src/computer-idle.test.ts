@@ -9,12 +9,12 @@ import {
 } from "./e2b-sandbox.js";
 
 describe("sandbox idle", () => {
-  it("defaults to ten minutes when SANDBOX_IDLE_MS is unset", () => {
+  it("defaults to two minutes when SANDBOX_IDLE_MS is unset", () => {
     const previous = process.env.SANDBOX_IDLE_MS;
     delete process.env.SANDBOX_IDLE_MS;
     try {
       expect(sandboxIdleMs()).toBe(DEFAULT_SANDBOX_IDLE_MS);
-      expect(DEFAULT_SANDBOX_IDLE_MS).toBe(10 * 60 * 1000);
+      expect(DEFAULT_SANDBOX_IDLE_MS).toBe(120_000);
     } finally {
       if (previous === undefined) delete process.env.SANDBOX_IDLE_MS;
       else process.env.SANDBOX_IDLE_MS = previous;
@@ -29,6 +29,7 @@ describe("sandbox idle", () => {
 
     expect(harness.home.commit).not.toHaveBeenCalled();
     expect(harness.sandbox.stop).not.toHaveBeenCalled();
+    expect(harness.sandbox.destroy).not.toHaveBeenCalled();
     expect(harness.jobs.enqueue).toHaveBeenCalledOnce();
   });
 
@@ -40,17 +41,54 @@ describe("sandbox idle", () => {
 
     expect(harness.home.commit).not.toHaveBeenCalled();
     expect(harness.sandbox.stop).not.toHaveBeenCalled();
+    expect(harness.sandbox.destroy).not.toHaveBeenCalled();
     expect(harness.jobs.enqueue).toHaveBeenCalledOnce();
   });
 
-  it("suspends the desktop between link-builder sites", async () => {
+  it("destroys an idle e2b sandbox and nulls the row", async () => {
     const harness = idleHarness();
     harness.prisma.lbProject.findFirst.mockResolvedValue({ id: "project" });
     harness.prisma.lbRun.findFirst.mockResolvedValue(null);
 
     await sleepComputerIfIdle(harness.deps, harness.computer.id);
 
+    expect(harness.sandbox.destroy).toHaveBeenCalledOnce();
+    expect(harness.sandbox.stop).not.toHaveBeenCalled();
+    expect(harness.prisma.computer.update).toHaveBeenCalledWith({
+      where: { id: harness.computer.id },
+      data: {
+        state: "stopped",
+        providerRef: null,
+        screenUrl: null,
+        browserSeenAt: null,
+        controlHolder: "none",
+        controlLeaseId: null,
+        controlLeaseExpiresAt: null,
+        controlBotId: null,
+        controlRunId: null,
+      },
+    });
+  });
+
+  it("stops a docker computer without destroying it", async () => {
+    const harness = idleHarness({ kind: "docker" });
+    harness.prisma.run.findFirst.mockResolvedValue(null);
+
+    await sleepComputerIfIdle(harness.deps, harness.computer.id);
+
     expect(harness.sandbox.stop).toHaveBeenCalledOnce();
+    expect(harness.sandbox.destroy).not.toHaveBeenCalled();
+    expect(harness.prisma.computer.update).toHaveBeenCalledWith({
+      where: { id: harness.computer.id },
+      data: {
+        state: "suspended",
+        controlHolder: "none",
+        controlLeaseId: null,
+        controlLeaseExpiresAt: null,
+        controlBotId: null,
+        controlRunId: null,
+      },
+    });
   });
 
   it("does not let an abandoned waiting takeover prevent idle suspension", async () => {
@@ -61,7 +99,8 @@ describe("sandbox idle", () => {
 
     await sleepComputerIfIdle(harness.deps, harness.computer.id);
 
-    expect(harness.sandbox.stop).toHaveBeenCalledOnce();
+    expect(harness.sandbox.destroy).toHaveBeenCalledOnce();
+    expect(harness.sandbox.stop).not.toHaveBeenCalled();
   });
 
   it("rechecks the lease boundary after checkpointing before it suspends", async () => {
@@ -84,11 +123,15 @@ describe("sandbox idle", () => {
     await sleepComputerIfIdle(harness.deps, harness.computer.id);
 
     expect(harness.home.commit).toHaveBeenCalledOnce();
-    expect(harness.sandbox.stop).toHaveBeenCalledOnce();
+    expect(harness.sandbox.destroy).toHaveBeenCalledOnce();
+    expect(harness.sandbox.stop).not.toHaveBeenCalled();
     expect(harness.prisma.computer.update).toHaveBeenCalledWith({
       where: { id: harness.computer.id },
       data: {
-        state: "suspended",
+        state: "stopped",
+        providerRef: null,
+        screenUrl: null,
+        browserSeenAt: null,
         controlHolder: "none",
         controlLeaseId: null,
         controlLeaseExpiresAt: null,
@@ -97,7 +140,7 @@ describe("sandbox idle", () => {
       },
     });
     expect(harness.events.append).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "computer.status", payload: { status: "suspended" } }),
+      expect.objectContaining({ type: "computer.status", payload: { status: "stopped" } }),
     );
   });
 
@@ -169,12 +212,12 @@ describe("e2b create options", () => {
   });
 });
 
-function idleHarness(options: { exportError?: Error } = {}) {
+function idleHarness(options: { exportError?: Error; kind?: string } = {}) {
   const computer = {
     id: "computer-id",
     homeKey: "team-workspace",
     providerRef: "computer",
-    kind: "e2b",
+    kind: options.kind ?? "e2b",
     state: "running",
     workspaceId: "workspace",
     userId: "user",
@@ -210,6 +253,7 @@ function idleHarness(options: { exportError?: Error } = {}) {
       yield { path: "notes/result.txt", content: new TextEncoder().encode("durable") };
     }),
     stop: vi.fn().mockResolvedValue(undefined),
+    destroy: vi.fn().mockResolvedValue(undefined),
   };
   const home = {
     commit: vi.fn().mockResolvedValue("rev-checkpoint"),
