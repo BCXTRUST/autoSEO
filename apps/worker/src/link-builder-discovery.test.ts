@@ -759,6 +759,7 @@ describe("discoverDueProjects", () => {
       { registrableDomain: "frauenselbsthilfe.de", status: "qualified", accounts: [] },
       { registrableDomain: "bulli-forum.com", status: "dead", accounts: [] },
       { registrableDomain: "denied.example", status: "qualified", accounts: [] },
+      { registrableDomain: "brett-1ej2xe.example", status: "qualified", accounts: [] },
     ];
     const steps: Array<{
       kind: string;
@@ -838,7 +839,7 @@ describe("discoverDueProjects", () => {
 
     steps.length = 0;
     hosts.push({
-      registrableDomain: "gartentipps.example",
+      registrableDomain: "gartentipps.de",
       status: "qualified",
       accounts: [],
     });

@@ -17,6 +17,8 @@ import {
   discoverHosts,
   discoveryDue,
   forumSearchUrl,
+  isExampleRegistrableDomain,
+  isFixtureHostDomain,
   isMailSendFailure,
   isNewSignupBannedHost,
   localDateKey,
@@ -447,6 +449,12 @@ function hostStartable(
 ): boolean {
   if (host.status === "form_not_found" || host.status === "dead") return false;
   if (!STARTABLE_HOST_STATUSES.has(host.status)) return false;
+  if (
+    isFixtureHostDomain(host.registrableDomain) ||
+    isExampleRegistrableDomain(host.registrableDomain)
+  ) {
+    return false;
+  }
   return !hostDenied(host.registrableDomain, droppedHosts(denyHosts));
 }
 
