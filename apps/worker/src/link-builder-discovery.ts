@@ -126,7 +126,7 @@ export async function discoverDueProjects(input: {
         project,
         input.now,
         message,
-        `Search failed: ${message}`.slice(0, 90),
+        `Search failed: ${message}`,
       );
       continue;
     }
@@ -208,11 +208,11 @@ async function discoveryHeld(prisma: PrismaClient, projectId: string, now: Date)
   });
   if (!run) return false;
   const newest = await prisma.lbRunStep.findFirst({
-    where: { runId: run.id },
+    where: { runId: run.id, kind: "discover", error: { not: null } },
     orderBy: { stepIndex: "desc" },
-    select: { kind: true, finishedAt: true, error: true },
+    select: { finishedAt: true },
   });
-  if (newest?.kind !== "discover" || !newest.error || !newest.finishedAt) return false;
+  if (!newest?.finishedAt) return false;
   return now.getTime() - newest.finishedAt.getTime() < DISCOVER_RETRY_MS;
 }
 
@@ -224,6 +224,9 @@ async function recordDiscoveryFailure(
   lastAction: string,
 ): Promise<void> {
   const error = message.slice(0, 500);
+  const action = lastAction.startsWith("Search failed")
+    ? `Search failed: ${message}`.slice(0, 90)
+    : lastAction;
   const run = await prisma.lbRun.findFirst({
     where: { projectId: project.id, status: { in: ["running", "overtime"] } },
     orderBy: { updatedAt: "desc" },
@@ -253,14 +256,14 @@ async function recordDiscoveryFailure(
       kind: "discover",
       hostId: null,
       error,
-      outcome: { lastAction },
+      outcome: { lastAction: action },
       startedAt: now,
       finishedAt: now,
     },
   });
   await prisma.lbRun.update({
     where: { id: run.id },
-    data: { lastAction },
+    data: { lastAction: action },
   });
 }
 

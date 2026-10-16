@@ -36,25 +36,25 @@ export const DATAFORSEO_LOCATION_CODES: Readonly<Record<string, number>> = {
 
 const ItemSchema = z.object({
   type: z.string(),
-  url: z.string().optional(),
-  title: z.string().optional(),
-  description: z.string().optional(),
-  domain: z.string().optional(),
+  url: z.string().nullish(),
+  title: z.string().nullish(),
+  description: z.string().nullish(),
+  domain: z.string().nullish(),
 });
 
 const ResponseSchema = z.object({
-  status_code: z.number().optional(),
-  status_message: z.string().optional(),
+  status_code: z.number().nullish(),
+  status_message: z.string().nullish(),
   tasks: z
     .array(
       z.object({
-        status_code: z.number().optional(),
-        status_message: z.string().optional(),
+        status_code: z.number().nullish(),
+        status_message: z.string().nullish(),
         result: z
           .array(
             z
               .object({
-                items: z.array(ItemSchema).nullable().optional(),
+                items: z.array(z.unknown()).nullish(),
               })
               .nullable(),
           )
@@ -64,6 +64,16 @@ const ResponseSchema = z.object({
     )
     .optional(),
 });
+
+/** Provider status only. Never the login, the password, or the response body. */
+export function providerStatusLine(json: unknown): string {
+  const root = recordOf(json);
+  const tasks = root && Array.isArray(root.tasks) ? root.tasks : [];
+  const task = recordOf(tasks[0]);
+  const message = statusText(task?.status_message) || statusText(root?.status_message);
+  const line = `status ${statusCode(root?.status_code)}/${statusCode(task?.status_code)}${message ? ` ${message}` : ""}`;
+  return line.slice(0, 160);
+}
 
 export class SearchProviderError extends Error {
   readonly code: "unauthorized" | "invalid" | "upstream" | "schema" | "unsupported_market";
@@ -155,17 +165,26 @@ export class DataForSeoSearchProvider implements SearchProvider {
     }
     const json = await readJson(response);
     const payload = ResponseSchema.safeParse(json);
-    if (!payload.success) throw new SearchProviderError("schema");
+    if (!payload.success) throw new SearchProviderError("schema", providerStatusLine(json));
     const task = payload.data.tasks?.[0];
     if ((payload.data.status_code && payload.data.status_code !== 20000) || !task) {
-      throw new SearchProviderError(response.status >= 500 ? "upstream" : "invalid");
+      throw new SearchProviderError(
+        response.status >= 500 ? "upstream" : "invalid",
+        providerStatusLine(json),
+      );
     }
     if (task.status_code && task.status_code !== 20000) {
-      throw new SearchProviderError(task.status_code === 40100 ? "unauthorized" : "invalid");
+      throw new SearchProviderError(
+        task.status_code === 40100 ? "unauthorized" : "invalid",
+        providerStatusLine(json),
+      );
     }
     const items = task.result?.[0]?.items ?? [];
     const results: WebSearchResult[] = [];
-    for (const item of items) {
+    for (const raw of items) {
+      const parsedItem = ItemSchema.safeParse(raw);
+      if (!parsedItem.success) continue;
+      const item = parsedItem.data;
       if (item.type !== "organic" || !item.url) continue;
       const row = WebSearchResultSchema.safeParse({
         url: item.url,
@@ -182,6 +201,19 @@ export class DataForSeoSearchProvider implements SearchProvider {
 
 export function searchFixtureKey(query: string): string {
   return createHash("sha256").update(query).digest("hex").slice(0, 16);
+}
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function statusCode(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "?";
+}
+
+function statusText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function domainOf(url: string): string {

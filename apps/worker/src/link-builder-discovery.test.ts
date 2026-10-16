@@ -56,7 +56,18 @@ describe("discoverDueProjects", () => {
         },
       },
       lbRunStep: {
-        findFirst: async () => steps.at(-1) ?? null,
+        findFirst: async (args?: { where?: { kind?: string; error?: { not: null } } }) => {
+          const kind = args?.where?.kind;
+          const requireError = Boolean(args?.where?.error);
+          for (let index = steps.length - 1; index >= 0; index -= 1) {
+            const step = steps[index];
+            if (!step) continue;
+            if (kind && step.kind !== kind) continue;
+            if (requireError && !step.error) continue;
+            return step;
+          }
+          return null;
+        },
         count: async () => steps.length,
         create: async (args: { data: (typeof steps)[number] }) => {
           steps.push(args.data);
@@ -78,6 +89,12 @@ describe("discoverDueProjects", () => {
     } satisfies SearchProvider;
 
     await discoverDueProjects({ prisma, search, now });
+    steps.push({
+      kind: "select_host",
+      error: null,
+      finishedAt: new Date(now.getTime() + 1_000),
+      outcome: { lastAction: "Skipped 8 denied forums" },
+    });
     await discoverDueProjects({
       prisma,
       search,
@@ -86,7 +103,7 @@ describe("discoverDueProjects", () => {
 
     expect(searches).toBe(1);
     expect(projectUpdates).toBe(0);
-    expect(steps).toHaveLength(1);
+    expect(steps.filter((step) => step.kind === "discover")).toHaveLength(1);
     expect(steps[0]?.kind).toBe("discover");
     expect(steps[0]?.error).toBe("upstream 401");
     expect(steps[0]?.outcome.lastAction?.startsWith("Search failed:")).toBe(true);

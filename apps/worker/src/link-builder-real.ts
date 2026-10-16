@@ -707,10 +707,18 @@ export class LinkBuilderRealRunner {
     const status = this.nextRunStatus(ctx, patch.status);
     try {
       await this.deps.prisma.$transaction(async (tx) => {
+        const current = await tx.lbRun.findUnique({
+          where: { id: ctx.run.id },
+          select: { lastAction: true },
+        });
+        const keepSearch =
+          result.lastAction.startsWith("Skipped") &&
+          current?.lastAction?.startsWith("Search failed");
+        const lastAction = keepSearch ? current.lastAction : result.lastAction;
         const fenced = await tx.lbRun.updateMany({
           where: { id: ctx.run.id, leaseOwner: this.workerId, leaseFence: fence },
           data: {
-            lastAction: result.lastAction,
+            lastAction,
             lastError: error,
             ...(status !== ctx.run.status ? { status } : {}),
             ...(counters ?? {}),

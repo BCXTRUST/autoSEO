@@ -1,4 +1,9 @@
-import type { AdapterContext, BrowserSessionFactory, ProxyEndpoint } from "@rakazo/adapter-kit";
+import type {
+  AdapterContext,
+  BrowserSessionFactory,
+  ProxyEndpoint,
+  SearchProvider,
+} from "@rakazo/adapter-kit";
 import { FakeBrowserSessionProvider, FakeCaptchaSolver } from "@rakazo/adapter-kit";
 import { EncryptedSecretStore, FakeSandboxProvider, StaticPlanProvider } from "@rakazo/adapters";
 import {
@@ -305,7 +310,7 @@ describe("recorded host skips", () => {
     await db?.close();
   });
 
-  function runner(browsers: BrowserSessionFactory) {
+  function runner(browsers: BrowserSessionFactory, search?: SearchProvider) {
     return new LinkBuilderRealRunner({
       prisma: db.prisma,
       secrets,
@@ -323,6 +328,7 @@ describe("recorded host skips", () => {
       },
       now: () => clock,
       workerId: `skip-${Math.random()}`,
+      search,
     });
   }
 
@@ -442,5 +448,36 @@ describe("recorded host skips", () => {
     const updated = await db.prisma.lbRun.findFirstOrThrow({ where: { id: run.id } });
     expect(updated.lastAction).toBe("Waiting for a site admin");
     expect(browsers.sessions).toHaveLength(0);
+  });
+
+  it("keeps a failed search line when the tick then skips denied forums", async () => {
+    const project = await startedProject("Search line", ["macuser.de", "medizin-forum.de"]);
+    await host(project.id, "macuser.de", "pending_admin");
+    await host(project.id, "medizin-forum.de", "ready");
+    const browsers = new FakeBrowserSessionProvider({});
+    const search: SearchProvider = {
+      describe: () => ({
+        id: "fake-search",
+        contractVersion: "1",
+        adapterVersion: "0",
+        capabilities: { maxDepth: 10, operators: false },
+      }),
+      search: async () => {
+        throw new Error("status 20000/40501 Invalid Field");
+      },
+    };
+    const real = runner(Object.assign(browsers, { mode: "local" as const }), search);
+    await real.tick();
+    const run = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
+    expect(run.lastAction?.startsWith("Search failed: status ")).toBe(true);
+    const steps = await skipSteps(project.id);
+    expect(steps.some((step) => step.kind === "discover")).toBe(true);
+    expect(steps.some((step) => step.kind === "select_host")).toBe(true);
+    expect(browsers.sessions).toHaveLength(0);
+    await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
+    await db.prisma.lbRun.updateMany({
+      where: { projectId: project.id },
+      data: { status: "paused" },
+    });
   });
 });
