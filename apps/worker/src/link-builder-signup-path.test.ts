@@ -365,6 +365,7 @@ describe("signup path", () => {
       storedHost({
         id: "aqua",
         registrableDomain: "aquacomputer.de",
+        accounts: [{ id: "acct-aqua" }],
         qualityScore: 1,
         createdAt: new Date("2026-10-16T12:00:00.000Z"),
       }),

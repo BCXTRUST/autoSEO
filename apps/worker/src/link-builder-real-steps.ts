@@ -539,6 +539,19 @@ function unusedQualifiedHost(
   );
 }
 
+/** A stored forum still waiting to sign up. An unfinished login row does not skip it. */
+function storedSignupTarget(
+  row: { status: string; registrableDomain: string },
+  deny: ReadonlySet<string>,
+): boolean {
+  const domain = registrableKey(row.registrableDomain);
+  return (
+    row.status === "qualified" &&
+    (STORED_SIGNUP_ORDER as readonly string[]).includes(domain) &&
+    !deniedForStoredSignup(domain, deny)
+  );
+}
+
 function hostSortRank(row: {
   status: string;
   statusReason: string | null;
@@ -584,12 +597,6 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     if (blocked(row) || !boardDriverFor(row.platform as LbHostPlatform)) {
       return false;
     }
-    if (
-      (STORED_SIGNUP_ORDER as readonly string[]).includes(registrableKey(row.registrableDomain)) &&
-      row.accounts.length > 0
-    ) {
-      return false;
-    }
     if (row.status === "qualified") return ctx.run.counters.newToday < ctx.project.quotas.newPerDay;
     if (row.status === "warming") {
       const account = row.accounts[0];
@@ -621,13 +628,15 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     eligible.push(row);
   }
   eligible.sort((a, b) => {
+    const aTarget = storedSignupTarget(a, deny);
+    const bTarget = storedSignupTarget(b, deny);
+    if (aTarget && bTarget) {
+      return storedSignupIndex(a.registrableDomain) - storedSignupIndex(b.registrableDomain);
+    }
+    if (aTarget !== bTarget) return aTarget ? -1 : 1;
     const aOpen = unusedQualifiedHost(a, deny);
     const bOpen = unusedQualifiedHost(b, deny);
-    if (aOpen && bOpen) {
-      const rank = storedSignupIndex(a.registrableDomain) - storedSignupIndex(b.registrableDomain);
-      if (rank !== 0) return rank;
-      return hostCreatedMs(a) - hostCreatedMs(b);
-    }
+    if (aOpen && bOpen) return hostCreatedMs(a) - hostCreatedMs(b);
     if (aOpen && deniedForStoredSignup(b.registrableDomain, deny)) return -1;
     if (bOpen && deniedForStoredSignup(a.registrableDomain, deny)) return 1;
     return (
@@ -1302,7 +1311,7 @@ async function anotherStoredSignupRemains(
     const domain = registrableKey(row.registrableDomain);
     if (domain === current) return false;
     if (!(STORED_SIGNUP_ORDER as readonly string[]).includes(domain)) return false;
-    return unusedQualifiedHost(row, deny);
+    return storedSignupTarget(row, deny);
   });
 }
 
