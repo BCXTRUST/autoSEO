@@ -81,6 +81,7 @@ import {
   PAGE_HELPER_VERSION,
   type PlanCaps,
   pacedDelayMs,
+  pageMatchesTopics,
   parseStuckLook,
   proxyStickyKey,
   type RealStepKind,
@@ -102,6 +103,7 @@ import {
   statusAfterMissingWorkspace,
   stepCountsTowardPageGiveUp,
   stuckLookPrompt,
+  topicTerms,
   transitionHost,
   transitionPlacement,
   transitionProject,
@@ -526,6 +528,43 @@ function restoredSignupRank(domain: string): number {
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
 }
 
+function topicEvidence(row: {
+  notes?: string | null;
+  topicTags?: readonly string[] | null;
+}): string {
+  return [row.notes ?? "", ...(row.topicTags ?? [])]
+    .filter((part) => part.trim().length > 0)
+    .join("\n");
+}
+
+/** Stored page text, title, or tags match a lane. Empty evidence is not a match. */
+function topicEvidenceMatches(
+  row: { notes?: string | null; topicTags?: readonly string[] | null },
+  project: ProjectConfig,
+): boolean {
+  const evidence = topicEvidence(row);
+  if (!evidence.trim() || topicTerms(project).length === 0) return false;
+  return pageMatchesTopics(
+    { pageText: evidence, title: evidence, topicTags: row.topicTags },
+    project,
+  );
+}
+
+/** Off-topic pages are not eligible. A qualified row with no stored text was already judged. */
+function topicAllowsSignup(
+  row: { status: string; notes?: string | null; topicTags?: readonly string[] | null },
+  project: ProjectConfig,
+): boolean {
+  if (row.status === "off_topic") return false;
+  if (topicTerms(project).length === 0) return true;
+  const evidence = topicEvidence(row);
+  if (!evidence.trim()) return true;
+  return pageMatchesTopics(
+    { pageText: evidence, title: evidence, topicTags: row.topicTags },
+    project,
+  );
+}
+
 function storedSignupIndex(domain: string): number {
   const index = (STORED_SIGNUP_ORDER as readonly string[]).indexOf(registrableKey(domain));
   return index === -1 ? STORED_SIGNUP_ORDER.length : index;
@@ -646,14 +685,16 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     isFixtureHostDomain(row.registrableDomain) ||
     isExampleRegistrableDomain(row.registrableDomain);
   const candidates = rows.filter((row) => {
-    if (row.status === "form_not_found") return false;
+    if (row.status === "form_not_found" || row.status === "off_topic") return false;
     if (blocked(row) || !boardDriverFor(row.platform as LbHostPlatform)) {
       return false;
     }
     if (row.status === "qualified") {
       const restored = isRestoredSignupHost(row.registrableDomain);
       if (restored && row.accounts.length > 0) return false;
-      if (!restored && !hostJustFound(row, ctx.now)) return false;
+      if (!topicAllowsSignup(row, ctx.project)) return false;
+      const matched = topicEvidenceMatches(row, ctx.project);
+      if (!restored && !hostJustFound(row, ctx.now) && !matched) return false;
       return ctx.run.counters.newToday < ctx.project.quotas.newPerDay;
     }
     if (row.status === "warming") {

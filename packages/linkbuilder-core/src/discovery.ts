@@ -89,6 +89,8 @@ export interface FunnelHost {
   market: LbMarket;
   topicTags: string[];
   laneIds: string[];
+  /** Visible text from the fetched pages, used by the topic gate. */
+  pageText: string;
   facts: ProbeFacts;
   status: ReturnType<typeof settleProbe>["status"];
   reason: string | null;
@@ -191,6 +193,7 @@ export async function discoverHosts(input: {
       market: hit.market,
       topicTags: [hit.laneTag],
       laneIds: [hit.laneId],
+      pageText: pages.map((page) => visibleText(page.html)).join("\n"),
       facts,
       status: settled.status,
       reason: settled.reason,
@@ -207,6 +210,16 @@ export function countQualified(
   const key = marketKey(market);
   return hosts.filter((host) => host.status === "qualified" && marketKey(host.market) === key)
     .length;
+}
+
+function visibleText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 50_000);
 }
 
 function onHost(url: string, domain: string): boolean {

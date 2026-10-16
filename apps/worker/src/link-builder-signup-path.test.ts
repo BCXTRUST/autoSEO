@@ -1,6 +1,6 @@
 import type { BrowserSession, ClickableControl, FormFieldInfo } from "@rakazo/adapter-kit";
 import { personMailboxAddress } from "@rakazo/adapters";
-import { startRunCounters } from "@rakazo/linkbuilder-core";
+import { startRunCounters, topicStatusForPage } from "@rakazo/linkbuilder-core";
 import { describe, expect, it } from "vitest";
 import { keptRunLastAction } from "./link-builder-real.js";
 import {
@@ -170,6 +170,9 @@ interface StoredHost {
   locale: string;
   timezoneId: string;
   parkedFrom: null;
+  notes?: string | null;
+  topicTags?: string[];
+  lastProbeAt?: Date | null;
 }
 
 function storedHost(
@@ -333,6 +336,73 @@ describe("signup path", () => {
       services: { prisma },
     } as unknown as StepContext);
     expect(select).toMatchObject({ kind: "step", hostId: "diabetes" });
+  });
+
+  it("keeps an older on-topic forum and skips a car page", async () => {
+    const topicProject = {
+      ...project(),
+      name: "Vitaminexpress",
+      brandName: "Vitaminexpress",
+      topicLanes: [
+        {
+          id: "lane",
+          tag: "Magnesium",
+          description: "sleep, pain, sport and training, children, family, health",
+          exampleQuestions: ["Was hilft beim Einschlafen?"],
+        },
+      ],
+      targets: [
+        {
+          url: "https://example.com/magnesium",
+          description: "Magnesium",
+          keywordClusters: ["Magnesium"],
+        },
+      ],
+    };
+    const carPage = {
+      title: "Community und Forum für BMW und Tuning",
+      pageText:
+        "Sportwagen und Motorsport. Eine flache Dachlinie macht noch keinen sportlichen BMW.",
+    };
+    const healthPage = {
+      title: "Schlaf, Sport und Magnesium",
+      pageText: "Training, Ernährung und Kinder. Forum über Gesundheit.",
+    };
+    expect(topicStatusForPage("qualified", carPage, topicProject)).toBe("off_topic");
+    expect(topicStatusForPage("qualified", healthPage, topicProject)).toBe("qualified");
+    const hosts = [
+      storedHost({
+        id: "car",
+        registrableDomain: "bmw-syndikat.de",
+        status: "off_topic",
+        notes: `${carPage.title}\n${carPage.pageText}`,
+        lastProbeAt: new Date("2026-10-16T20:24:00.000Z"),
+      }),
+      storedHost({
+        id: "denied",
+        registrableDomain: "medizin-forum.de",
+        notes: healthPage.pageText,
+        topicTags: ["Schlaf", "Sport"],
+        lastProbeAt: new Date("2026-10-01T00:00:00.000Z"),
+      }),
+      storedHost({
+        id: "health",
+        registrableDomain: "gesundheit-forum.de",
+        notes: `${healthPage.title}\n${healthPage.pageText}`,
+        topicTags: ["Schlaf", "Sport"],
+        lastProbeAt: new Date("2026-10-01T00:00:00.000Z"),
+      }),
+    ];
+    const { prisma } = harness(hosts);
+    const select = await REAL_STEP_HANDLERS.select_host({
+      now: new Date("2026-10-17T08:00:00.000Z"),
+      run: { id: "run-1", counters: startRunCounters() },
+      project: topicProject,
+      host: null,
+      pool: () => undefined,
+      services: { prisma },
+    } as unknown as StepContext);
+    expect(select).toMatchObject({ kind: "step", hostId: "health" });
   });
 
   it("follows a register link and a rules step onto the form", async () => {

@@ -17,6 +17,7 @@ export const TERMINAL_HOST_STATUSES = [
   "spam_blocked",
   "unsupported_captcha",
   "form_not_found",
+  "off_topic",
   "dead",
 ] as const satisfies readonly HostStatus[];
 
@@ -73,8 +74,8 @@ const TRANSITIONS: Record<
   operator_skipped: { from: ["parked_operator"], to: "dead" },
   park_expired: { from: ["parked_operator"], to: "dead" },
   park_requalified: { from: ["parked_operator"], to: "qualified" },
-  // A missing form is `form_not_found`, written directly. `failed` stays dead for a block,
-  // a closed registration, or a site that is down.
+  // A missing form is `form_not_found` and an off-topic forum is `off_topic`, both written
+  // directly. `failed` stays dead for a block, a closed registration, or a site that is down.
   failed: { from: NON_TERMINAL, to: "dead" },
 };
 

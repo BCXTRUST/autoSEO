@@ -30,6 +30,7 @@ import {
   queryOmitsShop,
   registrableDomain,
   shopNames,
+  topicStatusForPage,
   transitionProject,
   useCaseLanes,
   walkDeadHostSignup,
@@ -234,14 +235,16 @@ export async function discoverDueProjects(input: {
         });
         continue;
       }
-      paid = await probeResultUrls({
-        urls: results.map((result) => result.url),
-        lanes: lanes.data,
-        market,
-        denyHosts,
-        usedHosts,
-        fetchText,
-      });
+      paid = (
+        await probeResultUrls({
+          urls: results.map((result) => result.url),
+          lanes: lanes.data,
+          market,
+          denyHosts,
+          usedHosts,
+          fetchText,
+        })
+      ).map((host) => gateHostTopic(host, project));
     } catch (error) {
       const message = error instanceof Error ? error.message : "search failed";
       await recordDiscoveryFailure(
@@ -575,7 +578,10 @@ async function searchBrowserFirst(args: {
     usedHosts: args.usedHosts,
     fetchText: args.fetchText,
   });
-  const allowed = probed.filter(probedHostKept).map(asStartableHost);
+  const allowed = probed
+    .filter(probedHostKept)
+    .map(asStartableHost)
+    .map((host) => gateHostTopic(host, project));
   await recordDiscoveryStep(
     input.prisma,
     project,
@@ -620,7 +626,9 @@ function hostStartable(
   host: { registrableDomain: string; status: string },
   denyHosts: readonly string[],
 ): boolean {
-  if (host.status === "form_not_found" || host.status === "dead") return false;
+  if (host.status === "form_not_found" || host.status === "off_topic" || host.status === "dead") {
+    return false;
+  }
   if (!STARTABLE_HOST_STATUSES.has(host.status)) return false;
   if (
     isFixtureHostDomain(host.registrableDomain) ||
@@ -898,7 +906,7 @@ async function collectForumUrls(
 
 function probedHostKept(host: Awaited<ReturnType<typeof discoverHosts>>[number]): boolean {
   if (hostDenied(host.registrableDomain, DROPPED_FORUM_HOSTS)) return false;
-  if (host.status === "qualified") return true;
+  if (host.status === "qualified" || host.status === "off_topic") return true;
   if (
     host.reason === "commercial_links_forbidden" ||
     host.reason === "links_forbidden" ||
@@ -910,8 +918,42 @@ function probedHostKept(host: Awaited<ReturnType<typeof discoverHosts>>[number])
 }
 
 function asStartableHost<T extends { status: string; reason: string | null }>(host: T): T {
-  if (host.status === "qualified") return host;
+  if (host.status === "qualified" || host.status === "off_topic") return host;
   return { ...host, status: "qualified", reason: null };
+}
+
+function gateHostTopic<
+  T extends {
+    status: string;
+    reason: string | null;
+    title: string;
+    pageText?: string;
+    topicTags: string[];
+    facts: { rulesExcerpt: string; threads: Array<{ title: string }> };
+  },
+>(
+  host: T,
+  project: {
+    name?: string | null;
+    brandName?: string | null;
+    topicLanes?: unknown;
+    targets?: unknown;
+  },
+): T {
+  const pageText = [
+    host.pageText,
+    host.facts.rulesExcerpt,
+    ...host.facts.threads.map((thread) => thread.title),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const status = topicStatusForPage(
+    host.status,
+    { pageText, title: host.title, topicTags: host.topicTags },
+    project,
+  );
+  if (status === host.status) return host;
+  return { ...host, status, reason: status === "off_topic" ? "off_topic" : host.reason };
 }
 
 function unwrapHttps(href: string, base: string): string | null {
@@ -1040,7 +1082,7 @@ async function persistDiscovered(
             ...data,
           },
         });
-    found += host.status === "qualified" ? 1 : 0;
+    found += host.status === "qualified" || host.status === "off_topic" ? 1 : 0;
     for (const thread of host.facts.threads) {
       if (isMailSendFailure(thread.title)) continue;
       await prisma.lbThreadCandidate.upsert({

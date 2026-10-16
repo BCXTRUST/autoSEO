@@ -1,0 +1,181 @@
+import { shopNames, stripShopNames } from "./problem-queries.js";
+
+/**
+ * A forum is sign-up eligible when its page, title, or topic tags share a lane or keyword
+ * with the project. The shop name is not a topic. Cars, operating systems, office software,
+ * and unrelated hobbies are not eligible even when the body mentions a lane word in passing.
+ */
+
+export interface TopicProject {
+  name?: string | null;
+  brandName?: string | null;
+  topicLanes?: unknown;
+  targets?: unknown;
+}
+
+export interface TopicPage {
+  pageText?: string | null;
+  title?: string | null;
+  topicTags?: readonly string[] | null;
+}
+
+const STOP = new Set([
+  "sells",
+  "relevant",
+  "forum",
+  "real",
+  "human",
+  "problem",
+  "those",
+  "products",
+  "touch",
+  "search",
+  "german",
+  "brand",
+  "landing",
+  "page",
+  "link",
+  "placed",
+  "later",
+  "only",
+  "kaufen",
+  "bestellen",
+  "shop",
+  "tipps",
+  "tagesbedarf",
+  "dosierungen",
+  "formel",
+  "vitaminexpress",
+]);
+
+/** German readings of the problem words stored on the lanes. */
+const FOLDS: Record<string, readonly string[]> = {
+  sleep: ["schlaf", "schlafen", "einschlafen"],
+  pain: ["schmerz", "schmerzen"],
+  cramps: ["krampf", "kraempfe"],
+  sport: ["sport", "training", "fitness"],
+  training: ["training", "fitness"],
+  children: ["kind", "kinder", "familie", "familien"],
+  mood: ["stimmung"],
+  pregnancy: ["schwanger", "schwangerschaft"],
+  deficiency: ["mangel"],
+  energy: ["energie"],
+  supplements: ["supplement", "nahrungsergaenzung"],
+  family: ["familie", "familien", "kinder"],
+  health: ["gesundheit"],
+};
+
+const TITLE_OFF_TOPIC = [
+  "bmw",
+  "tuning",
+  "fahrzeug",
+  "motorrad",
+  "automobil",
+  "windows",
+  "linux",
+  "microsoft",
+  "macos",
+  "betriebssystem",
+  "excel",
+  "outlook",
+  "powerpoint",
+  "office",
+  "pickup",
+  "flirt",
+  "verfuehrung",
+] as const;
+
+function foldText(value: string): string {
+  return value.replace(/ß/g, "ss").toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "");
+}
+
+function tokensOf(value: string): string[] {
+  return foldText(value)
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length >= 4 || token === "b12" || token === "k2");
+}
+
+function pushText(chunks: string[], value: unknown): void {
+  if (typeof value === "string" && value.trim()) chunks.push(value);
+}
+
+function laneChunks(project: TopicProject): string[] {
+  const chunks: string[] = [];
+  if (Array.isArray(project.topicLanes)) {
+    for (const lane of project.topicLanes) {
+      if (!lane || typeof lane !== "object") continue;
+      const record = lane as {
+        tag?: unknown;
+        description?: unknown;
+        exampleQuestions?: unknown;
+      };
+      pushText(chunks, record.tag);
+      pushText(chunks, record.description);
+      if (Array.isArray(record.exampleQuestions)) {
+        for (const question of record.exampleQuestions) pushText(chunks, question);
+      }
+    }
+  }
+  if (Array.isArray(project.targets)) {
+    for (const target of project.targets) {
+      if (!target || typeof target !== "object") continue;
+      const record = target as { description?: unknown; keywordClusters?: unknown };
+      pushText(chunks, record.description);
+      if (Array.isArray(record.keywordClusters)) {
+        for (const cluster of record.keywordClusters) pushText(chunks, cluster);
+      }
+    }
+  }
+  return chunks;
+}
+
+/** Lane tags, descriptions, questions, and keyword clusters, without the shop name. */
+export function topicTerms(project: TopicProject): string[] {
+  const cleaned = stripShopNames(laneChunks(project).join("\n"), shopNames(project));
+  const terms = new Set<string>();
+  for (const token of tokensOf(cleaned)) {
+    if (STOP.has(token)) continue;
+    terms.add(token);
+    for (const folded of FOLDS[token] ?? []) terms.add(folded);
+  }
+  return [...terms];
+}
+
+function hasWord(text: string, word: string): boolean {
+  const hay = foldText(text);
+  const needle = foldText(word);
+  if (needle.length < 3) return false;
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`).test(hay);
+}
+
+function hasTerm(text: string, term: string): boolean {
+  if (hasWord(text, term)) return true;
+  if (term.length < 6) return false;
+  const hay = foldText(text);
+  const needle = foldText(term).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^a-z0-9])${needle}`).test(hay);
+}
+
+function titleIsOffTopic(title: string, terms: readonly string[]): boolean {
+  if (!title.trim()) return false;
+  if (terms.some((term) => hasTerm(title, term))) return false;
+  return TITLE_OFF_TOPIC.some((word) => hasWord(title, word));
+}
+
+/** True when the page shares a project topic. No lanes means the gate stays open. */
+export function pageMatchesTopics(page: TopicPage, project: TopicProject): boolean {
+  const terms = topicTerms(project);
+  if (terms.length === 0) return true;
+  const title = page.title ?? "";
+  if (titleIsOffTopic(title, terms)) return false;
+  const blob = [page.pageText ?? "", title, ...(page.topicTags ?? [])].join("\n");
+  return terms.some((term) => hasTerm(blob, term));
+}
+
+/** Qualification writes `off_topic` instead of `qualified` when the page misses every lane. */
+export function topicStatusForPage(status: string, page: TopicPage, project: TopicProject): string {
+  if (status !== "qualified") return status;
+  if (topicTerms(project).length === 0) return status;
+  return pageMatchesTopics(page, project) ? status : "off_topic";
+}
