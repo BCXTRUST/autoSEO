@@ -3,6 +3,7 @@ import { ORPCError } from "@orpc/server";
 import { CaptchaSolverError } from "@rakazo/adapter-kit";
 import {
   CaptellHttpSolver,
+  destroyWorkspaceComputers,
   personMailboxAddress,
   StaticPlanProvider,
   stripeCheckoutConfigured,
@@ -552,6 +553,11 @@ export async function pauseLbProject(deps: RouterDeps, actor: Actor, projectId: 
   const status = transitionOrBad(readProjectStatus(row.status), "paused");
   await deps.prisma.lbProject.update({ where: { id: row.id }, data: { status } });
   await setOpenRun(deps.prisma, actor.workspaceId, row.id, "paused");
+  await destroyWorkspaceComputers(
+    { prisma: deps.prisma, sandbox: deps.sandbox },
+    actor.workspaceId,
+    projectComputerContext(actor, "link-builder.pause"),
+  );
   await publish(deps, row.id);
   return getLbProject(deps, actor, row.id);
 }
@@ -561,6 +567,11 @@ export async function stopLbProject(deps: RouterDeps, actor: Actor, projectId: s
   const status = transitionOrBad(readProjectStatus(row.status), "stopped");
   await deps.prisma.lbProject.update({ where: { id: row.id }, data: { status } });
   await setOpenRun(deps.prisma, actor.workspaceId, row.id, "cancelled");
+  await destroyWorkspaceComputers(
+    { prisma: deps.prisma, sandbox: deps.sandbox },
+    actor.workspaceId,
+    projectComputerContext(actor, "link-builder.stop"),
+  );
   await publish(deps, row.id);
   return getLbProject(deps, actor, row.id);
 }
@@ -1811,6 +1822,16 @@ function numberField(value: unknown, key: string): number {
   if (!value || typeof value !== "object" || !(key in value)) return 0;
   const raw = (value as Record<string, unknown>)[key];
   return typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? raw : 0;
+}
+
+function projectComputerContext(actor: Actor, operationId: string) {
+  return {
+    operationId,
+    traceId: operationId,
+    workspaceId: actor.workspaceId,
+    userId: actor.userId,
+    signal: new AbortController().signal,
+  };
 }
 
 function transitionOrBad(from: LbProjectStatus, to: LbProjectStatus): LbProjectStatus {

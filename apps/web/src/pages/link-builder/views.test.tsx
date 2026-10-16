@@ -198,8 +198,8 @@ describe("link builder screens", () => {
     expect(watchingFrameSrc(stream)).toContain("reconnect=true");
     expect(watchingFrameSrc(stream)).toContain("path=novnc%2Fremote%2Fview%2F9.abc%2Fwebsockify");
     expect(html).toContain('title="Computer"');
-    expect(html).toContain('data-desktop="hidden"');
-    expect(html).toContain('data-live-pane="dark"');
+    expect(html).toContain('data-desktop="browser"');
+    expect(html).not.toContain('data-desktop="hidden"');
     expect(html).toContain("allow-scripts allow-same-origin");
     expect(html).not.toContain("No session");
     const failed = renderToStaticMarkup(
@@ -640,6 +640,42 @@ describe("link builder screens", () => {
     expect(html).not.toContain("28px 28px");
   });
 
+  it("shows a skipped forum on the dark pane while the project is active", () => {
+    const run = {
+      id: "run-1",
+      date: "2026-10-16",
+      status: "running" as const,
+      newToday: 0,
+      liveToday: 0,
+      liveWeek: 0,
+      uniqueHosts: 0,
+      lastAction: "Skipped 2 denied forums",
+      lastError: null,
+    };
+    const active = renderOverview(
+      statusView({
+        projectStatus: "active",
+        activity: "running",
+        activityLabel: "running",
+        run,
+      }),
+      [],
+    );
+    expect(active).toContain("Skipped 2 denied forums");
+    expect(active).not.toContain("Computer is off");
+    const paused = renderOverview(
+      statusView({
+        projectStatus: "paused",
+        activity: "paused",
+        activityLabel: "paused",
+        run,
+      }),
+      [],
+    );
+    expect(paused).toContain("Computer is off");
+    expect(paused).not.toContain("Skipped 2 denied forums");
+  });
+
   it("says the computer is off when nothing is running", () => {
     const html = renderOverview(
       statusView({ activity: "paused", activityLabel: "paused", run: null }),
@@ -649,6 +685,29 @@ describe("link builder screens", () => {
     expect(html).not.toContain("Computer is off. It turns on when a post is being made.");
     expect(html).not.toContain("Failed to connect to server");
     expect(html).not.toContain("Connecting the computer");
+  });
+
+  it("renders the computer from server screen state", () => {
+    const stream = "https://app.autoseo.run/novnc/remote/view/9.abc/vnc.html";
+    const states = [
+      ["off", "Computer is off"],
+      ["starting", "Starting"],
+      ["no_browser", "Opening the browser"],
+    ] as const;
+    for (const [state, label] of states) {
+      const html = renderOverview(statusView(), [], [], stream, [], [], state);
+      expect(html).not.toContain("<iframe");
+      expect(html).toContain('data-desktop="hidden"');
+      expect(html).toContain('data-live-pane="dark"');
+      expect(html).toContain(label);
+    }
+    const live = renderOverview(statusView(), [], [], stream, [], [], "live");
+    expect(live).toContain("<iframe");
+    expect(live).toContain('title="Computer"');
+    expect(live).toContain('data-desktop="browser"');
+    expect(live).not.toContain('data-desktop="hidden"');
+    const liveWithoutUrl = renderOverview(statusView(), [], [], null, [], [], "live");
+    expect(liveWithoutUrl).not.toContain("<iframe");
   });
 
   it("stays on research when Verify has no placement, and still shows a frame", () => {
@@ -972,6 +1031,7 @@ function renderOverview(
   screenUrl?: string | null,
   tickets: LbOperatorTicketView[] = [],
   hosts: LbHostView[] = [],
+  screenState?: "off" | "starting" | "no_browser" | "live",
 ) {
   return renderToStaticMarkup(
     <ProjectView
@@ -991,6 +1051,7 @@ function renderOverview(
       loadArtifact={loadArtifact}
       busy={false}
       screenUrl={screenUrl}
+      screenState={screenState}
     />,
   );
 }

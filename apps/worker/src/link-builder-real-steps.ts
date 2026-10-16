@@ -71,6 +71,7 @@ import {
   isMailSendFailure,
   isMissingSandboxWorkspace,
   isNewSignupBannedHost,
+  isRestoredSignupHost,
   isSandboxGoneText,
   isWarmupMet,
   localStuckChoice,
@@ -80,6 +81,7 @@ import {
   PAGE_HELPER_VERSION,
   type PlanCaps,
   pacedDelayMs,
+  pageMatchesTopics,
   parseStuckLook,
   proxyStickyKey,
   type RealStepKind,
@@ -89,9 +91,11 @@ import {
   recordRegistration,
   redactSecrets,
   resolvePersonaDisplayName,
+  restoredSignupIndex,
   STUCK_LOOK_SYSTEM,
   type StuckLookAction,
   type StuckRecord,
+  sameLocalDay,
   shouldCount,
   shouldSkipDesktopPage,
   skippedHostLine,
@@ -99,6 +103,7 @@ import {
   statusAfterMissingWorkspace,
   stepCountsTowardPageGiveUp,
   stuckLookPrompt,
+  topicTerms,
   transitionHost,
   transitionPlacement,
   transitionProject,
@@ -117,14 +122,11 @@ import {
   enrichCaptchaChallenge,
   formErrorFixable,
   GenericFormDriver,
-  type GenericJourneyResult,
   instructionClickSelector,
   isLoginPath,
   placeCaptchaToken,
   type RegistrationPage,
   type RegistrationResult,
-  registrationProfile,
-  runGenericRegistrationJourney,
   runPageHelper,
   solveImageCaptcha,
   splitFormContinues,
@@ -332,10 +334,10 @@ function requireDriver(host: HostRow, entry?: PoolEntry): BoardDriver {
   return driver;
 }
 
-/** Project warm-up, raised when the driver requires more link-free posts (Discourse TL0). */
+/** Project warm-up, at least four link-free posts, and higher when the driver requires it. */
 export function postsRequiredBeforeLink(projectMin: number, platform: string): number {
   const floor = boardDriverFor(platform as LbHostPlatform)?.minPostsBeforeLink ?? 0;
-  return Math.max(projectMin, floor);
+  return Math.max(4, projectMin, floor);
 }
 
 function requireSession(ctx: StepContext, host: HostRow): PoolEntry {
@@ -484,6 +486,163 @@ function hostOrder(status: string): number {
   return (WORKABLE_HOST_ORDER as readonly string[]).indexOf(status);
 }
 
+/** A forum this discovery tick just probed. Older stored rows wait for a later run. */
+const JUST_FOUND_MS = 15 * 60 * 1000;
+
+export function hostJustFound(row: { lastProbeAt?: Date | string | null }, now: Date): boolean {
+  const raw = row.lastProbeAt;
+  const probed =
+    raw instanceof Date ? raw.getTime() : typeof raw === "string" ? Date.parse(raw) : Number.NaN;
+  if (!Number.isFinite(probed)) return false;
+  const age = now.getTime() - probed;
+  return age >= -5_000 && age <= JUST_FOUND_MS;
+}
+
+const STORED_SIGNUP_DENY = [
+  "aquacomputer.de",
+  "edubily.de",
+  "science-fitness.de",
+  "medizin-forum.de",
+  "phpbb.de",
+  "macuser.de",
+  "lifters-lounge.com",
+  "frauenselbsthilfe.de",
+  "bulli-forum.com",
+] as const;
+
+const FORM_MISS_CAP = 3;
+const MAIL_WAIT_MS = 3 * 60_000;
+
+/** Stored forums for this signup, in the only order the run may open them. */
+const STORED_SIGNUP_ORDER = ["aquacomputer.de", "edubily.de", "science-fitness.de"] as const;
+
+function registrableKey(domain: string): string {
+  return domain
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "");
+}
+
+function restoredSignupRank(domain: string): number {
+  const index = restoredSignupIndex(domain);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
+function topicEvidence(row: {
+  notes?: string | null;
+  topicTags?: readonly string[] | null;
+}): string {
+  return [row.notes ?? "", ...(row.topicTags ?? [])]
+    .filter((part) => part.trim().length > 0)
+    .join("\n");
+}
+
+/** Stored page text, title, or tags match a lane. Empty evidence is not a match. */
+function topicEvidenceMatches(
+  row: { notes?: string | null; topicTags?: readonly string[] | null },
+  project: ProjectConfig,
+): boolean {
+  const evidence = topicEvidence(row);
+  if (!evidence.trim() || topicTerms(project).length === 0) return false;
+  return pageMatchesTopics(
+    { pageText: evidence, title: evidence, topicTags: row.topicTags },
+    project,
+  );
+}
+
+/** Off-topic pages are not eligible. A qualified row with no stored text was already judged. */
+function topicAllowsSignup(
+  row: { status: string; notes?: string | null; topicTags?: readonly string[] | null },
+  project: ProjectConfig,
+): boolean {
+  if (row.status === "off_topic") return false;
+  if (topicTerms(project).length === 0) return true;
+  const evidence = topicEvidence(row);
+  if (!evidence.trim()) return true;
+  return pageMatchesTopics(
+    { pageText: evidence, title: evidence, topicTags: row.topicTags },
+    project,
+  );
+}
+
+function storedSignupIndex(domain: string): number {
+  const index = (STORED_SIGNUP_ORDER as readonly string[]).indexOf(registrableKey(domain));
+  return index === -1 ? STORED_SIGNUP_ORDER.length : index;
+}
+
+export function noSignupFormLine(domain: string): string {
+  return `No signup form on ${domain.trim()}`;
+}
+
+function hostCreatedMs(row: { createdAt?: Date | string | null }): number {
+  if (row.createdAt instanceof Date) return row.createdAt.getTime();
+  if (typeof row.createdAt === "string") {
+    const parsed = Date.parse(row.createdAt);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function deniedForStoredSignup(domain: string, deny: ReadonlySet<string>): boolean {
+  const host = domain
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "");
+  if (deny.has(host)) return true;
+  const needles = [...deny, ...STORED_SIGNUP_DENY];
+  return needles.some((item) => item.length > 0 && (host === item || host.endsWith(`.${item}`)));
+}
+
+function unusedQualifiedHost(
+  row: { status: string; registrableDomain: string; accounts: readonly unknown[] },
+  deny: ReadonlySet<string>,
+): boolean {
+  return (
+    row.status === "qualified" &&
+    row.accounts.length === 0 &&
+    !deniedForStoredSignup(row.registrableDomain, deny)
+  );
+}
+
+async function anotherFreshForumRemains(ctx: StepContext, currentDomain: string): Promise<boolean> {
+  const current = registrableKey(currentDomain);
+  const deny = new Set(ctx.project.denyHosts.map((host) => host.toLowerCase()));
+  let rows: Array<{
+    status: string;
+    registrableDomain: string;
+    accounts: readonly unknown[];
+    lastProbeAt?: Date | string | null;
+  }> = [];
+  try {
+    rows = await ctx.services.prisma.lbHost.findMany({
+      where: { workspaceId: ctx.project.workspaceId, projectId: ctx.project.id },
+      include: { accounts: true },
+    });
+  } catch {
+    return false;
+  }
+  return rows.some((row) => {
+    const domain = registrableKey(row.registrableDomain);
+    if (domain === current) return false;
+    if (row.status !== "qualified" || row.accounts.length > 0) return false;
+    if (deniedForStoredSignup(domain, deny)) return false;
+    return hostJustFound(row, ctx.now);
+  });
+}
+
+/** A stored forum still waiting to sign up. An unfinished login row does not skip it. */
+function storedSignupTarget(
+  row: { status: string; registrableDomain: string },
+  deny: ReadonlySet<string>,
+): boolean {
+  const domain = registrableKey(row.registrableDomain);
+  return (
+    row.status === "qualified" &&
+    (STORED_SIGNUP_ORDER as readonly string[]).includes(domain) &&
+    !deniedForStoredSignup(domain, deny)
+  );
+}
+
 function hostSortRank(row: {
   status: string;
   statusReason: string | null;
@@ -520,20 +679,27 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
   const dueAdmin = await adminHostsDue(ctx, rows);
   const deny = new Set(ctx.project.denyHosts.map((host) => host.toLowerCase()));
   const prefer = new Set(ctx.project.preferHosts.map((host) => host.toLowerCase()));
+  const blocked = (row: (typeof rows)[number]) =>
+    deniedForStoredSignup(row.registrableDomain, deny) ||
+    (isNewSignupBannedHost(row.registrableDomain) && row.accounts.length === 0) ||
+    isFixtureHostDomain(row.registrableDomain) ||
+    isExampleRegistrableDomain(row.registrableDomain);
   const candidates = rows.filter((row) => {
-    if (
-      deny.has(row.registrableDomain) ||
-      (isNewSignupBannedHost(row.registrableDomain) && row.accounts.length === 0) ||
-      isFixtureHostDomain(row.registrableDomain) ||
-      isExampleRegistrableDomain(row.registrableDomain) ||
-      !boardDriverFor(row.platform as LbHostPlatform)
-    ) {
+    if (row.status === "form_not_found" || row.status === "off_topic") return false;
+    if (blocked(row) || !boardDriverFor(row.platform as LbHostPlatform)) {
       return false;
     }
-    if (row.status === "qualified") return ctx.run.counters.newToday < ctx.project.quotas.newPerDay;
+    if (row.status === "qualified") {
+      const restored = isRestoredSignupHost(row.registrableDomain);
+      if (restored && row.accounts.length > 0) return false;
+      if (!topicAllowsSignup(row, ctx.project)) return false;
+      const matched = topicEvidenceMatches(row, ctx.project);
+      if (!restored && !hostJustFound(row, ctx.now) && !matched) return false;
+      return ctx.run.counters.newToday < ctx.project.quotas.newPerDay;
+    }
     if (row.status === "warming") {
       const account = row.accounts[0];
-      if (!account) return false;
+      if (!account?.emailVerifiedAt) return false;
       const postsShort =
         account.postCount <
         postsRequiredBeforeLink(ctx.project.warmup.minPostsBeforeLink, row.platform);
@@ -560,15 +726,36 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     if (row.status === "qualified" && !(await registrationOpen(ctx, row.id))) continue;
     eligible.push(row);
   }
-  eligible.sort(
-    (a, b) =>
+  eligible.sort((a, b) => {
+    const aTarget = storedSignupTarget(a, deny);
+    const bTarget = storedSignupTarget(b, deny);
+    if (aTarget && bTarget) {
+      return storedSignupIndex(a.registrableDomain) - storedSignupIndex(b.registrableDomain);
+    }
+    if (aTarget !== bTarget) return aTarget ? -1 : 1;
+    const aOpen = unusedQualifiedHost(a, deny);
+    const bOpen = unusedQualifiedHost(b, deny);
+    if (aOpen && bOpen) {
+      const restored =
+        restoredSignupRank(a.registrableDomain) - restoredSignupRank(b.registrableDomain);
+      if (restored !== 0) return restored;
+      return hostCreatedMs(a) - hostCreatedMs(b);
+    }
+    if (ctx.run.counters.newToday === 0 && aOpen !== bOpen) {
+      return aOpen ? -1 : 1;
+    }
+    if (aOpen && deniedForStoredSignup(b.registrableDomain, deny)) return -1;
+    if (bOpen && deniedForStoredSignup(a.registrableDomain, deny)) return 1;
+    return (
       hostSortRank(a) - hostSortRank(b) ||
       Number(prefer.has(b.registrableDomain)) - Number(prefer.has(a.registrableDomain)) ||
-      b.qualityScore - a.qualityScore,
-  );
+      b.qualityScore - a.qualityScore
+    );
+  });
   const picked = eligible[0];
   if (!picked) {
-    const capped = rows.filter((row) => row.status === "qualified");
+    const openRows = rows.filter((row) => !blocked(row));
+    const capped = openRows.filter((row) => row.status === "qualified");
     for (const host of capped) {
       if (await registrationOpen(ctx, host.id)) continue;
       if (await registrationCapAlreadyTold(ctx, host.id)) {
@@ -582,10 +769,37 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
         outcome: { refused: "registration_cap" },
       };
     }
-    if (rows.some((row) => row.status === "pending_admin")) {
-      return { kind: "wait", reason: "admin_approval" };
+    const denied = rows.filter((row) => blocked(row));
+    if (denied.length > 0) {
+      const domains = denied.map((row) => row.registrableDomain).sort();
+      return {
+        kind: "step",
+        stepKind: "select_host",
+        hostId: null,
+        lastAction: `Skipped ${denied.length} denied forums`,
+        outcome: { skipped: domains },
+      };
     }
-    return { kind: "wait", reason: "no_workable_host" };
+    const pending = openRows.filter((row) => row.status === "pending_admin");
+    if (pending.length > 0) {
+      return {
+        kind: "step",
+        stepKind: "select_host",
+        hostId: null,
+        lastAction: "Waiting for a site admin",
+        outcome: {
+          reason: "admin_approval",
+          domains: pending.map((row) => row.registrableDomain).sort(),
+        },
+      };
+    }
+    return {
+      kind: "step",
+      stepKind: "select_host",
+      hostId: null,
+      lastAction: "No forum left to work on",
+      outcome: { reason: "no_workable_host" },
+    };
   }
   if (ctx.services.sleep && ctx.host && ctx.host.id !== picked.id) {
     await ctx.services.sleep(pacedDelayMs(HOST_IDLE_GAP, ctx.services.random ?? Math.random));
@@ -1154,7 +1368,7 @@ async function registrationOutcome(
 
 /**
  * Stock drivers are the prior. An unknown host, or a stock driver that never reaches a
- * registration form, runs the generic journey instead of parking.
+ * registration form, uses the generic form driver instead of parking.
  */
 export function selectsGenericRegistrationJourney(
   platform: string,
@@ -1162,20 +1376,6 @@ export function selectsGenericRegistrationJourney(
 ): boolean {
   if (platform === "unknown") return true;
   return stockPage === "unknown" || stockPage === "unmapped";
-}
-
-function personaRegistrationProfile(ctx: StepContext, host: HostRow, credentials: Credentials) {
-  const parts = ctx.project.persona.displayName.trim().split(/\s+/).filter(Boolean);
-  const market = marketOf(ctx.project, host);
-  return registrationProfile({
-    username: credentials.username,
-    email: credentials.email,
-    password: credentials.password,
-    givenName: parts[0] ?? "Sophie",
-    familyName: parts.length > 1 ? parts.slice(1).join(" ") : "Braun",
-    language: host.language || market.language,
-    timezone: host.timezoneId || market.timezoneId,
-  });
 }
 
 function warmupReplyWithoutLink(language: string): string {
@@ -1199,204 +1399,56 @@ export function warmupReplyChoice(language: string): {
   };
 }
 
-async function advanceHost(
-  tx: Tx,
-  host: HostRow,
-  event: Parameters<typeof moveHost>[2],
-  extra: Prisma.LbHostUpdateManyMutationInput = {},
-): Promise<void> {
-  await moveHost(tx, host, event, extra);
-  const next = transitionHost(hostStateOf(host), event);
-  host.status = next.status;
-  host.parkedFrom = next.parkedFrom;
-}
-
-function journeyCaptchaType(detected: CaptchaChallenge | null): LbCaptchaType {
-  if (!detected || detected.kind === "none") return "unsupported";
-  if (detected.kind === "image") return "image_letters";
-  if (detected.kind === "question") return "knowledge_question";
-  return detected.type;
-}
-
-async function genericRegistrationJourney(
-  ctx: StepContext,
-  host: HostRow,
-  entry: PoolEntry,
-): Promise<StepResult> {
-  const credentials = await ensureCredentials(ctx, host);
-  const driver = new GenericFormDriver();
-  entry.driver = driver;
-  const listMessages = ctx.services.mailbox.listMessages?.bind(ctx.services.mailbox);
-  const mailbox = {
-    listMessages: listMessages ?? (async () => []),
-  };
-  const journey = await runGenericRegistrationJourney(
-    entry.session,
-    host.homepageUrl,
-    personaRegistrationProfile(ctx, host, credentials),
-    ctx.services.captcha,
-    ctx.adapter,
-    mailbox,
-    ctx.project.mailboxId ?? "",
-    warmupReplyWithoutLink(host.language || marketOf(ctx.project, host).language),
-  );
-  entry.registerFormReady = false;
-  entry.captchaAttempts = 0;
-  if (journey.username && journey.username !== credentials.username) {
-    try {
-      await replaceUsername(ctx, host, credentials.accountId, journey.username);
-    } catch {
-      // The board already answered. Losing the vault update must not drop that result.
-    }
+async function missedFormsThisRun(ctx: StepContext): Promise<number> {
+  try {
+    const steps = await ctx.services.prisma.lbRunStep.findMany({
+      where: { runId: ctx.run.id },
+      select: { outcome: true },
+    });
+    return steps.filter((step) => stepActionText(step.outcome).startsWith("No signup form")).length;
+  } catch {
+    return 0;
   }
-  const artifactIds = await screenshot(ctx, entry, "register");
-  return genericJourneyStep(ctx, host, credentials.accountId, journey, artifactIds);
 }
 
-async function genericJourneyStep(
+function stepActionText(outcome: unknown): string {
+  if (!outcome || typeof outcome !== "object") return "";
+  const action = (outcome as { lastAction?: unknown }).lastAction;
+  return typeof action === "string" ? action : "";
+}
+
+/** The open page has no signup path. The host stays retryable; this run does not pick it again. */
+async function noSignupForm(
   ctx: StepContext,
   host: HostRow,
-  accountId: string,
-  journey: GenericJourneyResult,
   artifactIds: string[],
 ): Promise<Extract<StepResult, { kind: "step" }>> {
-  const starting = host.status === "qualified";
-  const submitted = journey.registration.length > 0;
-  const waitingForMail =
-    journey.parkReason === "verification_mail_missing" &&
-    journey.registration.includes("pending_email");
-  const outcome = {
-    journey: "generic" as const,
-    result: journey.outcome,
-    fromForm: journey.fromForm,
-    registration: journey.registration,
-    solved: journey.solved,
-    activation: journey.activation,
-    permalink: journey.permalink,
-    ...(journey.parkReason ? { reason: journey.parkReason } : {}),
-    ...(journey.parkLabel ? { label: redactText(ctx, journey.parkLabel) } : {}),
-    ...(journey.detected ? { captcha: journey.detected.kind } : {}),
-  };
-  const base = {
-    kind: "step" as const,
+  const misses = await missedFormsThisRun(ctx);
+  const another =
+    misses + 1 < FORM_MISS_CAP && (await anotherFreshForumRemains(ctx, host.registrableDomain));
+  return {
+    kind: "step",
+    lastAction: noSignupFormLine(host.registrableDomain),
     hostId: host.id,
     artifactIds,
-    outcome,
-    run:
-      starting && (submitted || journey.outcome === "posted")
-        ? { counters: recordRegistration(ctx.run.counters), currentUrl: journey.permalink }
-        : journey.permalink
-          ? { currentUrl: journey.permalink }
-          : undefined,
+    outcome: {
+      reason: "no_signup_form",
+      domain: host.registrableDomain,
+      releaseDesktop: !another,
+    },
+    apply: async (tx) => {
+      const updated = await tx.lbHost.updateMany({
+        where: { id: host.id, status: host.status },
+        data: { status: "form_not_found", parkedFrom: null, statusReason: "no_signup_form" },
+      });
+      if (updated.count !== 1) throw new StaleState(`Host ${host.id} moved during the step`);
+      if (another) return;
+      await tx.lbProject.updateMany({
+        where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
+        data: { status: transitionProject("active", "paused") },
+      });
+    },
   };
-  const recordSolve =
-    journey.solved > 0
-      ? captchaEvent(ctx, host, journey.solved, {
-          type: journeyCaptchaType(journey.detected),
-          door: "https_api",
-          outcome: "placed_submitted",
-          credits: 0,
-          siteKeyFound: journey.detected?.kind === "widget" && journey.detected.siteKey !== null,
-        })
-      : null;
-  const withSolve = (
-    step: Extract<StepResult, { kind: "step" }>,
-  ): Extract<StepResult, { kind: "step" }> =>
-    recordSolve ? (withEvent(step, recordSolve, 0) as Extract<StepResult, { kind: "step" }>) : step;
-
-  if (journey.outcome === "pending_admin") {
-    return withSolve({
-      ...base,
-      lastAction: "The form says an administrator must activate the account",
-      apply: async (tx) => {
-        if (host.status === "qualified") {
-          await advanceHost(tx, host, "registration_started", {
-            registerUrl: new GenericFormDriver().registerUrl(host.homepageUrl),
-          });
-        }
-        await advanceHost(tx, host, "admin_pending");
-      },
-    });
-  }
-
-  if (journey.outcome === "posted" || waitingForMail) {
-    const posted = journey.outcome === "posted";
-    return withSolve({
-      ...base,
-      lastAction: posted
-        ? "Registered and posted the first reply"
-        : "Registered, waiting for the verification mail",
-      apply: async (tx) => {
-        if (host.status === "qualified") {
-          await advanceHost(tx, host, "registration_started", {
-            registerUrl: new GenericFormDriver().registerUrl(host.homepageUrl),
-          });
-        }
-        if (waitingForMail) {
-          await advanceHost(tx, host, "email_pending");
-          return;
-        }
-        await advanceHost(tx, host, "account_active");
-        await tx.lbHostAccount.update({
-          where: { id: accountId },
-          data: {
-            emailVerifiedAt: ctx.now,
-            postCount: { increment: 1 },
-            firstPostAt: ctx.now,
-            lastPostAt: ctx.now,
-          },
-        });
-      },
-    });
-  }
-
-  const reason = journey.parkReason ?? "unmapped";
-  if (reason === "mail_send_failed") {
-    return withSolve({
-      ...base,
-      lastAction: MAIL_SKIP_STATUS,
-      apply: (tx) => moveHost(tx, host, "failed", { statusReason: "mail_send_failed" }),
-    });
-  }
-  if (
-    reason === "missing_site_key" ||
-    reason === "captcha_rejected" ||
-    reason === "secret_prompt"
-  ) {
-    return withSolve({
-      ...base,
-      lastAction: reason === "captcha_rejected" ? CAPTCHA_SKIPPED : "Captcha not supported",
-      apply: async (tx) => {
-        if (host.status === "qualified" && submitted) {
-          await advanceHost(tx, host, "registration_started");
-        }
-        if (reason === "missing_site_key") {
-          await advanceHost(tx, host, "unsupported_captcha", {
-            captchaType: journeyCaptchaType(journey.detected),
-          });
-          return;
-        }
-        await skipUnsolvedCaptcha(host)(tx);
-      },
-    });
-  }
-  if (reason === "form_error" || journey.registration.at(-1) === "form_error") {
-    const detail = (journey.parkLabel || "").slice(0, 500);
-    return withSolve({
-      ...base,
-      lastAction: "The board refused the registration",
-      apply: detail ? (tx) => moveHost(tx, host, "failed", { statusReason: detail }) : undefined,
-    });
-  }
-  const ticket =
-    reason === "tie" || reason === "unknown_required" || reason === "unmapped"
-      ? "unmapped_form"
-      : "unknown_page_state";
-  const plan = await desktopSkipPlan(ctx, host, ticket);
-  return withSolve({
-    ...base,
-    ...plan,
-  });
 }
 
 async function register(ctx: StepContext): Promise<StepResult> {
@@ -1415,7 +1467,7 @@ async function register(ctx: StepContext): Promise<StepResult> {
   }
   const entry = requireSession(ctx, host);
   const genericHost = selectsGenericRegistrationJourney(host.platform);
-  const driver = genericHost ? new GenericFormDriver() : requireDriver(host, entry);
+  let driver: BoardDriver = genericHost ? new GenericFormDriver() : requireDriver(host, entry);
   if (genericHost) entry.driver = driver;
   if (host.status === "registering") {
     // A resumed step: the operator may already have submitted, so read the page and never submit.
@@ -1429,17 +1481,20 @@ async function register(ctx: StepContext): Promise<StepResult> {
       }
     }
   }
-  if (genericHost) return genericRegistrationJourney(ctx, host, entry);
-  const credentials = await ensureCredentials(ctx, host);
-  let page: Awaited<ReturnType<BoardDriver["openRegistration"]>>;
-  try {
-    page = await driver.openRegistration(entry.session, host.homepageUrl);
-  } catch (error) {
-    if (error instanceof UnmappedFormError) return genericRegistrationJourney(ctx, host, entry);
-    throw error;
+  let page: Awaited<ReturnType<BoardDriver["openRegistration"]>> = "unknown";
+  if (!genericHost) {
+    try {
+      page = await driver.openRegistration(entry.session, host.homepageUrl);
+    } catch (error) {
+      if (!(error instanceof UnmappedFormError)) throw error;
+      page = "unmapped";
+    }
   }
-  if (selectsGenericRegistrationJourney(host.platform, page)) {
-    return genericRegistrationJourney(ctx, host, entry);
+  if (page !== "form" && page !== "closed") {
+    const generic = new GenericFormDriver();
+    entry.driver = generic;
+    driver = generic;
+    page = await generic.openRegistration(entry.session, host.homepageUrl);
   }
   if (page !== "form") {
     const artifactIds = await screenshot(ctx, entry, "register");
@@ -1452,14 +1507,9 @@ async function register(ctx: StepContext): Promise<StepResult> {
         apply: (tx) => moveHost(tx, host, "failed", { statusReason: "registration_closed" }),
       };
     }
-    const plan = await desktopSkipPlan(ctx, host, "unknown_page_state");
-    return {
-      kind: "step",
-      hostId: host.id,
-      artifactIds,
-      ...plan,
-    };
+    return noSignupForm(ctx, host, artifactIds);
   }
+  const credentials = await ensureCredentials(ctx, host);
   await driver.fillRegistration(entry.session, credentials);
   entry.registerFormReady = true;
   entry.captchaAttempts = 0;
@@ -1837,24 +1887,14 @@ async function widgetViaApi(
   attempt: number,
 ): Promise<StepResult> {
   if (!challenge.siteKey) {
-    entry.registerFormReady = false;
-    const artifactIds = await screenshot(ctx, entry, "captcha");
-    return withEvent(
-      {
-        kind: "step",
-        lastAction: "Captcha not supported",
-        hostId: host.id,
-        artifactIds,
-        outcome: { captcha: "missing_site_key" },
-        apply: (tx) => moveHost(tx, host, "unsupported_captcha", { captchaType: challenge.type }),
-      },
-      captchaEvent(
-        ctx,
-        host,
-        attempt,
-        widgetRecord(challenge, "https_api", { outcome: "missing_site_key" }),
-      ),
-      0,
+    return finishRegistration(
+      ctx,
+      host,
+      entry,
+      driver,
+      attempt,
+      null,
+      await driver.submitRegistration(entry.session),
     );
   }
   const solved = await ctx.services.captcha.solve(
@@ -2083,35 +2123,6 @@ async function unmappedForm(
   };
 }
 
-async function replaceUsername(
-  ctx: StepContext,
-  host: HostRow,
-  accountId: string,
-  username: string,
-): Promise<void> {
-  const { prisma, secrets } = ctx.services;
-  const account = await prisma.lbHostAccount.findUnique({ where: { id: accountId } });
-  if (!account?.siteLoginId) return;
-  const password = await loadPassword(ctx, account.siteLoginId);
-  const stored = await upsertSiteLogin(
-    { prisma, secrets },
-    {
-      workspaceId: ctx.project.workspaceId,
-      userId: ctx.project.ownerUserId,
-      botId: LINK_BUILDER_LOGIN_BOT,
-      site: host.homepageUrl,
-      username,
-      password,
-      from: "user",
-    },
-  );
-  if ("error" in stored) return;
-  await prisma.lbHostAccount.update({
-    where: { id: accountId },
-    data: { username, siteLoginId: stored.login.id },
-  });
-}
-
 async function rotateUsername(ctx: StepContext, host: HostRow): Promise<void> {
   const { prisma, secrets } = ctx.services;
   const account = await prisma.lbHostAccount.findUnique({ where: { hostId: host.id } });
@@ -2209,12 +2220,36 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
     return found;
   };
   let link = linkFrom(await readInbox());
+  if (!link && ctx.services.sleep) {
+    await ctx.services.sleep(1_000);
+    link = linkFrom(await readInbox());
+  }
   if (!link) {
     const resent = await clickResendMail(entry.session);
     if (resent) await new Promise((resolve) => setTimeout(resolve, 1500));
     link = linkFrom(await readInbox());
   }
   if (!link) {
+    const waited = ctx.now.getTime() - account.createdAt.getTime();
+    if (waited >= MAIL_WAIT_MS) {
+      const domain = (process.env.RESEND_INBOUND_DOMAIN ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/^@/, "");
+      return {
+        kind: "step",
+        hostId: host.id,
+        lastAction: domain ? `No confirmation mail on ${domain}` : "No confirmation mail",
+        outcome: { mail: "not_in_inbox", paused: true },
+        run: { status: transitionRun(ctx.run.status, "paused") },
+        apply: async (tx) => {
+          await tx.lbProject.updateMany({
+            where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
+            data: { status: transitionProject("active", "paused") },
+          });
+        },
+      };
+    }
     return {
       kind: "step",
       hostId: host.id,
@@ -2237,19 +2272,25 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
       ...plan,
     };
   }
+  const verified = activation === "active";
   return {
     kind: "step",
-    lastAction:
-      activation === "active" ? "Email verified" : "Email verified, waiting for the admin",
+    lastAction: verified ? "Email verified" : "Email verified, waiting for the admin",
     hostId: host.id,
     artifactIds,
-    outcome: { activation },
+    outcome: { activation, ...(verified ? { paused: true } : {}) },
+    run: verified ? { status: transitionRun(ctx.run.status, "paused") } : undefined,
     apply: async (tx) => {
       await tx.lbHostAccount.update({
         where: { id: account.id },
         data: { emailVerifiedAt: verifiedAt },
       });
-      await moveHost(tx, host, activation === "active" ? "account_active" : "admin_pending");
+      await moveHost(tx, host, verified ? "account_active" : "admin_pending");
+      if (!verified) return;
+      await tx.lbProject.updateMany({
+        where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
+        data: { status: transitionProject("active", "paused") },
+      });
     },
   };
 }
@@ -2484,11 +2525,35 @@ async function recoverOpenThreads(
 
 async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   const host = requireHost(ctx);
+  if (
+    host.status === "pending_email" ||
+    host.status === "registering" ||
+    host.status === "qualified"
+  ) {
+    return {
+      kind: "step",
+      hostId: host.id,
+      lastAction: "Waiting for the confirmation",
+      outcome: { refused: "pending_email" },
+    };
+  }
+  const account = ctx.account;
+  if (!account) throw new StepFailure("Host has no account");
+  const timeZone = ctx.project.schedule?.timezone || "Europe/Berlin";
+  const postedToday = account.lastPostAt
+    ? sameLocalDay(account.lastPostAt, ctx.now, timeZone)
+    : false;
+  if (!warmup && (sameLocalDay(account.createdAt, ctx.now, timeZone) || postedToday)) {
+    return {
+      kind: "step",
+      hostId: host.id,
+      lastAction: "Link waits for a later day",
+      outcome: { refused: "link_day" },
+    };
+  }
   const entry = requireSession(ctx, host);
   const driver = requireDriver(host, entry);
   const { prisma } = ctx.services;
-  const account = ctx.account;
-  if (!account) throw new StepFailure("Host has no account");
   if (!account.siteLoginId) {
     const plan = await desktopSkipPlan(ctx, host, "missing_password");
     return {
@@ -3139,13 +3204,13 @@ const PAUSED_STUCK = "Paused, the browser step is stuck";
  * After that look, a still-stuck step pauses the project.
  */
 export async function recoverStuckStep(ctx: StepContext): Promise<StepResult | null> {
-  let rows: Array<{ outcome: unknown; error: string | null; createdAt: Date }> = [];
+  let rows: Array<{ outcome: unknown; error: string | null; createdAt: Date; kind?: string }> = [];
   try {
     rows = await ctx.services.prisma.lbRunStep.findMany({
       where: { runId: ctx.run.id },
       orderBy: { stepIndex: "desc" },
       take: 4,
-      select: { outcome: true, error: true, createdAt: true },
+      select: { outcome: true, error: true, createdAt: true, kind: true },
     });
   } catch {
     return null;
@@ -3157,8 +3222,35 @@ export async function recoverStuckStep(ctx: StepContext): Promise<StepResult | n
     if (!replaced) return { kind: "wait", reason: "sandbox_gone" };
     return null;
   }
+  const latestKind = rows[0]?.kind ?? "";
+  if (
+    (decision === "look" || decision === "pause") &&
+    latestKind === "register" &&
+    !signupFormWasOpen(ctx, rows) &&
+    ctx.host
+  ) {
+    return noSignupForm(ctx, ctx.host, []);
+  }
   if (decision === "pause") return pauseStuckProject(ctx);
-  return lookAtStuckPage(ctx);
+  return lookAtStuckPage(ctx, latestKind);
+}
+
+function signupFormWasOpen(ctx: StepContext, rows: Array<{ outcome: unknown }>): boolean {
+  if (ctx.pool()?.registerFormReady) return true;
+  const status = ctx.host?.status;
+  if (status === "registering" || status === "pending_email" || status === "pending_admin") {
+    return true;
+  }
+  return rows.some((row) => {
+    const outcome =
+      row.outcome && typeof row.outcome === "object"
+        ? (row.outcome as Record<string, unknown>)
+        : {};
+    const action = typeof outcome.lastAction === "string" ? outcome.lastAction : "";
+    return (
+      action === "Filled the registration form" || action.startsWith("Filled the next registration")
+    );
+  });
 }
 
 function stuckRecordFromStep(step: { outcome: unknown; error: string | null }): StuckRecord {
@@ -3212,7 +3304,14 @@ async function pauseStuckProject(ctx: StepContext): Promise<StepResult> {
   };
 }
 
-async function lookAtStuckPage(ctx: StepContext): Promise<StepResult> {
+const REGISTER_LOOK_KINDS = new Set(["register", "captcha", "finish_registration"]);
+
+function stayOnRegistration(ctx: StepContext, stepKind: string): boolean {
+  if (ctx.host?.status === "registering") return true;
+  return REGISTER_LOOK_KINDS.has(stepKind);
+}
+
+async function lookAtStuckPage(ctx: StepContext, stepKind = ""): Promise<StepResult> {
   try {
     const entry = await sessionForLook(ctx);
     if (!entry) return pauseStuckProject(ctx);
@@ -3225,13 +3324,17 @@ async function lookAtStuckPage(ctx: StepContext): Promise<StepResult> {
       domain ? usablePageLinks(await collectPageAnchors(entry.session), pageUrl, domain) : []
     ).filter((link) => !bannedPage(link.url));
     const labels = emptyFieldLabels(fields);
-    const choice =
+    const stay = stayOnRegistration(ctx, stepKind);
+    const asked =
       (await askStuckLook(
         ctx,
         pageUrl,
         labels,
         links.map((link) => link.text),
+        stay,
       )) ?? localStuckChoice({ emptyFillable: labels.length, threadCount: links.length });
+    const choice =
+      stay && asked.action === "other_thread" ? { action: "find_form" as const } : asked;
     if (choice.action === "fill_fields") {
       await entry.session.holdForm?.();
       if (ctx.host) await fillEmptyAccountFields(ctx, entry.session, fields);
@@ -3293,18 +3396,20 @@ async function askStuckLook(
   url: string,
   fields: readonly string[],
   links: readonly string[],
+  stayOnForm = false,
 ): Promise<StuckLookAction | null> {
   const model = ctx.services.textModel;
   if (!model) return null;
+  const linkCount = stayOnForm ? 0 : links.length;
   const request = {
     lane: "classify" as const,
     modelId: PAGE_LOOK_MODEL,
     system: STUCK_LOOK_SYSTEM,
-    user: stuckLookPrompt({ url, fields, links }),
+    user: stuckLookPrompt({ url, fields, links, allowOtherThread: !stayOnForm }),
     maxTokens: 120,
     schema: {
       safeParse(value: unknown) {
-        const parsed = parseStuckLook(value, links.length);
+        const parsed = parseStuckLook(value, linkCount);
         if (!parsed) return { success: false as const };
         return { success: true as const, data: parsed };
       },
@@ -3318,7 +3423,7 @@ async function askStuckLook(
       }),
     ]);
     if (!result.ok || !("value" in result) || !result.value) return null;
-    return parseStuckLook(result.value, links.length);
+    return parseStuckLook(result.value, linkCount);
   } catch {
     return null;
   }

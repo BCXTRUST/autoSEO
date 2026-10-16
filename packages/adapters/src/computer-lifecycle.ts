@@ -9,6 +9,7 @@ import type {
 import { screenLeaseId } from "@rakazo/core";
 import { type PrismaClient, parseComputerMode, type ThreadEvents } from "@rakazo/db";
 import { expireComputerControl, hasActiveComputerControl } from "./computer-control.js";
+import { toComputerRef } from "./computer-support.js";
 import { ensureComputerWorkspaceLayout, restoreComputerWorkspace } from "./computer-workspace.js";
 import { resolveAgentHomePath } from "./home.js";
 
@@ -34,7 +35,36 @@ export class ComputerBusyError extends Error {
   }
 }
 
-export { toComputerRef } from "./computer-support.js";
+/** The worker's signal that an E2B sandbox is gone. The name matches the SDK error. */
+export class ComputerGoneError extends Error {
+  constructor(id: string) {
+    super(`Sandbox is probably not running anymore: ${id}`);
+    this.name = "SandboxNotFoundError";
+  }
+}
+
+export { toComputerRef };
+
+export async function destroyWorkspaceComputers(
+  deps: { prisma: PrismaClient; sandbox: SandboxProvider },
+  workspaceId: string,
+  ctx: AdapterContext,
+): Promise<number> {
+  const rows = await deps.prisma.computer.findMany({
+    where: { workspaceId, kind: "e2b", providerRef: { not: null } },
+  });
+  let destroyed = 0;
+  for (const row of rows) {
+    if (!row.providerRef) continue;
+    await deps.sandbox.destroy(toComputerRef(row), ctx);
+    await deps.prisma.computer.update({
+      where: { id: row.id },
+      data: { state: "stopped", providerRef: null, screenUrl: null },
+    });
+    destroyed += 1;
+  }
+  return destroyed;
+}
 
 export async function provisionComputer(
   deps: {

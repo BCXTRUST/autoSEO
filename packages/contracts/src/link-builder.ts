@@ -24,6 +24,8 @@ export const LbHostStatusSchema = z.enum([
   "spam_blocked",
   "unsupported_captcha",
   "parked_operator",
+  "form_not_found",
+  "off_topic",
   "dead",
 ]);
 export type LbHostStatus = z.infer<typeof LbHostStatusSchema>;

@@ -710,6 +710,7 @@ model Computer {
   executionLeaseExpiresAt  DateTime?
   executionFence           Int      @default(0)
   screenUrl                String?
+  browserSeenAt            DateTime? @map("browser_seen_at")
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
   bots                     Bot[]

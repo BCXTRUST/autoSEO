@@ -118,6 +118,8 @@ export interface BrowserSession {
    */
   elementScreenshotPng(selector: string, options?: ElementScreenshotOptions): Promise<Uint8Array>;
   pageText(): Promise<string>;
+  /** Page HTML, used when a captcha site key is not on a widget attribute. */
+  pageHtml?(): Promise<string>;
   /** Accessibility tree for one look. Browser agents choose the next control from this. */
   ariaSnapshot?(): Promise<string>;
   /** Resolves true once the selector matches, false when the timeout elapses first. */

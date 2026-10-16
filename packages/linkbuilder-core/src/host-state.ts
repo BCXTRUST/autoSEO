@@ -16,6 +16,8 @@ export const TERMINAL_HOST_STATUSES = [
   "denied",
   "spam_blocked",
   "unsupported_captcha",
+  "form_not_found",
+  "off_topic",
   "dead",
 ] as const satisfies readonly HostStatus[];
 
@@ -60,7 +62,10 @@ const TRANSITIONS: Record<
   registration_started: { from: ["qualified"], to: "registering" },
   email_pending: { from: ["registering"], to: "pending_email" },
   admin_pending: { from: ["registering", "pending_email"], to: "pending_admin" },
-  account_active: { from: ["registering", "pending_email", "pending_admin"], to: "warming" },
+  account_active: {
+    from: ["qualified", "registering", "pending_email", "pending_admin"],
+    to: "warming",
+  },
   warmup_completed: { from: ["warming"], to: "ready" },
   link_counted: { from: ["ready"], to: "used" },
   denied: { from: NON_TERMINAL, to: "denied" },
@@ -72,6 +77,8 @@ const TRANSITIONS: Record<
   operator_skipped: { from: ["parked_operator"], to: "dead" },
   park_expired: { from: ["parked_operator"], to: "dead" },
   park_requalified: { from: ["parked_operator"], to: "qualified" },
+  // A missing form is `form_not_found` and an off-topic forum is `off_topic`, both written
+  // directly. `failed` stays dead for a block, a closed registration, or a site that is down.
   failed: { from: NON_TERMINAL, to: "dead" },
 };
 

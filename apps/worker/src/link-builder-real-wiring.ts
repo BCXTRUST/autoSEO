@@ -13,6 +13,7 @@ import type {
 import {
   CaptellHttpSolver,
   DataForSeoSearchProvider,
+  destroyWorkspaceComputers,
   type EncryptedSecretStore,
   EndpointTemplateProxyProvider,
   iproyalPreset,
@@ -22,7 +23,7 @@ import {
   recordedSerpDir,
   toComputerRef,
 } from "@rakazo/adapters";
-import type { PrismaClient } from "@rakazo/db";
+import { type PrismaClient, ensureComputerRecord } from "@rakazo/db";
 import {
   camoufoxExecutable,
   LocalBrowserSessionFactory,
@@ -57,15 +58,22 @@ export async function resolvePersonaComputer(input: {
 }): Promise<ComputerRef> {
   const project = await input.prisma.lbProject.findUnique({
     where: { id: input.projectId },
-    select: { workspaceId: true },
+    select: { workspaceId: true, createdByUserId: true },
   });
   if (!project) throw new Error("Link builder project not found");
   const computers = await input.prisma.computer.findMany({
     where: { workspaceId: project.workspaceId },
     orderBy: { updatedAt: "desc" },
   });
-  const computer = choosePersonaComputer(computers);
-  if (!computer) throw new Error("The workspace has no computer for the persona browser");
+  let computer = choosePersonaComputer(computers);
+  if (!computer) {
+    computer = await ensureComputerRecord(input.prisma, {
+      mode: "team",
+      workspaceId: project.workspaceId,
+      userId: project.createdByUserId,
+      kind: process.env.SANDBOX_PROVIDER?.trim() || "e2b",
+    });
+  }
   if (computer.state === "running" || computer.state === "booting") return toComputerRef(computer);
   const ref = await input.sandbox.provision(
     {
@@ -83,7 +91,7 @@ export async function resolvePersonaComputer(input: {
   return ref;
 }
 
-/** Pause the persona desktop, or destroy it when a step is stuck. */
+/** Destroy the persona desktop on pause and on a stuck step. */
 export async function releasePersonaComputer(input: {
   prisma: PrismaClient;
   sandbox: SandboxProvider;
@@ -96,22 +104,11 @@ export async function releasePersonaComputer(input: {
     select: { workspaceId: true },
   });
   if (!project) return;
-  const computers = await input.prisma.computer.findMany({
-    where: { workspaceId: project.workspaceId },
-    orderBy: { updatedAt: "desc" },
-  });
-  const computer = choosePersonaComputer(computers);
-  if (!computer?.providerRef || computer.state === "stopped") return;
-  const ref = toComputerRef(computer);
-  if (input.mode === "kill") await input.sandbox.destroy(ref, input.context);
-  else await input.sandbox.stop(ref, input.context);
-  await input.prisma.computer.update({
-    where: { id: computer.id },
-    data: {
-      state: input.mode === "kill" ? "stopped" : "suspended",
-      ...(input.mode === "kill" ? { providerRef: null } : {}),
-    },
-  });
+  await destroyWorkspaceComputers(
+    { prisma: input.prisma, sandbox: input.sandbox },
+    project.workspaceId,
+    input.context,
+  );
 }
 
 /** Recorded fixtures, or DataForSEO when `LINK_BUILDER_SEARCH=dataforseo` and a `lb_search` secret exists. */
@@ -125,19 +122,35 @@ export function searchProviderFromEnv(input: {
   if (input.env.LINK_BUILDER_SEARCH !== "dataforseo") return recorded;
   return new DataForSeoSearchProvider({
     onSecret: (secret) => input.secrets.redact(secret),
-    credentials: async (context: AdapterContext) => {
-      const row = await input.prisma.secret.findFirst({
-        where: { workspaceId: context.workspaceId, kind: "lb_search" },
-        orderBy: { createdAt: "desc" },
-      });
-      if (!row) throw new Error("missing search credentials");
-      const plain = input.secrets.load(row.ciphertext);
-      input.secrets.redact(plain);
-      const split = plain.indexOf(":");
-      if (split <= 0) throw new Error("missing search credentials");
-      return { login: plain.slice(0, split), password: plain.slice(split + 1) };
-    },
+    credentials: (context) => searchCredentialsForContext({ ...input, context }),
   });
+}
+
+export async function searchCredentialsForContext(input: {
+  env: NodeJS.ProcessEnv;
+  prisma: PrismaClient;
+  secrets: EncryptedSecretStore;
+  context: AdapterContext;
+}): Promise<{ login: string; password: string }> {
+  const row = await input.prisma.secret.findFirst({
+    where: { workspaceId: input.context.workspaceId, kind: "lb_search" },
+    orderBy: { createdAt: "desc" },
+  });
+  if (row) {
+    const plain = input.secrets.load(row.ciphertext);
+    input.secrets.redact(plain);
+    const split = plain.indexOf(":");
+    if (split <= 0) throw new Error("missing search credentials");
+    return { login: plain.slice(0, split), password: plain.slice(split + 1) };
+  }
+  const login = input.env.DATAFORSEO_LOGIN?.trim() ?? "";
+  const password = input.env.DATAFORSEO_PASSWORD?.trim() ?? "";
+  if (login && password) {
+    input.secrets.redact(login);
+    input.secrets.redact(password);
+    return { login, password };
+  }
+  throw new Error("missing search credentials");
 }
 
 export function browserFactoryFromEnv(input: {
@@ -188,7 +201,14 @@ export function browserFactoryFromEnv(input: {
     sandbox: input.sandbox,
     helperDirs: dirs(env.LINK_BUILDER_SANDBOX_HELPER_DIR),
     // E2B's desktop user is `user`. The Docker computer image uses `/home/rakazo`.
-    ...(env.SANDBOX_PROVIDER === "e2b" ? { profileRoot: "/home/user/.browser-profiles" } : {}),
+    ...(env.SANDBOX_PROVIDER === "e2b"
+      ? {
+          profileRoot: "/home/user/.browser-profiles",
+          runnerArgv: ["/home/user/.autoseo/bin/rakazo-lb-browser"],
+          bundledChromium: true,
+          kiosk: true,
+        }
+      : {}),
     proxyResolver: input.proxyResolver,
     resolveComputer(persona, context) {
       return resolvePersonaComputer({

@@ -93,6 +93,48 @@ async function call(routerDeps: RouterDeps, who: Actor, path: string, body: unkn
 }
 
 describe("link builder routes", () => {
+  it("destroys the workspace sandbox when a project is paused", async () => {
+    const row = projectRow({ status: "active" });
+    const prisma = {
+      lbProject: {
+        findFirst: vi.fn(async () => row),
+        update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          Object.assign(row, data);
+          return row;
+        }),
+      },
+      lbRun: { findMany: vi.fn(async () => []) },
+      computer: {
+        findMany: vi.fn(async () => [
+          {
+            id: "computer-1",
+            workspaceId: "workspace-1",
+            homeKey: "team-workspace-1",
+            kind: "e2b",
+            providerRef: "sandbox-1",
+            state: "running",
+            scope: "team",
+          },
+        ]),
+        update: vi.fn(async () => ({})),
+      },
+    } as unknown as PrismaClient;
+    const destroy = vi.fn(async () => undefined);
+    const { response } = await call(
+      { ...deps(prisma), sandbox: { destroy } as RouterDeps["sandbox"] },
+      actor,
+      "linkBuilder/projects/pause",
+      { projectId: "project-1" },
+    );
+    expect(response.status).toBe(200);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(destroy.mock.calls[0]?.[0]).toMatchObject({ providerRef: "sandbox-1" });
+    expect(prisma.computer.update).toHaveBeenCalledWith({
+      where: { id: "computer-1" },
+      data: { state: "stopped", providerRef: null, screenUrl: null },
+    });
+  });
+
   it("scopes project lookup to the caller workspace", async () => {
     const findFirst = vi.fn().mockResolvedValue(null);
     const prisma = { lbProject: { findFirst } } as unknown as PrismaClient;
@@ -472,7 +514,13 @@ describe("link builder routes", () => {
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as {
-      json: { charged: boolean; entitled: boolean; balance: number; reason: string; checkoutUrl: null };
+      json: {
+        charged: boolean;
+        entitled: boolean;
+        balance: number;
+        reason: string;
+        checkoutUrl: null;
+      };
     };
     expect(body.json.charged).toBe(false);
     expect(body.json.entitled).toBe(false);

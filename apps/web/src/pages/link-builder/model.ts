@@ -63,7 +63,14 @@ export const FUNNEL_COLUMNS = [
   {
     id: "blocked",
     label: "Blocked",
-    statuses: ["denied", "spam_blocked", "unsupported_captcha", "dead"],
+    statuses: [
+      "denied",
+      "spam_blocked",
+      "unsupported_captcha",
+      "form_not_found",
+      "off_topic",
+      "dead",
+    ],
   },
 ] as const;
 

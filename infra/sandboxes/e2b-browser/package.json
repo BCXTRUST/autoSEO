@@ -1,0 +1,8 @@
+{
+  "name": "@rakazo/e2b-browser",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "e2b": "2.38.3"
+  }
+}

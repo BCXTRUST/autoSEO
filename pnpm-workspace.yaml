@@ -2,4 +2,5 @@ packages:
   - "apps/*"
   - "packages/*"
   - "infra/sandboxes/supervisor"
+  - "infra/sandboxes/e2b-browser"
   - "infra/updater"

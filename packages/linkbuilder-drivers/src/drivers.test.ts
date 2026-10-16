@@ -24,7 +24,7 @@ import {
   runPageHelper,
   solveImageCaptcha,
 } from "./captcha.js";
-import { acceptCookieWall, consentAcceptText, COOKIE_ACCEPT_SELECTORS } from "./cookie-wall.js";
+import { acceptCookieWall, COOKIE_ACCEPT_SELECTORS, consentAcceptText } from "./cookie-wall.js";
 import { boardDriverFor } from "./index.js";
 import { PhpbbDriver, phpbbPermalink, phpbbTopicUrl } from "./phpbb.js";
 import { type FixtureMail, renderBbcode, startPhpbbFixture } from "./testing/phpbb-fixture.js";
@@ -110,9 +110,11 @@ describe("phpBB driver helpers", () => {
     expect(
       session.actions.some((action) => action.kind === "click" && action.selector === privacy),
     ).toBe(true);
-    expect(session.actions.some((action) => action.kind === "fill" && action.value === "secret-password")).toBe(
-      false,
-    );
+    expect(
+      session.actions.some(
+        (action) => action.kind === "fill" && action.value === "secret-password",
+      ),
+    ).toBe(false);
     const again = new FakeBrowserSession(
       "privacy-checked",
       { projectId: "p", profileKey: "k", locale: "de-DE", timezoneId: "Europe/Berlin" },
@@ -160,9 +162,9 @@ describe("phpBB driver helpers", () => {
       email: "mira@inbox.example",
       password: "secret-password",
     });
-    expect(radios.actions.some((action) => action.kind === "click" && action.selector === yes)).toBe(
-      true,
-    );
+    expect(
+      radios.actions.some((action) => action.kind === "click" && action.selector === yes),
+    ).toBe(true);
   });
 
   it("leaves a dismissed cookie bar alone", async () => {
@@ -256,9 +258,9 @@ describe("phpBB driver helpers", () => {
     );
     await session.goto("https://board.example/reply");
     await driver.fillReply(session, "Kurze Pausen helfen bei Krämpfen.");
-    expect(session.actions.some((action) => action.kind === "click" && action.selector === box)).toBe(
-      true,
-    );
+    expect(
+      session.actions.some((action) => action.kind === "click" && action.selector === box),
+    ).toBe(true);
     expect(session.valueOf(message)).toBe("Kurze Pausen helfen bei Krämpfen.");
   });
 
@@ -512,6 +514,17 @@ describe("captcha crop and widgets", () => {
       kind: "widget",
       type: "recaptcha_v2",
       siteKey: "from-frame",
+    });
+    const htmlOnly = {
+      exists: async () => false,
+      attribute: async () => null,
+      pageHtml: async () =>
+        `<html><body><script>https://www.google.com/recaptcha/api2/anchor?k=6LcHtmlOnlyKey12345</script></body></html>`,
+    } as BrowserSession;
+    expect(await detectWidget(htmlOnly)).toEqual({
+      kind: "widget",
+      type: "recaptcha_v2",
+      siteKey: "6LcHtmlOnlyKey12345",
     });
   });
 

@@ -1,7 +1,16 @@
-import { type Sandbox, TimeoutError } from "@e2b/desktop";
+import { execFileSync } from "node:child_process";
+import { Sandbox as DesktopSandbox, type Sandbox, TimeoutError } from "@e2b/desktop";
+import { Sandbox as E2BSandbox, SandboxNotFoundError } from "e2b";
 import { describe, expect, it, vi } from "vitest";
+import { ComputerGoneError } from "./computer-lifecycle.js";
 import { shouldSkipPortableWorkspaceFile } from "./computer-workspace.js";
-import { E2BSandboxProvider, type E2BSandboxSdk } from "./e2b-sandbox.js";
+import {
+  E2BSandboxProvider,
+  type E2BSandboxSdk,
+  e2bCreateOptions,
+  ensureBrowserRunner,
+  RUNNER_WRAPPER_SCRIPT,
+} from "./e2b-sandbox.js";
 
 const context = {
   operationId: "e2b-test",
@@ -12,6 +21,28 @@ const context = {
 };
 
 describe("E2B computer backend", () => {
+  it("kills a sandbox at the hard timeout instead of pausing it", () => {
+    const previousTemplate = process.env.E2B_TEMPLATE;
+    const previousHard = process.env.SANDBOX_HARD_TIMEOUT_MS;
+    delete process.env.E2B_TEMPLATE;
+    delete process.env.SANDBOX_HARD_TIMEOUT_MS;
+    try {
+      const options = e2bCreateOptions("bot-1", "test-key");
+      expect(options.timeoutMs).toBe(300000);
+      expect(options.lifecycle.onTimeout).toBe("kill");
+      expect(options.metadata).toMatchObject({
+        botId: "bot-1",
+        rakazo: "computer",
+        template: "autoseo-browser-v1",
+      });
+    } finally {
+      if (previousTemplate === undefined) delete process.env.E2B_TEMPLATE;
+      else process.env.E2B_TEMPLATE = previousTemplate;
+      if (previousHard === undefined) delete process.env.SANDBOX_HARD_TIMEOUT_MS;
+      else process.env.SANDBOX_HARD_TIMEOUT_MS = previousHard;
+    }
+  });
+
   it("only filters transient cache files inside portable browser profiles", () => {
     expect(shouldSkipPortableWorkspaceFile("project/Cache/important.txt")).toBe(false);
     expect(shouldSkipPortableWorkspaceFile("project/lock")).toBe(false);
@@ -38,6 +69,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     };
     const provider = new E2BSandboxProvider("test-key", sdk);
     const computer = await provider.provision(
@@ -150,6 +183,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     };
     const provider = new E2BSandboxProvider("test-key", sdk);
     const computer = await provider.provision(
@@ -275,7 +310,8 @@ describe("E2B computer backend", () => {
 
     await screen.close();
     await provider.stop(computer, context);
-    expect(desktop.pause).toHaveBeenCalled();
+    expect(sdk.kill).toHaveBeenCalled();
+    expect(desktop.pause).not.toHaveBeenCalled();
   });
 
   it("serves primary watch through noVNC even if the SDK stream URL is missing", async () => {
@@ -310,6 +346,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const screen = await provider.connectScreen(computer, { view: "stream" }, context);
@@ -345,6 +383,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const screen = await provider.connectScreen(computer, { view: "stream" }, context);
@@ -562,6 +602,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     await provider.prepare(computer, context);
@@ -609,6 +651,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const observation = await provider.observe(computer, context);
@@ -635,14 +679,14 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const observation = await provider.observe(computer, { ...context, operationId: "preview" });
     expect(screenshot).toHaveBeenCalledOnce();
     expect(observation.image.byteLength).toBeGreaterThan(0);
-    expect(
-      command.mock.calls.some(([value]) => String(value).includes("RAKAZO_SCREEN_INDEX")),
-    ).toBe(false);
+    expect(JSON.stringify(command.mock.calls)).not.toContain("RAKAZO_SCREEN_INDEX");
   });
 
   it("keeps a detached browser after the command handle disconnects", async () => {
@@ -667,6 +711,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const events = [];
@@ -708,6 +754,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const events = [];
@@ -757,6 +805,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const screen = await provider.connectScreen(computer, { view: "stream" }, context);
@@ -800,6 +850,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     const screen = await provider.connectScreen(computer, { view: "stream" }, context);
@@ -830,6 +882,8 @@ describe("E2B computer backend", () => {
       create: vi.fn(async () => desktop),
       connect: vi.fn(async () => desktop),
       pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "running" })),
+      kill: vi.fn(async () => true),
     });
     const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
     await provider.prepare(computer, context);
@@ -842,5 +896,138 @@ describe("E2B computer backend", () => {
       { type: "exit", code: 0 },
     ]);
     expect(directories).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("E2B sandbox liveness", () => {
+  it("drops a stale cache when getInfo says the sandbox is gone", async () => {
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const cached = {
+      sandboxId: "box-1",
+      setTimeout: vi.fn(async () => undefined),
+    } as unknown as Sandbox;
+    const sdk: E2BSandboxSdk = {
+      create: vi.fn(async () => cached),
+      connect: vi.fn(async () => cached),
+      pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => {
+        throw new SandboxNotFoundError("gone");
+      }),
+      kill: vi.fn(async () => false),
+    };
+    try {
+      const provider = new E2BSandboxProvider("test-key", sdk);
+      const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
+      now += 31_000;
+      await expect(provider.keepAlive(computer)).rejects.toBeInstanceOf(ComputerGoneError);
+      expect(sdk.connect).not.toHaveBeenCalled();
+      await provider.keepAlive(computer);
+      expect(sdk.connect).toHaveBeenCalledTimes(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("kills a paused sandbox and creates a new one without connecting", async () => {
+    const created = { sandboxId: "box-new", setTimeout: vi.fn() } as unknown as Sandbox;
+    const sdk: E2BSandboxSdk = {
+      create: vi.fn(async () => created),
+      connect: vi.fn(async () => created),
+      pause: vi.fn(async () => undefined),
+      getInfo: vi.fn(async () => ({ state: "paused" })),
+      kill: vi.fn(async () => true),
+    };
+    const provider = new E2BSandboxProvider("test-key", sdk);
+    const computer = await provider.provision(
+      {
+        botId: "bot-1",
+        homePath: "/unused",
+        providerRef: "paused-box",
+        providerKind: "e2b",
+      },
+      context,
+    );
+    expect(sdk.kill).toHaveBeenCalledWith("paused-box", { apiKey: "test-key" });
+    expect(sdk.connect).not.toHaveBeenCalled();
+    expect(sdk.create).toHaveBeenCalledTimes(1);
+    expect(computer.providerRef).toBe("box-new");
+  });
+});
+
+describe("autoseo browser runner", () => {
+  it("starts the runner with the shared browser path and local playwright", () => {
+    expect(RUNNER_WRAPPER_SCRIPT).toContain("export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright");
+    expect(RUNNER_WRAPPER_SCRIPT).toContain("export LINK_BUILDER_BROWSER_ENGINE=playwright");
+    expect(RUNNER_WRAPPER_SCRIPT).not.toContain("NODE_PATH");
+  });
+
+  it("does not call the desktop SDK create for autoseo-browser-v1", async () => {
+    const previous = process.env.E2B_TEMPLATE;
+    delete process.env.E2B_TEMPLATE;
+    const desktop = { sandboxId: "box-new", setTimeout: vi.fn() } as unknown as Sandbox;
+    const created = vi
+      .spyOn(E2BSandbox, "create")
+      .mockResolvedValue({ sandboxId: "box-new" } as never);
+    const desktopCreate = vi.spyOn(DesktopSandbox, "create");
+    const connect = vi.spyOn(DesktopSandbox, "connect").mockResolvedValue(desktop);
+    try {
+      const provider = new E2BSandboxProvider("test-key");
+      const computer = await provider.provision({ botId: "bot-1", homePath: "/unused" }, context);
+      expect(desktopCreate).not.toHaveBeenCalled();
+      expect(created).toHaveBeenCalledWith(
+        "autoseo-browser-v1",
+        expect.objectContaining({
+          apiKey: "test-key",
+          metadata: expect.objectContaining({ template: "autoseo-browser-v1", rakazo: "computer" }),
+        }),
+      );
+      expect(connect).toHaveBeenCalledWith(
+        "box-new",
+        expect.objectContaining({ apiKey: "test-key" }),
+      );
+      expect(computer.providerRef).toBe("box-new");
+    } finally {
+      created.mockRestore();
+      desktopCreate.mockRestore();
+      connect.mockRestore();
+      if (previous === undefined) delete process.env.E2B_TEMPLATE;
+      else process.env.E2B_TEMPLATE = previous;
+    }
+  });
+
+  it("writes three runner files when the hash changes and none when it matches", async () => {
+    execFileSync("node", ["scripts/bundle-runner.mjs"], {
+      cwd: "packages/linkbuilder-browser",
+      stdio: "pipe",
+    });
+    const written: string[] = [];
+    let hash = "";
+    const write = vi.fn(async (entries: Array<{ path: string; data: ArrayBuffer }>) => {
+      for (const entry of entries) {
+        written.push(entry.path);
+        if (entry.path.endsWith("runner.sha256")) hash = Buffer.from(entry.data).toString("utf8");
+      }
+    });
+    const desktop = {
+      files: {
+        read: vi.fn(async () => {
+          if (!hash) throw new Error("missing");
+          return hash;
+        }),
+        write,
+      },
+      commands: { run: vi.fn(async () => ({ exitCode: 0 })) },
+    } as unknown as Sandbox;
+    await ensureBrowserRunner(desktop);
+    expect(written).toEqual([
+      "/home/user/.autoseo/rakazo-lb-browser.cjs",
+      "/home/user/.autoseo/runner.sha256",
+      "/home/user/.autoseo/bin/rakazo-lb-browser",
+    ]);
+    written.length = 0;
+    await ensureBrowserRunner(desktop);
+    expect(written).toEqual([]);
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });

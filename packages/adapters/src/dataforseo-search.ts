@@ -18,6 +18,9 @@ import { z } from "zod";
 export const DATAFORSEO_ENDPOINT =
   "https://api.dataforseo.com/v3/serp/google/organic/live/advanced";
 
+/** Live SERP calls. Production uses this when wiring does not pass timeoutMs. */
+export const DATAFORSEO_TIMEOUT_MS = 60_000;
+
 /** Location codes for the wizard countries. Unknown countries are refused, not guessed. */
 export const DATAFORSEO_LOCATION_CODES: Readonly<Record<string, number>> = {
   DE: 2276,
@@ -36,25 +39,25 @@ export const DATAFORSEO_LOCATION_CODES: Readonly<Record<string, number>> = {
 
 const ItemSchema = z.object({
   type: z.string(),
-  url: z.string().optional(),
-  title: z.string().optional(),
-  description: z.string().optional(),
-  domain: z.string().optional(),
+  url: z.string().nullish(),
+  title: z.string().nullish(),
+  description: z.string().nullish(),
+  domain: z.string().nullish(),
 });
 
 const ResponseSchema = z.object({
-  status_code: z.number().optional(),
-  status_message: z.string().optional(),
+  status_code: z.number().nullish(),
+  status_message: z.string().nullish(),
   tasks: z
     .array(
       z.object({
-        status_code: z.number().optional(),
-        status_message: z.string().optional(),
+        status_code: z.number().nullish(),
+        status_message: z.string().nullish(),
         result: z
           .array(
             z
               .object({
-                items: z.array(ItemSchema).nullable().optional(),
+                items: z.array(z.unknown()).nullish(),
               })
               .nullable(),
           )
@@ -64,6 +67,16 @@ const ResponseSchema = z.object({
     )
     .optional(),
 });
+
+/** Provider status only. Never the login, the password, or the response body. */
+export function providerStatusLine(json: unknown): string {
+  const root = recordOf(json);
+  const tasks = root && Array.isArray(root.tasks) ? root.tasks : [];
+  const task = recordOf(tasks[0]);
+  const message = statusText(task?.status_message) || statusText(root?.status_message);
+  const line = `status ${statusCode(root?.status_code)}/${statusCode(task?.status_code)}${message ? ` ${message}` : ""}`;
+  return line.slice(0, 160);
+}
 
 export class SearchProviderError extends Error {
   readonly code: "unauthorized" | "invalid" | "upstream" | "schema" | "unsupported_market";
@@ -90,6 +103,7 @@ export interface DataForSeoSearchOptions {
 }
 
 export class DataForSeoSearchProvider implements SearchProvider {
+  partialNotice: string | null = null;
   private readonly credentials: DataForSeoSearchOptions["credentials"];
   private readonly onSecret: ((secret: string) => void) | undefined;
   private readonly fetchImpl: typeof fetch;
@@ -101,7 +115,7 @@ export class DataForSeoSearchProvider implements SearchProvider {
     this.onSecret = options.onSecret;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.endpoint = options.endpoint ?? DATAFORSEO_ENDPOINT;
-    this.timeoutMs = options.timeoutMs ?? 20_000;
+    this.timeoutMs = options.timeoutMs ?? DATAFORSEO_TIMEOUT_MS;
     if (!this.endpoint.startsWith("https://")) {
       throw new SearchProviderError("invalid", "invalid");
     }
@@ -117,6 +131,7 @@ export class DataForSeoSearchProvider implements SearchProvider {
   }
 
   async search(request: WebSearchRequest, context: AdapterContext): Promise<WebSearchResult[]> {
+    this.partialNotice = null;
     const parsed = WebSearchRequestSchema.parse(request);
     const location = DATAFORSEO_LOCATION_CODES[parsed.country];
     if (!location) throw new SearchProviderError("unsupported_market");
@@ -148,6 +163,12 @@ export class DataForSeoSearchProvider implements SearchProvider {
         signal: AbortSignal.any([context.signal, AbortSignal.timeout(this.timeoutMs)]),
       });
     } catch (error) {
+      if (isSearchTimeout(error)) {
+        throw new SearchProviderError(
+          "upstream",
+          `timed out after ${Math.round(this.timeoutMs / 1000)} seconds`,
+        );
+      }
       throw new SearchProviderError("upstream", redact(errorText(error), creds));
     }
     if (response.status === 401 || response.status === 403) {
@@ -155,17 +176,26 @@ export class DataForSeoSearchProvider implements SearchProvider {
     }
     const json = await readJson(response);
     const payload = ResponseSchema.safeParse(json);
-    if (!payload.success) throw new SearchProviderError("schema");
+    if (!payload.success) throw new SearchProviderError("schema", providerStatusLine(json));
     const task = payload.data.tasks?.[0];
     if ((payload.data.status_code && payload.data.status_code !== 20000) || !task) {
-      throw new SearchProviderError(response.status >= 500 ? "upstream" : "invalid");
+      throw new SearchProviderError(
+        response.status >= 500 ? "upstream" : "invalid",
+        providerStatusLine(json),
+      );
     }
-    if (task.status_code && task.status_code !== 20000) {
-      throw new SearchProviderError(task.status_code === 40100 ? "unauthorized" : "invalid");
+    if (task.status_code && task.status_code !== 20000 && task.status_code !== 40106) {
+      throw new SearchProviderError(
+        task.status_code === 40100 ? "unauthorized" : "invalid",
+        providerStatusLine(json),
+      );
     }
     const items = task.result?.[0]?.items ?? [];
     const results: WebSearchResult[] = [];
-    for (const item of items) {
+    for (const raw of items) {
+      const parsedItem = ItemSchema.safeParse(raw);
+      if (!parsedItem.success) continue;
+      const item = parsedItem.data;
       if (item.type !== "organic" || !item.url) continue;
       const row = WebSearchResultSchema.safeParse({
         url: item.url,
@@ -176,12 +206,31 @@ export class DataForSeoSearchProvider implements SearchProvider {
       if (row.success) results.push(row.data);
       if (results.length >= parsed.depth) break;
     }
+    if (task.status_code === 40106) {
+      if (results.length === 0) {
+        throw new SearchProviderError("invalid", providerStatusLine(json));
+      }
+      this.partialNotice = providerStatusLine(json);
+    }
     return results;
   }
 }
 
 export function searchFixtureKey(query: string): string {
   return createHash("sha256").update(query).digest("hex").slice(0, 16);
+}
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function statusCode(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value) ? String(value) : "?";
+}
+
+function statusText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
 }
 
 function domainOf(url: string): string {
@@ -204,6 +253,13 @@ async function readJson(response: Response): Promise<unknown> {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "upstream";
+}
+
+function isSearchTimeout(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const named = error as { name?: unknown; message?: unknown };
+  if (named.name === "TimeoutError") return true;
+  return typeof named.message === "string" && named.message.includes("timeout");
 }
 
 function redact(message: string, creds: DataForSeoCredentials): string {

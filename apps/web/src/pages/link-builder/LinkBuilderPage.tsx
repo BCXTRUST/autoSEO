@@ -37,6 +37,7 @@ import {
   OperatorView,
   type ProjectSurface,
   ProjectView,
+  type ScreenState,
   WizardView,
 } from "./views.js";
 
@@ -424,6 +425,7 @@ function ProjectRoute({ projectId }: { projectId: string }) {
   const [leases, setLeases] = useState<LbProxyLeaseView[]>([]);
   const [busy, setBusy] = useState(false);
   const [screenUrl, setScreenUrl] = useState<string | null>(null);
+  const [screenState, setScreenState] = useState<ScreenState>("off");
   const [screenError, setScreenError] = useState<string | null>(null);
   const [screenPending, setScreenPending] = useState(true);
   const screenUrlRef = useRef<string | null>(null);
@@ -496,6 +498,7 @@ function ProjectRoute({ projectId }: { projectId: string }) {
     let timer = 0;
     screenUrlRef.current = null;
     setScreenUrl(null);
+    setScreenState("off");
     setScreenError(null);
     setScreenPending(true);
     const pull = async () => {
@@ -503,7 +506,9 @@ function ProjectRoute({ projectId }: { projectId: string }) {
       try {
         const next = await rpc.linkBuilder.projects.screen({ projectId });
         if (cancelled) return;
-        if (next.url) {
+        const state = next.state ?? (next.url ? "live" : "off");
+        setScreenState(state);
+        if (state === "live" && next.url) {
           screenUrlRef.current = next.url;
           setScreenUrl(next.url);
           setScreenError(null);
@@ -703,6 +708,7 @@ function ProjectRoute({ projectId }: { projectId: string }) {
       creditNote={null}
       onBuyCredits={() => navigate("/link-builder/credits")}
       screenUrl={screenUrl}
+      screenState={screenState}
       screenError={screenError}
       screenPending={screenPending}
       onHelp={() => {

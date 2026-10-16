@@ -1,5 +1,7 @@
-import { randomBytes } from "node:crypto";
-import { Sandbox, TimeoutError } from "@e2b/desktop";
+import { createHash, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { Sandbox as DesktopSandbox, TimeoutError } from "@e2b/desktop";
 import type {
   AdapterContext,
   CommandRequest,
@@ -26,9 +28,10 @@ import {
   listVisibleWindowsCommand,
   looksLikeDesktopBrowserApp,
   parseVisibleWindows,
-  repairDesktopDisplayCommand,
 } from "@rakazo/core";
-import { sandboxIdleMs } from "./computer-idle.js";
+import { Sandbox as E2BSandbox } from "e2b";
+import { sandboxHardTimeoutMs } from "./computer-idle.js";
+import { ComputerGoneError } from "./computer-lifecycle.js";
 import { ComputerScreenUnavailableError, screenSessionKey } from "./computer-screens.js";
 import {
   boundedComputerActions,
@@ -62,13 +65,26 @@ import {
   screenControlKey,
 } from "./extra-displays.js";
 
+const require = createRequire(import.meta.url);
 const E2B_WORKSPACE = "/home/user/rakazo-home";
 const E2B_BROWSER_PROFILES = `${E2B_WORKSPACE}/.browser-profiles`;
+const RUNNER_BUNDLE = "/home/user/.autoseo/rakazo-lb-browser.cjs";
+const RUNNER_HASH = "/home/user/.autoseo/runner.sha256";
+const RUNNER_WRAPPER = "/home/user/.autoseo/bin/rakazo-lb-browser";
+export const RUNNER_WRAPPER_SCRIPT = `#!/bin/sh
+export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+export LINK_BUILDER_BROWSER_ENGINE=playwright
+exec node /home/user/.autoseo/rakazo-lb-browser.cjs "$@"
+`;
+
+type Sandbox = DesktopSandbox;
 
 export interface E2BSandboxSdk {
-  create(options: ReturnType<typeof e2bCreateOptions>): Promise<Sandbox>;
+  create(template: string, options: ReturnType<typeof e2bCreateOptions>): Promise<Sandbox>;
   connect(id: string, options: { apiKey: string; timeoutMs: number }): Promise<Sandbox>;
   pause(id: string, options: { apiKey: string }): Promise<void>;
+  getInfo(id: string, options: { apiKey: string }): Promise<{ state: string }>;
+  kill(id: string, options: { apiKey: string }): Promise<boolean>;
 }
 
 /** The desktop SDK throws on a non-zero exit. Callers still need that stdout, for example a runner ping. */
@@ -94,13 +110,17 @@ function commandFailure(
   };
 }
 
+export function e2bTemplate(): string {
+  return process.env.E2B_TEMPLATE?.trim() || "autoseo-browser-v1";
+}
+
 export function e2bCreateOptions(botId: string, apiKey: string) {
   return {
     apiKey,
-    timeoutMs: sandboxIdleMs(),
-    metadata: { botId, rakazo: "computer" },
+    timeoutMs: sandboxHardTimeoutMs(),
+    metadata: { botId, rakazo: "computer", template: e2bTemplate() },
     resolution: [1280, 800] as [number, number],
-    lifecycle: { onTimeout: "pause" as const, autoResume: false },
+    lifecycle: { onTimeout: "kill" as const, autoResume: false },
   };
 }
 
@@ -165,6 +185,28 @@ async function listDesktopWindows(desktop: Sandbox, display = desktop.display ??
   return parseVisibleWindows(typeof listed.stdout === "string" ? listed.stdout : "");
 }
 
+function createDefaultE2BSandboxSdk(): E2BSandboxSdk {
+  const desktop = DesktopSandbox as unknown as E2BSandboxSdk;
+  return {
+    async create(template, options) {
+      const created = await E2BSandbox.create(template, {
+        apiKey: options.apiKey,
+        timeoutMs: options.timeoutMs,
+        metadata: options.metadata,
+        lifecycle: options.lifecycle,
+      });
+      return DesktopSandbox.connect(created.sandboxId, {
+        apiKey: options.apiKey,
+        timeoutMs: options.timeoutMs,
+      });
+    },
+    connect: (id, options) => desktop.connect(id, options),
+    pause: (id, options) => desktop.pause(id, options),
+    getInfo: (id, options) => desktop.getInfo(id, options),
+    kill: (id, options) => desktop.kill(id, options),
+  };
+}
+
 export class E2BSandboxProvider implements SandboxProvider {
   private readonly boxes = new Map<string, Sandbox>();
   private readonly lastTouchedAt = new Map<string, number>();
@@ -172,7 +214,7 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   constructor(
     private readonly apiKey: string,
-    private readonly sdk: E2BSandboxSdk = Sandbox as unknown as E2BSandboxSdk,
+    private readonly sdk: E2BSandboxSdk = createDefaultE2BSandboxSdk(),
   ) {}
 
   describe() {
@@ -195,20 +237,36 @@ export class E2BSandboxProvider implements SandboxProvider {
     const id = computer.providerRef || computer.id;
     const existing = this.boxes.get(id);
     if (existing) {
-      const lastTouched = this.lastTouchedAt.get(id) ?? 0;
-      if (Date.now() - lastTouched >= 60_000) {
-        await existing.setTimeout(sandboxIdleMs()).catch(() => undefined);
+      const lastChecked = this.lastTouchedAt.get(id) ?? 0;
+      if (Date.now() - lastChecked >= 30_000) {
+        await this.assertRunning(id);
+        await existing.setTimeout(sandboxHardTimeoutMs()).catch(() => undefined);
         this.lastTouchedAt.set(id, Date.now());
       }
       return existing;
     }
     const connected = await this.sdk.connect(id, {
       apiKey: this.apiKey,
-      timeoutMs: sandboxIdleMs(),
+      timeoutMs: sandboxHardTimeoutMs(),
     });
     this.boxes.set(connected.sandboxId, connected);
     this.lastTouchedAt.set(connected.sandboxId, Date.now());
     return connected;
+  }
+
+  private async assertRunning(id: string): Promise<void> {
+    let state = "";
+    try {
+      const info = await this.sdk.getInfo(id, { apiKey: this.apiKey });
+      state = info.state;
+    } catch (error) {
+      if (!isUnrecoverableSandboxError(error)) throw error;
+      this.forget(id);
+      throw new ComputerGoneError(id);
+    }
+    if (state === "running") return;
+    this.forget(id);
+    throw new ComputerGoneError(id);
   }
 
   async provision(
@@ -221,13 +279,15 @@ export class E2BSandboxProvider implements SandboxProvider {
     _context: AdapterContext,
   ): Promise<ComputerRef> {
     if (request.providerRef && request.providerKind === "e2b") {
-      try {
+      const existing = await this.lookupSandbox(request.providerRef);
+      if (existing === "running") {
         const desktop = await this.sdk.connect(request.providerRef, {
           apiKey: this.apiKey,
-          timeoutMs: sandboxIdleMs(),
+          timeoutMs: sandboxHardTimeoutMs(),
         });
         this.boxes.set(desktop.sandboxId, desktop);
         this.lastTouchedAt.set(desktop.sandboxId, Date.now());
+        await ensureBrowserRunner(desktop);
         return {
           id: desktop.sandboxId,
           botId: request.botId,
@@ -235,14 +295,22 @@ export class E2BSandboxProvider implements SandboxProvider {
           providerRef: desktop.sandboxId,
           fresh: false,
         };
-      } catch (error) {
-        this.boxes.delete(request.providerRef);
-        if (!isUnrecoverableSandboxError(error)) throw error;
+      }
+      if (existing === "paused") {
+        await this.sdk
+          .kill(request.providerRef, { apiKey: this.apiKey })
+          .catch((error: unknown) => {
+            if (!isUnrecoverableSandboxError(error)) throw error;
+          });
       }
     }
-    const desktop = await this.sdk.create(e2bCreateOptions(request.botId, this.apiKey));
+    const desktop = await this.sdk.create(
+      e2bTemplate(),
+      e2bCreateOptions(request.botId, this.apiKey),
+    );
     this.boxes.set(desktop.sandboxId, desktop);
     this.lastTouchedAt.set(desktop.sandboxId, Date.now());
+    await ensureBrowserRunner(desktop);
     return {
       id: desktop.sandboxId,
       botId: request.botId,
@@ -254,8 +322,8 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   async prepare(computer: ComputerRef, _context: AdapterContext): Promise<void> {
     const desktop = await this.box(computer);
+    await ensureBrowserRunner(desktop);
     await ensureE2BWorkspace(desktop);
-    await keepDesktopDisplay(desktop);
     const profilesChanged = await configurePortableBrowserProfiles(desktop);
     if (!computer.fresh && profilesChanged) await openDesktopBrowser(desktop);
     await exposeBrowserDesktop(desktop);
@@ -270,7 +338,6 @@ export class E2BSandboxProvider implements SandboxProvider {
     const cmd = request.argv.map(shellQuote).join(" ");
     if (cmd.includes("RAKAZO_DETACH_BROWSER")) {
       await ensureE2BWorkspace(desktop);
-      await keepDesktopDisplay(desktop);
       const handle = await runDesktopCommand(desktop, cmd, {
         cwd: e2bCwd(request.cwd),
         background: true,
@@ -320,7 +387,6 @@ export class E2BSandboxProvider implements SandboxProvider {
   ): Promise<ScreenSession> {
     const desktop = await this.box(computer);
     await ensureE2BWorkspace(desktop);
-    await keepDesktopDisplay(desktop);
     const screenKey = screenSessionKey(context);
     const layout = await this.resolveLayout(
       desktop,
@@ -350,7 +416,6 @@ export class E2BSandboxProvider implements SandboxProvider {
       // A saved slot above the primary display exits 1 and used to replace
       // the browser. The signup page is on the primary display.
       if (request.interactive || !recoverableScreenFailure(error)) throw error;
-      await keepDesktopDisplay(desktop);
       return this.primaryWatchSession(
         desktop,
         extraDisplayLayout(0, desktop.display ?? ":0"),
@@ -642,7 +707,7 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   async keepAlive(computer: ComputerRef): Promise<void> {
     const desktop = await this.box(computer);
-    await desktop.setTimeout(sandboxIdleMs()).catch(() => undefined);
+    await desktop.setTimeout(sandboxHardTimeoutMs()).catch(() => undefined);
     this.lastTouchedAt.set(desktop.sandboxId, Date.now());
   }
 
@@ -664,13 +729,22 @@ export class E2BSandboxProvider implements SandboxProvider {
 
   async stop(computer: ComputerRef, _context: AdapterContext): Promise<void> {
     const id = computer.providerRef || computer.id;
-    const desktop = this.boxes.get(id);
     this.forget(id);
-    if (desktop) {
-      await desktop.pause().catch(() => undefined);
-      return;
+    await this.sdk.kill(id, { apiKey: this.apiKey }).catch((error: unknown) => {
+      if (!isUnrecoverableSandboxError(error)) throw error;
+    });
+  }
+
+  private async lookupSandbox(id: string): Promise<"running" | "paused" | "missing"> {
+    try {
+      const info = await this.sdk.getInfo(id, { apiKey: this.apiKey });
+      if (info.state === "running") return "running";
+      if (info.state === "paused") return "paused";
+      return "missing";
+    } catch (error) {
+      if (isUnrecoverableSandboxError(error)) return "missing";
+      throw error;
     }
-    await this.sdk.pause(id, { apiKey: this.apiKey }).catch(() => undefined);
   }
 
   async destroy(computer: ComputerRef, _context: AdapterContext): Promise<void> {
@@ -796,7 +870,6 @@ export class E2BSandboxProvider implements SandboxProvider {
           );
         }
       }
-      if (attempt === 0) await keepDesktopDisplay(desktop);
     }
     throw last;
   }
@@ -1118,16 +1191,29 @@ function isMissingWorkspaceCwd(error: unknown): boolean {
 }
 
 /** The folder is created on a fresh boot only. A resumed sandbox can lose it, and every command then dies. */
+export async function ensureBrowserRunner(desktop: Sandbox): Promise<void> {
+  if (!desktop.files?.read || !desktop.files.write) return;
+  const bundle = readFileSync(
+    require.resolve("@rakazo/linkbuilder-browser/dist/rakazo-lb-browser.cjs"),
+  );
+  const hash = createHash("sha256").update(bundle).digest("hex");
+  const current = await desktop.files
+    .read(RUNNER_HASH)
+    .then((value) => (typeof value === "string" ? value : Buffer.from(value).toString("utf8")))
+    .catch(() => "");
+  if (current.trim() === hash) return;
+  await desktop.commands.run("mkdir -p /home/user/.autoseo/bin");
+  await desktop.files.write([
+    { path: RUNNER_BUNDLE, data: toArrayBuffer(bundle) },
+    { path: RUNNER_HASH, data: toArrayBuffer(Buffer.from(hash)) },
+    { path: RUNNER_WRAPPER, data: toArrayBuffer(Buffer.from(RUNNER_WRAPPER_SCRIPT)) },
+  ]);
+  await desktop.commands.run(`chmod 755 ${shellQuote(RUNNER_WRAPPER)}`);
+}
+
 async function ensureE2BWorkspace(desktop: Sandbox): Promise<void> {
   if (!desktop.files?.makeDir) return;
   await desktop.files.makeDir(E2B_WORKSPACE).catch(() => undefined);
-}
-
-async function keepDesktopDisplay(desktop: Sandbox): Promise<void> {
-  if (!desktop.commands?.run) return;
-  await desktop.commands
-    .run(repairDesktopDisplayCommand(desktop.display ?? ":0"), { timeoutMs: 20_000 })
-    .catch(() => undefined);
 }
 
 async function runDesktopCommand(

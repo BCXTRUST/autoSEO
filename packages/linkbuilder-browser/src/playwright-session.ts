@@ -205,7 +205,10 @@ export class PlaywrightBrowserSession implements BrowserSession {
           scrollBy: (x: number, y: number) => void;
           addEventListener: (
             type: string,
-            listener: (event?: { preventDefault?: () => void; target?: { scrollTop?: number; scrollLeft?: number } }) => void,
+            listener: (event?: {
+              preventDefault?: () => void;
+              target?: { scrollTop?: number; scrollLeft?: number };
+            }) => void,
             capture?: boolean | { capture?: boolean; passive?: boolean },
           ) => void;
           removeEventListener: (type: string, listener: () => void, capture?: boolean) => void;
@@ -240,7 +243,11 @@ export class PlaywrightBrowserSession implements BrowserSession {
         view.scrollBy = () => pin();
         const onScroll = (event?: { target?: { scrollTop?: number; scrollLeft?: number } }) => {
           const target = event?.target;
-          if (target && target !== view.document?.documentElement && target !== view.document?.body) {
+          if (
+            target &&
+            target !== view.document?.documentElement &&
+            target !== view.document?.body
+          ) {
             if (typeof target.scrollTop === "number") target.scrollTop = 0;
             if (typeof target.scrollLeft === "number") target.scrollLeft = 0;
           }
@@ -595,6 +602,10 @@ export class PlaywrightBrowserSession implements BrowserSession {
     return deadline(this.page.locator("body").innerText({ timeout: 8_000 }));
   }
 
+  async pageHtml(): Promise<string> {
+    return deadline(this.page.content());
+  }
+
   async listText(selector: string): Promise<string[]> {
     const texts = await deadline(this.page.locator(selector).allTextContents());
     return texts.map((text) => text.replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -613,9 +624,9 @@ export class PlaywrightBrowserSession implements BrowserSession {
       for (const el of root.document.querySelectorAll(rootSelector)) {
         const href = el.getAttribute("href");
         const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-        if (!href || !text) continue;
+        if (!href) continue;
         anchors.push({ text, href });
-        if (anchors.length >= 20) break;
+        if (anchors.length >= 120) break;
       }
       return anchors;
     }, selector);
@@ -1054,6 +1065,7 @@ export async function launchPlaywrightSession(
     ...(env.DISPLAY ? ["--disable-gpu", "--disable-gpu-compositing", "--ozone-platform=x11"] : []),
     // Chromium skips the proxy for loopback unless this token removes that bypass.
     ...(options.proxy ? ["--proxy-bypass-list=<-loopback>"] : []),
+    ...kioskChromiumArgs(env),
   ];
   const identity = identityLaunchFields(options);
   const context =
@@ -1079,13 +1091,39 @@ async function launchChromium(
   const chromium = await loadChromium(engine);
   const executablePath =
     options.executablePath ?? (engine === "patchright" ? await bundledChromiumPath() : undefined);
-  return chromium.launchPersistentContext(options.profileDir, {
+  const context = await chromium.launchPersistentContext(options.profileDir, {
     ...(executablePath ? { executablePath } : { channel: "chromium" }),
     headless: options.headless ?? !env.DISPLAY,
     args,
-    viewport: { width: 1280, height: 860 },
+    viewport: chromiumViewport(env),
     acceptDownloads: false,
     ...identity,
+  });
+  watchPages(context);
+  return context;
+}
+
+export const KIOSK_CHROMIUM_ARGS = [
+  "--kiosk",
+  "--window-position=0,0",
+  "--window-size=1280,800",
+  "--disable-gpu",
+  "--no-first-run",
+  "--no-default-browser-check",
+  "--lang=de-DE",
+] as const;
+
+export function kioskChromiumArgs(env: NodeJS.ProcessEnv): string[] {
+  return env.AUTOSEO_KIOSK === "1" ? [...KIOSK_CHROMIUM_ARGS] : [];
+}
+
+export function chromiumViewport(env: NodeJS.ProcessEnv): { width: number; height: number } | null {
+  return env.AUTOSEO_KIOSK === "1" ? null : { width: 1280, height: 860 };
+}
+
+function watchPages(context: BrowserContext): void {
+  context.on("page", (page) => {
+    void page.bringToFront().catch(() => undefined);
   });
 }
 
@@ -1099,12 +1137,14 @@ async function launchCamoufox(
   if (!executablePath) throw new BrowserEngineUnavailable("camoufox");
   const playwright = (await import("playwright")) as { firefox?: BrowserType };
   if (!playwright.firefox) throw new BrowserEngineUnavailable("camoufox");
-  return playwright.firefox.launchPersistentContext(options.profileDir, {
+  const context = await playwright.firefox.launchPersistentContext(options.profileDir, {
     executablePath,
     headless: options.headless ?? !env.DISPLAY,
     args,
-    viewport: { width: 1280, height: 860 },
+    viewport: chromiumViewport(env),
     acceptDownloads: false,
     ...identity,
   });
+  watchPages(context);
+  return context;
 }

@@ -9,6 +9,7 @@ import {
   proxyProviderFromEnv,
   proxyResolverFor,
   releasePersonaComputer,
+  resolvePersonaComputer,
   searchProviderFromEnv,
 } from "./link-builder-real-wiring.js";
 import { dnsHostnameResolver } from "./webhook-dns.js";
@@ -174,6 +175,15 @@ async function main() {
         }),
         proxies: linkBuilderProxies,
         revealedSecrets: linkBuilderProxySecrets,
+        sandbox,
+        prepareComputer: (projectId, context) =>
+          resolvePersonaComputer({
+            prisma,
+            sandbox,
+            projectId,
+            context,
+            dataDir,
+          }).then(() => undefined),
         camoufoxAvailable: camoufoxAvailable(),
         resolveCaptcha: (project, redact) =>
           captchaSolverForProject({
