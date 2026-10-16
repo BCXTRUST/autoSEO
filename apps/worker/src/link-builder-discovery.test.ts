@@ -1064,7 +1064,131 @@ describe("discoverDueProjects", () => {
     ).toBe(false);
     expect(order[0]).toContain("captcha");
   });
+
+  it("restores a dead host from a register link and a later form, and leaves denied and down hosts", async () => {
+    const now = new Date("2026-10-16T21:00:00.000Z");
+    const hosts = [
+      hostRow("back", "hardwareluxx.de", "dead"),
+      hostRow("shop", "nike.com", "dead"),
+      hostRow("denied", "medizin-forum.de", "dead"),
+      hostRow("down", "office-fragen.de", "dead"),
+      hostRow("fixture", "brett-1ej2xe.example", "dead"),
+      hostRow("psychic", "psychic.de", "dead"),
+    ];
+    const fetched: string[] = [];
+    let searches = 0;
+    let paused = 0;
+    const steps: Array<{ outcome: { lastAction?: string; restored?: unknown } }> = [];
+    const pages: Record<string, string> = {
+      "https://hardwareluxx.de/": '<a href="/register/">Registrieren</a>',
+      "https://hardwareluxx.de/register/":
+        '<h1>Forumregeln</h1><a href="/register/form">Weiter</a>',
+      "https://hardwareluxx.de/register/form":
+        '<form><input type="email" name="email"><input type="password" name="password"></form>',
+      "https://nike.com/": "<html><title>Shop</title><p>Shoes</p></html>",
+    };
+    const prisma = {
+      lbProject: {
+        findMany: async () => [
+          {
+            id: "p1",
+            workspaceId: "w1",
+            status: "active",
+            archivedAt: null,
+            lastDiscoveredAt: now,
+            schedule: { timezone: "Europe/Berlin" },
+            markets: [
+              { country: "DE", language: "de", locale: "de-DE", timezoneId: "Europe/Berlin" },
+            ],
+            topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
+            marketPolicy: "primary_first",
+            quotas: { livePerDay: 1 },
+            denyHosts: [],
+          },
+        ],
+        update: async () => ({}),
+        updateMany: async () => {
+          paused += 1;
+          return { count: 1 };
+        },
+      },
+      lbHost: {
+        findMany: async () => hosts,
+        updateMany: async (args: {
+          where: { id: string; status: string };
+          data: { status: string; statusReason: string | null };
+        }) => {
+          const row = hosts.find((item) => item.id === args.where.id);
+          if (row?.status !== "dead" || args.where.status !== "dead") return { count: 0 };
+          row.status = args.data.status;
+          row.statusReason = args.data.statusReason;
+          return { count: 1 };
+        },
+      },
+      lbRun: {
+        findFirst: async () => ({
+          id: "run-1",
+          status: "running",
+          projectId: "p1",
+          workspaceId: "w1",
+        }),
+        update: async () => ({}),
+      },
+      lbRunStep: {
+        findMany: async () => steps,
+        count: async () => steps.length,
+        create: async (args: { data: (typeof steps)[number] }) => {
+          steps.push(args.data);
+          return args.data;
+        },
+      },
+    } as unknown as PrismaClient;
+    await discoverDueProjects({
+      prisma,
+      search: countingSearch(() => {
+        searches += 1;
+      }),
+      now,
+      openBrowser: async () => {
+        throw new Error("browser must stay closed during the re-probe");
+      },
+      fetchImpl: async (url) => {
+        const key = String(url);
+        fetched.push(key);
+        const html = pages[key];
+        if (!html) return new Response("down", { status: 503 });
+        return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+      },
+    });
+    expect(hosts.find((row) => row.id === "back")).toMatchObject({
+      status: "qualified",
+      statusReason: null,
+    });
+    expect(hosts.find((row) => row.id === "shop")).toMatchObject({
+      status: "form_not_found",
+      statusReason: "no_signup_form",
+    });
+    expect(hosts.find((row) => row.id === "denied")?.status).toBe("dead");
+    expect(hosts.find((row) => row.id === "down")?.status).toBe("dead");
+    expect(hosts.find((row) => row.id === "fixture")?.status).toBe("dead");
+    expect(hosts.find((row) => row.id === "psychic")?.status).toBe("dead");
+    expect(fetched.some((url) => /medizin-forum|brett-1ej2xe|psychic/.test(url))).toBe(false);
+    expect(searches).toBe(0);
+    expect(paused).toBe(0);
+    expect(steps[0]?.outcome.lastAction).toBe("Re-probed dead hosts: 2 came back");
+    expect(steps.some((step) => step.outcome.lastAction?.includes("failed"))).toBe(false);
+  });
 });
+
+function hostRow(id: string, domain: string, status: string) {
+  return {
+    id,
+    status,
+    statusReason: "unknown_platform",
+    registrableDomain: domain,
+    homepageUrl: `https://${domain}/`,
+  };
+}
 
 function countingSearch(onSearch: () => void): SearchProvider {
   return {

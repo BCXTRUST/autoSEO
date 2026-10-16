@@ -6,6 +6,7 @@ export * from "./captcha-helper-machine.js";
 export * from "./coherence.js";
 export * from "./credentials.js";
 export * from "./customer-hosts.js";
+export * from "./dead-host-reprobe.js";
 export * from "./discovery.js";
 export * from "./drafting.js";
 export * from "./due.js";

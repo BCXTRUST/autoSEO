@@ -14,6 +14,7 @@ import {
 } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
 import {
+  type DeadHostReprobeStatus,
   discoverHosts,
   discoveryDue,
   forumSearchUrl,
@@ -29,6 +30,7 @@ import {
   shopNames,
   transitionProject,
   useCaseLanes,
+  walkDeadHostSignup,
 } from "@rakazo/linkbuilder-core";
 import { captchaResponseField, detectWidget } from "@rakazo/linkbuilder-drivers";
 import { recordCost } from "./link-builder-costs.js";
@@ -95,6 +97,11 @@ export async function discoverDueProjects(input: {
   });
   let found = 0;
   for (const project of projects) {
+    const reprobe = await reprobeDeadHosts(input, project);
+    if (reprobe.handled) {
+      if (reprobe.qualified === 0) await pauseAfterEmptySearch(input, project);
+      continue;
+    }
     const schedule = project.schedule as { timezone?: string } | null;
     const timeZone = schedule?.timezone || "Europe/Berlin";
     const due = shouldDiscover(project.lastDiscoveredAt, input.now, timeZone);
@@ -241,6 +248,167 @@ export async function discoverDueProjects(input: {
     found += paidAdded;
   }
   return found;
+}
+
+const REPROBE_ACTION = "Re-probed dead hosts:";
+
+/**
+ * One pass over stored dead hosts. A register link that reaches a form becomes qualified.
+ * A loaded page with no signup path becomes form_not_found. A block, a closed registration,
+ * and a fetch failure stay dead. This pass does not search and does not submit an account.
+ */
+async function reprobeDeadHosts(
+  input: {
+    prisma: PrismaClient;
+    fetchImpl?: typeof fetch;
+    allowPrivate?: boolean;
+    now: Date;
+  },
+  project: { id: string; workspaceId: string; denyHosts?: readonly string[] | null },
+): Promise<{ handled: boolean; qualified: number }> {
+  const rows = await input.prisma.lbHost.findMany({
+    where: { projectId: project.id, status: "dead" },
+    select: { id: true, registrableDomain: true, homepageUrl: true, status: true },
+  });
+  const deny = droppedHosts(project.denyHosts ?? []);
+  const eligible = rows.filter(
+    (row) =>
+      row.status === "dead" &&
+      !deadHostLeftAlone(row.registrableDomain, deny) &&
+      row.homepageUrl.trim().length > 0,
+  );
+  if (eligible.length === 0) return { handled: false, qualified: 0 };
+  if (await deadReprobeAlreadyRan(input.prisma, project.id)) {
+    return { handled: false, qualified: 0 };
+  }
+  const restored: Array<{ domain: string; status: DeadHostReprobeStatus }> = [];
+  let cursor = 0;
+  const visit = async (row: (typeof eligible)[number]) => {
+    const verdict = await walkDeadHostSignup({
+      homepageUrl: row.homepageUrl,
+      fetchPage: (url) =>
+        fetchSignupPage(url, {
+          fetchImpl: input.fetchImpl ?? fetch,
+          allowPrivate: input.allowPrivate ?? false,
+        }),
+    });
+    if (verdict === "dead") return;
+    await input.prisma.lbHost.updateMany({
+      where: { id: row.id, status: "dead" },
+      data: {
+        status: verdict,
+        parkedFrom: null,
+        statusReason: verdict === "form_not_found" ? "no_signup_form" : null,
+        lastProbeAt: input.now,
+      },
+    });
+    restored.push({ domain: row.registrableDomain, status: verdict });
+  };
+  const workers = Array.from({ length: Math.min(4, eligible.length) }, async () => {
+    while (cursor < eligible.length) {
+      const row = eligible[cursor];
+      cursor += 1;
+      if (!row) continue;
+      await visit(row);
+    }
+  });
+  await Promise.all(workers);
+  const qualified = restored.filter((row) => row.status === "qualified").length;
+  await recordDeadReprobe(input.prisma, project, input.now, restored);
+  return { handled: true, qualified };
+}
+
+function deadHostLeftAlone(domain: string, denyHosts: readonly string[]): boolean {
+  if (isFixtureHostDomain(domain) || isExampleRegistrableDomain(domain)) return true;
+  return hostDenied(domain, denyHosts);
+}
+
+async function deadReprobeAlreadyRan(prisma: PrismaClient, projectId: string): Promise<boolean> {
+  const run = await prisma.lbRun.findFirst({
+    where: { projectId, status: { in: ["running", "overtime"] } },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true },
+  });
+  if (!run) return false;
+  const steps = await prisma.lbRunStep.findMany({
+    where: { runId: run.id, kind: "discover" },
+    orderBy: { finishedAt: "desc" },
+    take: 20,
+    select: { outcome: true },
+  });
+  return steps.some((step) => stepAction(step.outcome).startsWith(REPROBE_ACTION));
+}
+
+async function recordDeadReprobe(
+  prisma: PrismaClient,
+  project: { id: string; workspaceId: string },
+  now: Date,
+  restored: readonly { domain: string; status: string }[],
+): Promise<void> {
+  const action = `${REPROBE_ACTION} ${restored.length} came back`.slice(0, 180);
+  const run = await prisma.lbRun.findFirst({
+    where: { projectId: project.id, status: { in: ["running", "overtime"] } },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (!run) {
+    console.error("linkbuilder.discover", project.id, action);
+    return;
+  }
+  const stepIndex = await prisma.lbRunStep.count({ where: { runId: run.id } });
+  await prisma.lbRunStep.create({
+    data: {
+      workspaceId: project.workspaceId,
+      runId: run.id,
+      stepIndex,
+      kind: "discover",
+      hostId: null,
+      error: null,
+      outcome: { lastAction: action, restored },
+      startedAt: now,
+      finishedAt: now,
+    },
+  });
+  await prisma.lbRun.update({
+    where: { id: run.id },
+    data: { lastAction: action },
+  });
+}
+
+async function fetchSignupPage(
+  url: string,
+  input: { fetchImpl: typeof fetch; allowPrivate: boolean },
+): Promise<{ url: string; html: string } | null> {
+  let current = url;
+  for (let hop = 0; hop < 4; hop += 1) {
+    let parsed: URL;
+    try {
+      parsed = new URL(current);
+    } catch {
+      return null;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    if (parsed.username || parsed.password) return null;
+    if (!registrableDomain(parsed.hostname)) return null;
+    if (!input.allowPrivate && isBlockedProbeHost(parsed.hostname)) return null;
+    try {
+      const response = await input.fetchImpl(current, {
+        redirect: "manual",
+        headers: { accept: "text/html", "user-agent": "Mozilla/5.0" },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        if (!location) return null;
+        current = new URL(location, current).href;
+        continue;
+      }
+      if (!response.ok) return null;
+      return { url: current, html: await response.text() };
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 async function pauseAfterEmptySearch(
