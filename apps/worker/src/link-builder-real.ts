@@ -135,6 +135,8 @@ export interface LinkBuilderRealDeps {
   camoufoxAvailable?: boolean;
   /** Runs the window check and keepAlive on the persona computer. */
   sandbox?: SandboxProvider;
+  /** Create or resume the team computer before discovery opens the browser. */
+  prepareComputer?: (projectId: string, context: AdapterContext) => Promise<void>;
   /** Pause or destroy the persona desktop when a browser step is finished or stuck. */
   releaseDesktop?: (
     projectId: string,
@@ -143,6 +145,16 @@ export interface LinkBuilderRealDeps {
   ) => Promise<void>;
   probeFetch?: typeof fetch;
   allowPrivateProbe?: boolean;
+}
+
+function discoverContext(workspaceId: string): AdapterContext {
+  return {
+    operationId: "lb-discover",
+    traceId: "lb-discover",
+    workspaceId,
+    userId: "system",
+    signal: new AbortController().signal,
+  };
 }
 
 const CAPTELL_SECRET_MISSING = "Real mode needs a Captell token for this project";
@@ -261,6 +273,24 @@ export class LinkBuilderRealRunner {
       realtime: this.deps.realtime,
       search: this.deps.search,
       openBrowser: (project) => this.openDiscoveryBrowser(project),
+      prepareComputer: this.deps.prepareComputer
+        ? async (project) => {
+            await this.deps.prepareComputer!(project.id, discoverContext(project.workspaceId));
+          }
+        : undefined,
+      releaseSearchDesktop: this.deps.releaseDesktop
+        ? async (projectId) => {
+            await this.closeSession(projectId);
+            const project = await this.deps.prisma.lbProject
+              .findUnique({ where: { id: projectId }, select: { workspaceId: true } })
+              .catch(() => null);
+            await this.deps.releaseDesktop!(
+              projectId,
+              discoverContext(project?.workspaceId ?? "system"),
+              "stop",
+            );
+          }
+        : undefined,
       probeFetch: this.deps.probeFetch,
       allowPrivateProbe: this.deps.allowPrivateProbe,
       captcha: this.deps.captcha,
@@ -384,6 +414,7 @@ export class LinkBuilderRealRunner {
       await this.noteBrowser(ctx.project.workspaceId, ctx.adapter);
     }
     const pausing = result.outcome?.pauseSandbox === true;
+    const releaseDesktop = pausing || result.outcome?.releaseDesktop === true;
     if (pausing) {
       await deliverStuckAlertEmail({
         kind: "project.paused",
@@ -391,6 +422,9 @@ export class LinkBuilderRealRunner {
         apiKey: process.env.RESEND_API_KEY ?? "",
         domain: process.env.RESEND_INBOUND_DOMAIN ?? "",
       }).catch(() => false);
+    }
+    if (releaseDesktop) {
+      await this.closeSession(ctx.project.id);
       await this.deps.releaseDesktop?.(ctx.project.id, ctx.adapter, "stop").catch(() => undefined);
     } else if (!sandboxGone) {
       await this.dropDesktop(

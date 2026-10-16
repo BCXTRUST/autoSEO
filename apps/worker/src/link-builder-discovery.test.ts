@@ -500,10 +500,10 @@ describe("discoverDueProjects", () => {
     );
   });
 
-  it("skips search and opens the oldest stored forum", async () => {
+  it("searches in the browser before a stored forum and does not sign that forum up", async () => {
     const now = new Date("2026-10-16T10:00:00.000Z");
     let searches = 0;
-    let browsers = 0;
+    const order: string[] = [];
     const steps: unknown[] = [];
     const stored = [
       {
@@ -576,12 +576,19 @@ describe("discoverDueProjects", () => {
             denyHosts: ["frauenselbsthilfe.de"],
           },
         ],
-        update: async () => {
-          throw new Error("discovery must not stamp the project");
-        },
+        update: async () => ({}),
       },
       lbHost: { findMany: async () => stored },
-      lbRun: { findFirst: async () => null },
+      lbCostEntry: { create: async () => ({}) },
+      lbRun: {
+        findFirst: async () => ({
+          id: "run-1",
+          status: "running",
+          projectId: "p1",
+          workspaceId: "w1",
+        }),
+        update: async () => ({}),
+      },
       lbRunStep: {
         findFirst: async () => null,
         findMany: async () => [],
@@ -601,16 +608,20 @@ describe("discoverDueProjects", () => {
       }),
       search: async () => {
         searches += 1;
-        throw new Error("DataForSEO must not run");
+        order.push("dataforseo");
+        return [];
       },
     } satisfies SearchProvider;
     await discoverDueProjects({
       prisma,
       search,
       now,
+      prepareComputer: async () => {
+        order.push("computer");
+      },
       openBrowser: async () => {
-        browsers += 1;
-        throw new Error("browser must not open");
+        order.push("browser");
+        return browserWith([])();
       },
     });
     const chosen = await REAL_STEP_HANDLERS.select_host({
@@ -628,13 +639,104 @@ describe("discoverDueProjects", () => {
       pool: () => undefined,
       services: { prisma },
     } as unknown as StepContext);
-    expect(searches).toBe(0);
-    expect(browsers).toBe(0);
-    expect(steps).toHaveLength(0);
-    expect(chosen).toMatchObject({
-      kind: "step",
-      hostId: "oldest",
-      lastAction: "Working on aquacomputer.de",
+    expect(order[0]).toBe("computer");
+    expect(order[1]).toBe("browser");
+    expect(searches).toBe(1);
+    expect(order.indexOf("browser")).toBeLessThan(order.indexOf("dataforseo"));
+    expect(steps.length).toBeGreaterThan(0);
+    expect(chosen).toMatchObject({ kind: "step", hostId: null });
+    if (chosen.kind === "step") {
+      expect(chosen.lastAction).not.toMatch(/aquacomputer|edubily|science-fitness/);
+    }
+  });
+
+  it("pauses when the browser search and the one DataForSEO call both fail", async () => {
+    const now = new Date("2026-10-16T10:00:00.000Z");
+    let searches = 0;
+    let browsers = 0;
+    let paused = "";
+    let released = 0;
+    const steps: Array<{ outcome: { lastAction?: string }; error: string | null }> = [];
+    const prisma = {
+      lbProject: {
+        findMany: async () => [
+          {
+            id: "p1",
+            workspaceId: "w1",
+            name: "Nordlicht",
+            brandName: "Nordlicht",
+            status: "active",
+            archivedAt: null,
+            lastDiscoveredAt: new Date("2026-10-15T09:10:11.995Z"),
+            schedule: { timezone: "Europe/Berlin" },
+            markets: [
+              { country: "DE", language: "de", locale: "de-DE", timezoneId: "Europe/Berlin" },
+            ],
+            topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
+            marketPolicy: "primary_first",
+            quotas: { livePerDay: 1 },
+            denyHosts: ["medizin-forum.de"],
+          },
+        ],
+        update: async () => ({}),
+        updateMany: async (args: { data: { status: string } }) => {
+          paused = args.data.status;
+          return { count: 1 };
+        },
+      },
+      lbHost: { findMany: async () => [] },
+      lbCostEntry: { create: async () => ({}) },
+      lbRun: {
+        findFirst: async () => ({
+          id: "run-1",
+          status: "running",
+          projectId: "p1",
+          workspaceId: "w1",
+        }),
+        update: async () => ({}),
+      },
+      lbRunStep: {
+        findFirst: async () => null,
+        count: async () => steps.length,
+        create: async (args: { data: (typeof steps)[number] }) => {
+          steps.push(args.data);
+          return args.data;
+        },
+      },
+    } as unknown as PrismaClient;
+    const search = {
+      describe: () => ({
+        id: "fake-search",
+        contractVersion: "1",
+        adapterVersion: "0",
+        capabilities: { maxDepth: 10, operators: false },
+      }),
+      search: async () => {
+        searches += 1;
+        throw new Error("status 20000/40501 Invalid Field");
+      },
+    } satisfies SearchProvider;
+    await discoverDueProjects({
+      prisma,
+      search,
+      now,
+      prepareComputer: async () => undefined,
+      openBrowser: async () => {
+        browsers += 1;
+        throw new Error("browser down");
+      },
+      releaseSearchDesktop: async () => {
+        released += 1;
+      },
     });
+    expect(browsers).toBe(1);
+    expect(searches).toBe(1);
+    expect(paused).toBe("paused");
+    expect(released).toBe(1);
+    expect(
+      steps.some((step) => step.outcome.lastAction?.startsWith("Browser search failed:")),
+    ).toBe(true);
+    expect(steps.some((step) => step.outcome.lastAction?.startsWith("Search failed:"))).toBe(true);
+    expect(steps.some((step) => step.outcome.lastAction?.startsWith("Skipped"))).toBe(false);
   });
 });

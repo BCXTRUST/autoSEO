@@ -66,6 +66,8 @@ export interface DueWorkDeps {
   openBrowser?: (
     project: DiscoveryBrowserProject,
   ) => Promise<import("@rakazo/adapter-kit").BrowserSession>;
+  prepareComputer?: (project: { id: string; workspaceId: string }) => Promise<void>;
+  releaseSearchDesktop?: (projectId: string) => Promise<void>;
   probeFetch?: typeof fetch;
   allowPrivateProbe?: boolean;
   captcha?: CaptchaSolver;
@@ -107,6 +109,8 @@ async function runScheduledWork(deps: DueWorkDeps): Promise<void> {
       allowPrivate: deps.allowPrivateProbe ?? false,
       now: deps.now,
       openBrowser: deps.openBrowser,
+      prepareComputer: deps.prepareComputer,
+      releaseSearchDesktop: deps.releaseSearchDesktop,
       resolveCaptcha: deps.resolveCaptcha,
     });
   }

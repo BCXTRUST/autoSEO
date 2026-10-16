@@ -25,6 +25,7 @@ import {
   queryOmitsShop,
   registrableDomain,
   shopNames,
+  transitionProject,
   useCaseLanes,
 } from "@rakazo/linkbuilder-core";
 import { captchaResponseField, detectWidget } from "@rakazo/linkbuilder-drivers";
@@ -76,6 +77,10 @@ export async function discoverDueProjects(input: {
   now: Date;
   /** Visible browser. Tests inject this. The runner passes the computer-pane session factory. */
   openBrowser?: (project: DiscoveryBrowserProject) => Promise<BrowserSession>;
+  /** Create or resume the team computer before the browser opens. */
+  prepareComputer?: (project: { id: string; workspaceId: string }) => Promise<void>;
+  /** Destroy the persona desktop when this tick pauses with no new forum. */
+  releaseSearchDesktop?: (projectId: string) => Promise<void>;
   resolveCaptcha?: (project: { id: string; workspaceId: string }) => Promise<CaptchaSolver | null>;
 }): Promise<number> {
   const projects = await input.prisma.lbProject.findMany({
@@ -124,7 +129,6 @@ export async function discoverDueProjects(input: {
       continue;
     }
     const denyHosts = droppedHosts(project.denyHosts);
-    if (hasStoredSignupHost(hosts, project.denyHosts)) continue;
     const usedHosts = hosts
       .filter((host) => host.status === "used")
       .map((host) => host.registrableDomain);
@@ -146,8 +150,12 @@ export async function discoverDueProjects(input: {
       lanes: lanes.data,
       fetchText,
     });
+    let added = 0;
     if (browser.allowed) {
-      found += await persistDiscovered(input.prisma, project, browser.hosts, input.now);
+      added = await persistDiscovered(input.prisma, project, browser.hosts, input.now);
+    }
+    if (added > 0) {
+      found += added;
       await input.prisma.lbProject.update({
         where: { id: project.id },
         data: { lastDiscoveredAt: input.now },
@@ -162,6 +170,7 @@ export async function discoverDueProjects(input: {
         "Browser search failed: no second problem query",
         "no second problem query",
       );
+      await pauseAfterEmptySearch(input, project);
       continue;
     }
     let paid: Awaited<ReturnType<typeof discoverHosts>> = [];
@@ -202,15 +211,43 @@ export async function discoverDueProjects(input: {
         message,
         `Search failed: ${message}`,
       );
+      await pauseAfterEmptySearch(input, project);
       continue;
     }
-    found += await persistDiscovered(input.prisma, project, paid, input.now);
+    const paidAdded = await persistDiscovered(input.prisma, project, paid, input.now);
     await input.prisma.lbProject.update({
       where: { id: project.id },
       data: { lastDiscoveredAt: input.now },
     });
+    if (paidAdded === 0) {
+      await pauseAfterEmptySearch(input, project);
+      continue;
+    }
+    found += paidAdded;
   }
   return found;
+}
+
+async function pauseAfterEmptySearch(
+  input: {
+    prisma: PrismaClient;
+    releaseSearchDesktop?: (projectId: string) => Promise<void>;
+  },
+  project: { id: string; workspaceId: string },
+): Promise<void> {
+  const projects = input.prisma.lbProject as {
+    updateMany?: (args: {
+      where: { id: string; workspaceId: string; status: string };
+      data: { status: string };
+    }) => Promise<unknown>;
+  };
+  if (typeof projects.updateMany === "function") {
+    await projects.updateMany({
+      where: { id: project.id, workspaceId: project.workspaceId, status: "active" },
+      data: { status: transitionProject("active", "paused") },
+    });
+  }
+  await input.releaseSearchDesktop?.(project.id).catch(() => undefined);
 }
 
 async function searchBrowserFirst(args: {
@@ -218,6 +255,7 @@ async function searchBrowserFirst(args: {
     prisma: PrismaClient;
     now: Date;
     openBrowser?: (project: DiscoveryBrowserProject) => Promise<BrowserSession>;
+    prepareComputer?: (project: { id: string; workspaceId: string }) => Promise<void>;
     resolveCaptcha?: (project: {
       id: string;
       workspaceId: string;
@@ -274,6 +312,21 @@ async function searchBrowserFirst(args: {
       "query named the shop",
     );
     return { allowed: false, hosts: [] };
+  }
+  if (input.prepareComputer) {
+    try {
+      await input.prepareComputer({ id: project.id, workspaceId: project.workspaceId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "computer failed";
+      await recordDiscoveryStep(
+        input.prisma,
+        project,
+        input.now,
+        `Browser search failed: ${message}`,
+        message,
+      );
+      return { allowed: false, hosts: [] };
+    }
   }
   if (!input.openBrowser) {
     await recordDiscoveryStep(
@@ -367,33 +420,6 @@ function problemQueries(project: {
 
 function droppedHosts(denyHosts: readonly string[]): string[] {
   return [...new Set([...denyHosts, ...DROPPED_FORUM_HOSTS])];
-}
-
-/** A qualified forum with no account is enough. Search stays closed until that signup is used. */
-function hasStoredSignupHost(
-  hosts: ReadonlyArray<{
-    registrableDomain: string;
-    status: string;
-    accounts?: ReadonlyArray<unknown> | null;
-  }>,
-  denyHosts: readonly string[],
-): boolean {
-  const denied = new Set(
-    [...denyHosts, ...DROPPED_FORUM_HOSTS].map((host) => host.trim().toLowerCase()),
-  );
-  return hosts.some((host) => {
-    if (host.status !== "qualified") return false;
-    if ((host.accounts?.length ?? 0) > 0) return false;
-    const domain = host.registrableDomain
-      .trim()
-      .toLowerCase()
-      .replace(/^www\./, "");
-    for (const item of denied) {
-      if (!item) continue;
-      if (domain === item || domain.endsWith(`.${item}`)) return false;
-    }
-    return true;
-  });
 }
 
 function hostDenied(domain: string, denyHosts: readonly string[]): boolean {

@@ -481,6 +481,18 @@ function hostOrder(status: string): number {
   return (WORKABLE_HOST_ORDER as readonly string[]).indexOf(status);
 }
 
+/** A forum this discovery tick just probed. Older stored rows wait for a later run. */
+const JUST_FOUND_MS = 15 * 60 * 1000;
+
+export function hostJustFound(row: { lastProbeAt?: Date | string | null }, now: Date): boolean {
+  const raw = row.lastProbeAt;
+  const probed =
+    raw instanceof Date ? raw.getTime() : typeof raw === "string" ? Date.parse(raw) : Number.NaN;
+  if (!Number.isFinite(probed)) return false;
+  const age = now.getTime() - probed;
+  return age >= -5_000 && age <= JUST_FOUND_MS;
+}
+
 const STORED_SIGNUP_DENY = [
   "medizin-forum.de",
   "phpbb.de",
@@ -539,6 +551,32 @@ function unusedQualifiedHost(
   );
 }
 
+async function anotherFreshForumRemains(ctx: StepContext, currentDomain: string): Promise<boolean> {
+  const current = registrableKey(currentDomain);
+  const deny = new Set(ctx.project.denyHosts.map((host) => host.toLowerCase()));
+  let rows: Array<{
+    status: string;
+    registrableDomain: string;
+    accounts: readonly unknown[];
+    lastProbeAt?: Date | string | null;
+  }> = [];
+  try {
+    rows = await ctx.services.prisma.lbHost.findMany({
+      where: { workspaceId: ctx.project.workspaceId, projectId: ctx.project.id },
+      include: { accounts: true },
+    });
+  } catch {
+    return false;
+  }
+  return rows.some((row) => {
+    const domain = registrableKey(row.registrableDomain);
+    if (domain === current) return false;
+    if (row.status !== "qualified" || row.accounts.length > 0) return false;
+    if (deniedForStoredSignup(domain, deny)) return false;
+    return hostJustFound(row, ctx.now);
+  });
+}
+
 /** A stored forum still waiting to sign up. An unfinished login row does not skip it. */
 function storedSignupTarget(
   row: { status: string; registrableDomain: string },
@@ -594,10 +632,14 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     isFixtureHostDomain(row.registrableDomain) ||
     isExampleRegistrableDomain(row.registrableDomain);
   const candidates = rows.filter((row) => {
+    if (row.status === "form_not_found") return false;
     if (blocked(row) || !boardDriverFor(row.platform as LbHostPlatform)) {
       return false;
     }
-    if (row.status === "qualified") return ctx.run.counters.newToday < ctx.project.quotas.newPerDay;
+    if (row.status === "qualified") {
+      if (!hostJustFound(row, ctx.now)) return false;
+      return ctx.run.counters.newToday < ctx.project.quotas.newPerDay;
+    }
     if (row.status === "warming") {
       const account = row.accounts[0];
       if (!account) return false;
@@ -1292,44 +1334,29 @@ export function warmupReplyChoice(language: string): {
   };
 }
 
-async function anotherStoredSignupRemains(
-  ctx: StepContext,
-  currentDomain: string,
-): Promise<boolean> {
-  const current = registrableKey(currentDomain);
-  const deny = new Set(ctx.project.denyHosts.map((host) => host.toLowerCase()));
-  let rows: Array<{ status: string; registrableDomain: string; accounts: readonly unknown[] }> = [];
-  try {
-    rows = await ctx.services.prisma.lbHost.findMany({
-      where: { workspaceId: ctx.project.workspaceId, projectId: ctx.project.id },
-      include: { accounts: true },
-    });
-  } catch {
-    return true;
-  }
-  return rows.some((row) => {
-    const domain = registrableKey(row.registrableDomain);
-    if (domain === current) return false;
-    if (!(STORED_SIGNUP_ORDER as readonly string[]).includes(domain)) return false;
-    return storedSignupTarget(row, deny);
-  });
-}
-
-/** The open page has no signup path. Fail this host and keep a later stored forum in the run. */
+/** The open page has no signup path. The host stays retryable; this run does not pick it again. */
 async function noSignupForm(
   ctx: StepContext,
   host: HostRow,
   artifactIds: string[],
 ): Promise<Extract<StepResult, { kind: "step" }>> {
-  const another = await anotherStoredSignupRemains(ctx, host.registrableDomain);
+  const another = await anotherFreshForumRemains(ctx, host.registrableDomain);
   return {
     kind: "step",
     lastAction: noSignupFormLine(host.registrableDomain),
     hostId: host.id,
     artifactIds,
-    outcome: { reason: "no_signup_form", domain: host.registrableDomain },
+    outcome: {
+      reason: "no_signup_form",
+      domain: host.registrableDomain,
+      releaseDesktop: !another,
+    },
     apply: async (tx) => {
-      await moveHost(tx, host, "failed", { statusReason: "no_signup_form" });
+      const updated = await tx.lbHost.updateMany({
+        where: { id: host.id, status: host.status },
+        data: { status: "form_not_found", parkedFrom: null, statusReason: "no_signup_form" },
+      });
+      if (updated.count !== 1) throw new StaleState(`Host ${host.id} moved during the step`);
       if (another) return;
       await tx.lbProject.updateMany({
         where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },

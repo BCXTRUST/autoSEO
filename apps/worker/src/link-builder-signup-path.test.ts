@@ -1,14 +1,7 @@
-import type {
-  BrowserSession,
-  ClickableControl,
-  FormFieldInfo,
-  SearchProvider,
-} from "@rakazo/adapter-kit";
+import type { BrowserSession, ClickableControl, FormFieldInfo } from "@rakazo/adapter-kit";
 import { personMailboxAddress } from "@rakazo/adapters";
-import type { PrismaClient } from "@rakazo/db";
 import { startRunCounters } from "@rakazo/linkbuilder-core";
 import { describe, expect, it } from "vitest";
-import { discoverDueProjects } from "./link-builder-discovery.js";
 import { keptRunLastAction } from "./link-builder-real.js";
 import {
   type HostRow,
@@ -345,7 +338,7 @@ describe("signup path", () => {
     }
   });
 
-  it("records a miss and opens the next stored forum, then the one after that", async () => {
+  it("sets form_not_found for a missing form and dead when registration is closed", async () => {
     const hosts = [
       storedHost({
         id: "denied",
@@ -365,7 +358,6 @@ describe("signup path", () => {
       storedHost({
         id: "aqua",
         registrableDomain: "aquacomputer.de",
-        accounts: [{ id: "acct-aqua" }],
         qualityScore: 1,
         createdAt: new Date("2026-10-16T12:00:00.000Z"),
       }),
@@ -377,115 +369,57 @@ describe("signup path", () => {
       }),
     ];
     const { prisma, pauses } = harness(hosts);
-    let searches = 0;
-    const search = {
-      describe: () => ({
-        id: "fake-search",
-        contractVersion: "1",
-        adapterVersion: "0",
-        capabilities: { maxDepth: 10, operators: false },
-      }),
-      search: async () => {
-        searches += 1;
-        throw new Error("DataForSEO must not run");
-      },
-    } satisfies SearchProvider;
-    const discover = () =>
-      discoverDueProjects({
-        prisma: {
-          ...prisma,
-          lbProject: {
-            ...prisma.lbProject,
-            findMany: async () => [
-              {
-                id: "p1",
-                workspaceId: "w1",
-                name: "Nordlicht",
-                brandName: "Nordlicht",
-                status: "active",
-                archivedAt: null,
-                lastDiscoveredAt: new Date("2026-10-15T09:10:11.995Z"),
-                schedule: { timezone: "Europe/Berlin" },
-                markets: [
-                  { country: "DE", language: "de", locale: "de-DE", timezoneId: "Europe/Berlin" },
-                ],
-                topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
-                marketPolicy: "primary_first",
-                quotas: { livePerDay: 1 },
-                denyHosts: ["frauenselbsthilfe.de"],
-              },
-            ],
-          },
-          lbRun: { findFirst: async () => null },
-        } as unknown as PrismaClient,
-        search,
-        now: new Date("2026-10-16T12:00:00.000Z"),
-        openBrowser: async () => {
-          throw new Error("browser search must not open");
-        },
-      });
-    await discover();
-    expect(searches).toBe(0);
-
-    const select = (host: StoredHost | null) =>
-      REAL_STEP_HANDLERS.select_host({
-        now: new Date("2026-10-16T12:00:00.000Z"),
-        run: { id: "run-1", counters: startRunCounters() },
-        project: project(),
-        host: host as unknown as HostRow,
-        pool: () => undefined,
-        services: { prisma },
-      } as unknown as StepContext);
-
-    const first = await select(null);
-    expect(first).toMatchObject({ hostId: "aqua", lastAction: "Working on aquacomputer.de" });
-
+    const aqua = hosts.find((host) => host.id === "aqua")!;
     const missed = await REAL_STEP_HANDLERS.register(
-      registerCtx(
-        hosts.find((host) => host.id === "aqua")!,
-        homeWithoutRegister("https://aquacomputer.de"),
-        prisma,
-      ),
+      registerCtx(aqua, homeWithoutRegister("https://aquacomputer.de"), prisma),
     );
     expect(missed).toMatchObject({
       kind: "step",
       lastAction: "No signup form on aquacomputer.de",
     });
     if (missed.kind === "step") await missed.apply?.(prisma as never);
-    expect(hosts.find((host) => host.id === "aqua")?.status).toBe("dead");
-    expect(pauses).toEqual([]);
-    await discover();
-    expect(searches).toBe(0);
-
-    const second = await select(hosts.find((host) => host.id === "aqua") ?? null);
-    expect(second).toMatchObject({ hostId: "edu", lastAction: "Working on edubily.de" });
-
-    const edu = hosts.find((host) => host.id === "edu")!;
-    const missedEdu = await REAL_STEP_HANDLERS.register(
-      registerCtx(edu, homeWithoutRegister("https://edubily.de"), prisma),
-    );
-    expect(missedEdu).toMatchObject({ lastAction: "No signup form on edubily.de" });
-    if (missedEdu.kind === "step") await missedEdu.apply?.(prisma as never);
-    const third = await select(edu);
-    expect(third).toMatchObject({
-      hostId: "science",
-      lastAction: "Working on science-fitness.de",
-    });
-    await discover();
-    expect(searches).toBe(0);
-
-    const science = hosts.find((host) => host.id === "science")!;
-    const missedScience = await REAL_STEP_HANDLERS.register(
-      registerCtx(science, homeWithoutRegister("https://science-fitness.de"), prisma),
-    );
-    expect(missedScience).toMatchObject({
-      lastAction: "No signup form on science-fitness.de",
-    });
-    if (missedScience.kind === "step") await missedScience.apply?.(prisma as never);
+    expect(aqua.status).toBe("form_not_found");
+    expect(aqua.statusReason).toBe("no_signup_form");
     expect(pauses).toEqual(["paused"]);
-    expect(
-      keptRunLastAction("No signup form on science-fitness.de", "Skipped 1 denied forums"),
-    ).toBe("No signup form on science-fitness.de");
+
+    const select = await REAL_STEP_HANDLERS.select_host({
+      now: new Date("2026-10-16T12:00:00.000Z"),
+      run: { id: "run-1", counters: startRunCounters() },
+      project: project(),
+      host: aqua as unknown as HostRow,
+      pool: () => undefined,
+      services: { prisma },
+    } as unknown as StepContext);
+    expect(select).toMatchObject({ kind: "step", hostId: null });
+    if (select.kind === "step") {
+      expect(select.lastAction).not.toMatch(/aquacomputer|edubily|science-fitness/);
+    }
+    expect(hosts.find((host) => host.id === "edu")?.status).toBe("qualified");
+    expect(hosts.find((host) => host.id === "science")?.status).toBe("qualified");
+
+    const closedHost = storedHost({
+      id: "closed",
+      registrableDomain: "gartentipps.example",
+      platform: "unknown",
+    });
+    hosts.push(closedHost);
+    const closedSession = new ScriptedSession("https://gartentipps.example/", {
+      "https://gartentipps.example/": {
+        text: "registration is closed",
+        fields: [],
+        clickables: [],
+      },
+    });
+    const closed = await REAL_STEP_HANDLERS.register(
+      registerCtx(closedHost, closedSession, prisma),
+    );
+    expect(closed).toMatchObject({ kind: "step", lastAction: "Registration is closed" });
+    if (closed.kind === "step") await closed.apply?.(prisma as never);
+    expect(closedHost.status).toBe("dead");
+    expect(closedHost.statusReason).toBe("registration_closed");
+    expect(keptRunLastAction("No signup form on aquacomputer.de", "Skipped 1 denied forums")).toBe(
+      "No signup form on aquacomputer.de",
+    );
   });
 
   it("does not use the stuck pause before a later stored forum is tried", async () => {
@@ -519,8 +453,11 @@ describe("signup path", () => {
     expect(result?.kind).toBe("step");
     if (result?.kind !== "step") return;
     expect(result.lastAction).toBe("No signup form on aquacomputer.de");
+    expect(result.lastAction).not.toBe("Paused, the browser step is stuck");
     await result.apply?.(prisma as never);
-    expect(pauses).toEqual([]);
-    expect(hosts[0]?.status).toBe("dead");
+    expect(hosts[0]?.status).toBe("form_not_found");
+    expect(hosts[0]?.statusReason).toBe("no_signup_form");
+    expect(hosts[1]?.status).toBe("qualified");
+    expect(pauses).toEqual(["paused"]);
   });
 });

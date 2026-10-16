@@ -215,7 +215,13 @@ describe("link builder real driver wiring", () => {
         findMany: async () => rows.map((row) => ({ ...row })),
         upsert: async (args: {
           where: { scopeKey: string };
-          create: { userId: string; kind: string; homeKey: string; scope: string; scopeKey: string };
+          create: {
+            userId: string;
+            kind: string;
+            homeKey: string;
+            scope: string;
+            scopeKey: string;
+          };
         }) => {
           upserts += 1;
           const found = rows.find((row) => row.scopeKey === args.where.scopeKey);
@@ -606,7 +612,14 @@ describe("recorded host skips", () => {
     expect(run.lastAction?.startsWith("Search failed: status ")).toBe(true);
     const steps = await skipSteps(project.id);
     expect(steps.some((step) => step.kind === "discover")).toBe(true);
-    expect(steps.some((step) => step.kind === "select_host")).toBe(true);
+    expect(
+      steps.some((step) => {
+        const outcome = step.outcome as { lastAction?: string };
+        return outcome.lastAction?.startsWith("Skipped");
+      }),
+    ).toBe(false);
+    const paused = await db.prisma.lbProject.findFirstOrThrow({ where: { id: project.id } });
+    expect(paused.status).toBe("paused");
     await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
     await db.prisma.lbRun.updateMany({
       where: { projectId: project.id },
@@ -646,7 +659,14 @@ describe("recorded host skips", () => {
     expect(run.lastAction).toContain("status ");
     const steps = await skipSteps(project.id);
     expect(steps.some((step) => step.kind === "discover" && step.error === null)).toBe(true);
-    expect(steps.some((step) => step.kind === "select_host")).toBe(true);
+    expect(
+      steps.some((step) => {
+        const outcome = step.outcome as { lastAction?: string };
+        return outcome.lastAction?.startsWith("Skipped");
+      }),
+    ).toBe(false);
+    const paused = await db.prisma.lbProject.findFirstOrThrow({ where: { id: project.id } });
+    expect(paused.status).toBe("paused");
     await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
     await db.prisma.lbRun.updateMany({
       where: { projectId: project.id },
