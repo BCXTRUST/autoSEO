@@ -45,7 +45,7 @@ import {
 import { verifyPlacement } from "@rakazo/linkbuilder-drivers";
 import { createAlertSink, deliverDueWebhooks } from "./link-builder-alerts.js";
 import { syncCostLedger } from "./link-builder-costs.js";
-import { discoverDueProjects } from "./link-builder-discovery.js";
+import { type DiscoveryBrowserProject, discoverDueProjects } from "./link-builder-discovery.js";
 import { renewDueLeases } from "./link-builder-proxy.js";
 
 export interface DueWorkDeps {
@@ -63,6 +63,9 @@ export interface DueWorkDeps {
   artifacts?: ArtifactStore;
   realtime?: RealtimeFanout;
   search?: SearchProvider;
+  openBrowser?: (
+    project: DiscoveryBrowserProject,
+  ) => Promise<import("@rakazo/adapter-kit").BrowserSession>;
   probeFetch?: typeof fetch;
   allowPrivateProbe?: boolean;
   captcha?: CaptchaSolver;
@@ -103,6 +106,8 @@ async function runScheduledWork(deps: DueWorkDeps): Promise<void> {
       fetchImpl: deps.probeFetch,
       allowPrivate: deps.allowPrivateProbe ?? false,
       now: deps.now,
+      openBrowser: deps.openBrowser,
+      resolveCaptcha: deps.resolveCaptcha,
     });
   }
   if (deps.proxies) {

@@ -2264,19 +2264,25 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
       ...plan,
     };
   }
+  const verified = activation === "active";
   return {
     kind: "step",
-    lastAction:
-      activation === "active" ? "Email verified" : "Email verified, waiting for the admin",
+    lastAction: verified ? "Email verified" : "Email verified, waiting for the admin",
     hostId: host.id,
     artifactIds,
-    outcome: { activation },
+    outcome: { activation, ...(verified ? { paused: true } : {}) },
+    run: verified ? { status: transitionRun(ctx.run.status, "paused") } : undefined,
     apply: async (tx) => {
       await tx.lbHostAccount.update({
         where: { id: account.id },
         data: { emailVerifiedAt: verifiedAt },
       });
-      await moveHost(tx, host, activation === "active" ? "account_active" : "admin_pending");
+      await moveHost(tx, host, verified ? "account_active" : "admin_pending");
+      if (!verified) return;
+      await tx.lbProject.updateMany({
+        where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
+        data: { status: transitionProject("active", "paused") },
+      });
     },
   };
 }

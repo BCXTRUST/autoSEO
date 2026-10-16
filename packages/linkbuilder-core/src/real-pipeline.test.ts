@@ -114,6 +114,35 @@ describe("planRealStep", () => {
     });
   });
 
+  it("registers a chosen host instead of parking it on research", () => {
+    expect(
+      planRealStep(
+        input({
+          researchComplete: true,
+          session: { ...onHost, cookieChecked: true },
+        }),
+      ),
+    ).toEqual({ kind: "register" });
+  });
+
+  it("does not plan a post after email verification pauses the run", () => {
+    const warming = { id: "h1", ...hostState("warming") };
+    const plan = planRealStep(
+      input({
+        runStatus: "paused",
+        host: warming,
+        session: { ...onHost, cookieChecked: true },
+        warmupMet: false,
+        warmupPostsShort: true,
+        minPostsBeforeLink: 0,
+        warmupPosts: 0,
+      }),
+    );
+    expect(plan.kind).not.toBe("post");
+    expect(plan.kind).not.toBe("warmup_post");
+    expect(plan).toEqual({ kind: "wait", reason: "paused" });
+  });
+
   it("refuses to register before research and to link before warmup", () => {
     expect(planRealStep(input({ researchComplete: false, session: onHost }))).toEqual({
       kind: "wait",

@@ -38,6 +38,7 @@ import {
 import { browserWindowPresentCommand } from "@rakazo/core";
 import type { Prisma, PrismaClient } from "@rakazo/db";
 import {
+  acceptLanguageFor,
   adminRecheckDue,
   choosePersonaComputer,
   type HostnameResolver,
@@ -59,6 +60,7 @@ import {
   transitionRun,
 } from "@rakazo/linkbuilder-core";
 import { deliverStuckAlertEmail } from "./link-builder-alerts.js";
+import type { DiscoveryBrowserProject } from "./link-builder-discovery.js";
 import { runDueWork } from "./link-builder-operations.js";
 import {
   browserPersona,
@@ -242,6 +244,7 @@ export class LinkBuilderRealRunner {
       artifacts: this.deps.artifacts,
       realtime: this.deps.realtime,
       search: this.deps.search,
+      openBrowser: (project) => this.openDiscoveryBrowser(project),
       probeFetch: this.deps.probeFetch,
       allowPrivateProbe: this.deps.allowPrivateProbe,
       captcha: this.deps.captcha,
@@ -603,6 +606,7 @@ export class LinkBuilderRealRunner {
       placement: ctx.placement
         ? { status: ctx.placement.status as never, counted: ctx.placement.counted }
         : null,
+      researchComplete: true,
       adminCheckDue:
         host?.status === "pending_admin" ? await this.adminCheckDue(ctx, host.id) : false,
     });
@@ -714,7 +718,9 @@ export class LinkBuilderRealRunner {
         const keepSearch =
           result.lastAction.startsWith("Skipped") &&
           (current?.lastAction?.startsWith("Search failed") ||
-            current?.lastAction?.startsWith("Search used partial results"));
+            current?.lastAction?.startsWith("Search used partial results") ||
+            current?.lastAction?.startsWith("Searched the browser") ||
+            current?.lastAction?.startsWith("Browser search"));
         const lastAction = keepSearch ? current.lastAction : result.lastAction;
         const fenced = await tx.lbRun.updateMany({
           where: { id: ctx.run.id, leaseOwner: this.workerId, leaseFence: fence },
@@ -770,6 +776,49 @@ export class LinkBuilderRealRunner {
       return transitionRun(ctx.run.status, "overtime");
     }
     return ctx.run.status;
+  }
+
+  /** The computer-pane browser. One session per project, the same factory later steps reuse. */
+  private async openDiscoveryBrowser(project: DiscoveryBrowserProject) {
+    const existing = this.pool.get(project.id);
+    if (existing?.engine === "chromium") return existing.session;
+    if (existing) await this.closeSession(project.id);
+    const adapter: AdapterContext = {
+      operationId: "lb-discover",
+      traceId: "lb-discover",
+      workspaceId: project.workspaceId,
+      userId: "system",
+      signal: new AbortController().signal,
+    };
+    const session = await this.deps.browsers.open(
+      {
+        projectId: project.id,
+        profileKey: project.id,
+        locale: project.locale,
+        timezoneId: project.timezoneId,
+        acceptLanguage: acceptLanguageFor(project.locale),
+      },
+      adapter,
+    );
+    this.pool.set(project.id, {
+      session,
+      marketKey: marketKey({
+        country: project.country,
+        language: project.language,
+      }),
+      hostId: null,
+      helperConnected: false,
+      helperVersion: null,
+      cookieChecked: false,
+      registerFormReady: false,
+      captchaAttempts: 0,
+      registrationRetried: false,
+      spamRetries: 0,
+      profileSet: false,
+      engine: "chromium",
+    });
+    await this.noteBrowser(project.workspaceId, adapter);
+    return session;
   }
 
   private async openSession(

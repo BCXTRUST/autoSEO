@@ -356,7 +356,7 @@ describe("recorded host skips", () => {
           weekdaysOnly: false,
           window: { start: "00:00", end: "23:59" },
         },
-        topicLanes: [{ id: "lane", tag: "sleep", description: "Rest" }],
+        topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
         targets: [{ url: "https://nordlicht.example/guide", priority: 50 }],
         captchaToken: "ct_live_placeholder",
         provisionMailbox: true,
@@ -450,6 +450,47 @@ describe("recorded host skips", () => {
     expect(browsers.sessions).toHaveLength(0);
   });
 
+  it("does not let a skip replace a browser search line", async () => {
+    const project = await startedProject("Browser line", ["macuser.de", "medizin-forum.de"]);
+    await host(project.id, "macuser.de", "pending_admin");
+    await host(project.id, "medizin-forum.de", "ready");
+    const run = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
+    await db.prisma.lbRun.update({
+      where: { id: run.id },
+      data: { lastAction: "Searched the browser: Magnesium Krämpfe Forum" },
+    });
+    const browsers = new FakeBrowserSessionProvider({});
+    const real = runner(Object.assign(browsers, { mode: "local" as const }));
+    await real.tick();
+    const kept = await db.prisma.lbRun.findFirstOrThrow({ where: { id: run.id } });
+    expect(kept.lastAction?.startsWith("Searched the browser")).toBe(true);
+    await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
+    await db.prisma.lbRun.updateMany({
+      where: { projectId: project.id },
+      data: { status: "paused" },
+    });
+
+    const second = await startedProject("Browser miss", ["macuser.de", "medizin-forum.de"]);
+    await host(second.id, "macuser.de", "pending_admin");
+    await host(second.id, "medizin-forum.de", "ready");
+    const secondRun = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: second.id } });
+    await db.prisma.lbRun.update({
+      where: { id: secondRun.id },
+      data: { lastAction: "Browser search found no forum." },
+    });
+    const again = runner(
+      Object.assign(new FakeBrowserSessionProvider({}), { mode: "local" as const }),
+    );
+    await again.tick();
+    const missed = await db.prisma.lbRun.findFirstOrThrow({ where: { id: secondRun.id } });
+    expect(missed.lastAction?.startsWith("Browser search")).toBe(true);
+    await db.prisma.lbProject.update({ where: { id: second.id }, data: { status: "paused" } });
+    await db.prisma.lbRun.updateMany({
+      where: { projectId: second.id },
+      data: { status: "paused" },
+    });
+  });
+
   it("keeps a failed search line when the tick then skips denied forums", async () => {
     const project = await startedProject("Search line", ["macuser.de", "medizin-forum.de"]);
     await host(project.id, "macuser.de", "pending_admin");
@@ -473,7 +514,6 @@ describe("recorded host skips", () => {
     const steps = await skipSteps(project.id);
     expect(steps.some((step) => step.kind === "discover")).toBe(true);
     expect(steps.some((step) => step.kind === "select_host")).toBe(true);
-    expect(browsers.sessions).toHaveLength(0);
     await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
     await db.prisma.lbRun.updateMany({
       where: { projectId: project.id },
@@ -514,7 +554,6 @@ describe("recorded host skips", () => {
     const steps = await skipSteps(project.id);
     expect(steps.some((step) => step.kind === "discover" && step.error === null)).toBe(true);
     expect(steps.some((step) => step.kind === "select_host")).toBe(true);
-    expect(browsers.sessions).toHaveLength(0);
     await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
     await db.prisma.lbRun.updateMany({
       where: { projectId: project.id },
