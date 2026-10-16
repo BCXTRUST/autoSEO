@@ -182,6 +182,22 @@ const unconfiguredCaptcha: CaptchaSolver = {
   },
 };
 
+/**
+ * A denied-host skip must not replace a search line or a recorded signup miss.
+ * The next real action still replaces both.
+ */
+export function keptRunLastAction(current: string | null | undefined, next: string): string {
+  const keep =
+    next.startsWith("Skipped") &&
+    !!current &&
+    (current.startsWith("Search failed") ||
+      current.startsWith("Search used partial results") ||
+      current.startsWith("Searched the browser") ||
+      current.startsWith("Browser search") ||
+      current.startsWith("No signup form on "));
+  return keep && current ? current : next;
+}
+
 const DEFAULT_LEASE_MS = 5 * 60_000;
 const DEFAULT_VERIFY_DELAY_MS = 60_000;
 const DEFAULT_REVERIFY_MS = 24 * 3_600_000;
@@ -715,13 +731,7 @@ export class LinkBuilderRealRunner {
           where: { id: ctx.run.id },
           select: { lastAction: true },
         });
-        const keepSearch =
-          result.lastAction.startsWith("Skipped") &&
-          (current?.lastAction?.startsWith("Search failed") ||
-            current?.lastAction?.startsWith("Search used partial results") ||
-            current?.lastAction?.startsWith("Searched the browser") ||
-            current?.lastAction?.startsWith("Browser search"));
-        const lastAction = keepSearch ? current.lastAction : result.lastAction;
+        const lastAction = keptRunLastAction(current?.lastAction, result.lastAction);
         const fenced = await tx.lbRun.updateMany({
           where: { id: ctx.run.id, leaseOwner: this.workerId, leaseFence: fence },
           data: {

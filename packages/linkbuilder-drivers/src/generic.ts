@@ -779,8 +779,8 @@ export class GenericFormDriver implements BoardDriver {
     let entryIndex = 0;
     let previous = "";
     for (let step = 0; step < 12; step += 1) {
-      if (session.ariaSnapshot) await session.ariaSnapshot().catch(() => "");
-      await session.screenshotPng().catch(() => undefined);
+      // Each navigation uses the session timeout. A snapshot here can sit on the
+      // homepage until the worker step budget fires, so the path only navigates.
       const here = await session.url();
       const text = await session.pageText();
       const signature = `${here}\n${text.slice(0, 500)}`;
@@ -797,7 +797,14 @@ export class GenericFormDriver implements BoardDriver {
         previous = "";
         continue;
       }
-      if (await clickRegisterControl(session)) continue;
+      const beforeClick = `${await session.url()}\n${(await session.pageText()).slice(0, 500)}`;
+      if (await clickRegisterControl(session)) {
+        const afterClick = `${await session.url()}\n${(await session.pageText()).slice(0, 500)}`;
+        if (afterClick !== beforeClick) {
+          previous = "";
+          continue;
+        }
+      }
       if (entryIndex < entries.length) {
         const entry = entries[entryIndex] ?? "";
         entryIndex += 1;
