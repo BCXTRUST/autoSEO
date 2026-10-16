@@ -90,7 +90,15 @@ export async function discoverDueProjects(input: {
   for (const project of projects) {
     const schedule = project.schedule as { timezone?: string } | null;
     const timeZone = schedule?.timezone || "Europe/Berlin";
-    if (!shouldDiscover(project.lastDiscoveredAt, input.now, timeZone)) continue;
+    const due = shouldDiscover(project.lastDiscoveredAt, input.now, timeZone);
+    if (!due) {
+      if (await browserSearchRecent(input.prisma, project.id, input.now)) continue;
+      const stored = await input.prisma.lbHost.findMany({
+        where: { projectId: project.id },
+        select: { registrableDomain: true, status: true },
+      });
+      if (stored.some((host) => hostStartable(host, project.denyHosts))) continue;
+    }
     const markets = LbMarketsSchema.safeParse(project.markets);
     const lanes = LbTopicLaneSchema.array().safeParse(project.topicLanes);
     const policy = LbMarketPolicySchema.safeParse(project.marketPolicy);
@@ -420,6 +428,59 @@ function problemQueries(project: {
 
 function droppedHosts(denyHosts: readonly string[]): string[] {
   return [...new Set([...denyHosts, ...DROPPED_FORUM_HOSTS])];
+}
+
+/** Statuses selectHost can open for signup. A missing form and a dead row cannot. */
+const STARTABLE_HOST_STATUSES = new Set<string>([
+  "ready",
+  "warming",
+  "pending_email",
+  "registering",
+  "qualified",
+  "pending_admin",
+]);
+
+/** True when selectHost would open this host for signup. */
+function hostStartable(
+  host: { registrableDomain: string; status: string },
+  denyHosts: readonly string[],
+): boolean {
+  if (host.status === "form_not_found" || host.status === "dead") return false;
+  if (!STARTABLE_HOST_STATUSES.has(host.status)) return false;
+  return !hostDenied(host.registrableDomain, droppedHosts(denyHosts));
+}
+
+function stepAction(outcome: unknown): string {
+  if (!outcome || typeof outcome !== "object") return "";
+  const action = (outcome as { lastAction?: unknown }).lastAction;
+  return typeof action === "string" ? action : "";
+}
+
+/** A browser search that finished inside the retry window blocks another search. */
+async function browserSearchRecent(
+  prisma: PrismaClient,
+  projectId: string,
+  now: Date,
+): Promise<boolean> {
+  const run = await prisma.lbRun.findFirst({
+    where: { projectId, status: { in: ["running", "overtime"] } },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true },
+  });
+  if (!run) return false;
+  const steps = await prisma.lbRunStep.findMany({
+    where: { runId: run.id, kind: "discover" },
+    orderBy: { finishedAt: "desc" },
+    take: 8,
+    select: { finishedAt: true, outcome: true },
+  });
+  return steps.some((step) => {
+    const action = stepAction(step.outcome);
+    const searched =
+      action.startsWith("Searched the browser") || action.startsWith("Browser search");
+    if (!searched || !step.finishedAt) return false;
+    return now.getTime() - step.finishedAt.getTime() < DISCOVER_RETRY_MS;
+  });
 }
 
 function hostDenied(domain: string, denyHosts: readonly string[]): boolean {

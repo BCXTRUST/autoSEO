@@ -739,4 +739,148 @@ describe("discoverDueProjects", () => {
     expect(steps.some((step) => step.outcome.lastAction?.startsWith("Search failed:"))).toBe(true);
     expect(steps.some((step) => step.outcome.lastAction?.startsWith("Skipped"))).toBe(false);
   });
+
+  it("searches when nothing is startable even though discovery already ran today", async () => {
+    const now = new Date("2026-10-16T17:36:00.000Z");
+    let browsers = 0;
+    let searches = 0;
+    const hosts: Array<{
+      registrableDomain: string;
+      status: string;
+      accounts: Array<{ id: string }>;
+    }> = [
+      { registrableDomain: "aquacomputer.de", status: "form_not_found", accounts: [] },
+      { registrableDomain: "edubily.de", status: "form_not_found", accounts: [] },
+      { registrableDomain: "science-fitness.de", status: "form_not_found", accounts: [] },
+      { registrableDomain: "medizin-forum.de", status: "qualified", accounts: [] },
+      { registrableDomain: "phpbb.de", status: "ready", accounts: [{ id: "acct-phpbb" }] },
+      { registrableDomain: "macuser.de", status: "warming", accounts: [] },
+      { registrableDomain: "lifters-lounge.com", status: "qualified", accounts: [] },
+      { registrableDomain: "frauenselbsthilfe.de", status: "qualified", accounts: [] },
+      { registrableDomain: "bulli-forum.com", status: "dead", accounts: [] },
+      { registrableDomain: "denied.example", status: "qualified", accounts: [] },
+    ];
+    const steps: Array<{
+      kind: string;
+      finishedAt: Date;
+      outcome: { lastAction?: string };
+    }> = [];
+    const prisma = {
+      lbProject: {
+        findMany: async () => [
+          {
+            id: "p1",
+            workspaceId: "w1",
+            name: "Nordlicht",
+            brandName: "Nordlicht",
+            status: "active",
+            archivedAt: null,
+            lastDiscoveredAt: now,
+            schedule: { timezone: "Europe/Berlin" },
+            markets: [
+              { country: "DE", language: "de", locale: "de-DE", timezoneId: "Europe/Berlin" },
+            ],
+            topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
+            marketPolicy: "primary_first",
+            quotas: { livePerDay: 1 },
+            denyHosts: ["denied.example"],
+          },
+        ],
+        update: async () => ({}),
+        updateMany: async () => ({ count: 1 }),
+      },
+      lbHost: { findMany: async () => hosts },
+      lbCostEntry: { create: async () => ({}) },
+      lbRun: {
+        findFirst: async () => ({
+          id: "run-1",
+          status: "running",
+          projectId: "p1",
+          workspaceId: "w1",
+        }),
+        update: async () => ({}),
+      },
+      lbRunStep: {
+        findFirst: async () => null,
+        findMany: async () => steps.filter((step) => step.kind === "discover"),
+        count: async () => steps.length,
+        create: async (args: { data: (typeof steps)[number] }) => {
+          steps.push(args.data);
+          return args.data;
+        },
+      },
+    } as unknown as PrismaClient;
+    const search = {
+      describe: () => ({
+        id: "fake-search",
+        contractVersion: "1",
+        adapterVersion: "0",
+        capabilities: { maxDepth: 10, operators: false },
+      }),
+      search: async () => {
+        searches += 1;
+        return [];
+      },
+    } satisfies SearchProvider;
+    const open = async () => {
+      browsers += 1;
+      return browserWith([])();
+    };
+    await discoverDueProjects({
+      prisma,
+      search,
+      now,
+      prepareComputer: async () => undefined,
+      openBrowser: open,
+    });
+    expect(browsers).toBe(1);
+    expect(searches).toBe(1);
+
+    steps.length = 0;
+    hosts.push({
+      registrableDomain: "gartentipps.example",
+      status: "qualified",
+      accounts: [],
+    });
+    await discoverDueProjects({
+      prisma,
+      search,
+      now,
+      prepareComputer: async () => undefined,
+      openBrowser: open,
+    });
+    expect(browsers).toBe(1);
+    expect(searches).toBe(1);
+
+    hosts.pop();
+    steps.push({
+      kind: "discover",
+      finishedAt: new Date(now.getTime() - 60_000),
+      outcome: { lastAction: "Searched the browser: Magnesium Schlaf Forum" },
+    });
+    await discoverDueProjects({
+      prisma,
+      search,
+      now: new Date(now.getTime() + 2_000),
+      prepareComputer: async () => undefined,
+      openBrowser: open,
+    });
+    expect(browsers).toBe(1);
+    expect(searches).toBe(1);
+
+    steps[0] = {
+      kind: "discover",
+      finishedAt: new Date(now.getTime() - 16 * 60_000),
+      outcome: { lastAction: "Searched the browser: Magnesium Schlaf Forum" },
+    };
+    await discoverDueProjects({
+      prisma,
+      search,
+      now,
+      prepareComputer: async () => undefined,
+      openBrowser: open,
+    });
+    expect(browsers).toBe(2);
+    expect(searches).toBe(2);
+  });
 });
