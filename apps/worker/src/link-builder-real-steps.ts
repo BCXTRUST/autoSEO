@@ -520,14 +520,13 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
   const dueAdmin = await adminHostsDue(ctx, rows);
   const deny = new Set(ctx.project.denyHosts.map((host) => host.toLowerCase()));
   const prefer = new Set(ctx.project.preferHosts.map((host) => host.toLowerCase()));
+  const blocked = (row: (typeof rows)[number]) =>
+    deny.has(row.registrableDomain.toLowerCase()) ||
+    (isNewSignupBannedHost(row.registrableDomain) && row.accounts.length === 0) ||
+    isFixtureHostDomain(row.registrableDomain) ||
+    isExampleRegistrableDomain(row.registrableDomain);
   const candidates = rows.filter((row) => {
-    if (
-      deny.has(row.registrableDomain) ||
-      (isNewSignupBannedHost(row.registrableDomain) && row.accounts.length === 0) ||
-      isFixtureHostDomain(row.registrableDomain) ||
-      isExampleRegistrableDomain(row.registrableDomain) ||
-      !boardDriverFor(row.platform as LbHostPlatform)
-    ) {
+    if (blocked(row) || !boardDriverFor(row.platform as LbHostPlatform)) {
       return false;
     }
     if (row.status === "qualified") return ctx.run.counters.newToday < ctx.project.quotas.newPerDay;
@@ -568,7 +567,8 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
   );
   const picked = eligible[0];
   if (!picked) {
-    const capped = rows.filter((row) => row.status === "qualified");
+    const openRows = rows.filter((row) => !blocked(row));
+    const capped = openRows.filter((row) => row.status === "qualified");
     for (const host of capped) {
       if (await registrationOpen(ctx, host.id)) continue;
       if (await registrationCapAlreadyTold(ctx, host.id)) {
@@ -582,10 +582,37 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
         outcome: { refused: "registration_cap" },
       };
     }
-    if (rows.some((row) => row.status === "pending_admin")) {
-      return { kind: "wait", reason: "admin_approval" };
+    const denied = rows.filter((row) => blocked(row));
+    if (denied.length > 0) {
+      const domains = denied.map((row) => row.registrableDomain).sort();
+      return {
+        kind: "step",
+        stepKind: "select_host",
+        hostId: null,
+        lastAction: `Skipped ${denied.length} denied forums`,
+        outcome: { skipped: domains },
+      };
     }
-    return { kind: "wait", reason: "no_workable_host" };
+    const pending = openRows.filter((row) => row.status === "pending_admin");
+    if (pending.length > 0) {
+      return {
+        kind: "step",
+        stepKind: "select_host",
+        hostId: null,
+        lastAction: "Waiting for a site admin",
+        outcome: {
+          reason: "admin_approval",
+          domains: pending.map((row) => row.registrableDomain).sort(),
+        },
+      };
+    }
+    return {
+      kind: "step",
+      stepKind: "select_host",
+      hostId: null,
+      lastAction: "No forum left to work on",
+      outcome: { reason: "no_workable_host" },
+    };
   }
   if (ctx.services.sleep && ctx.host && ctx.host.id !== picked.id) {
     await ctx.services.sleep(pacedDelayMs(HOST_IDLE_GAP, ctx.services.random ?? Math.random));

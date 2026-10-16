@@ -37,6 +37,10 @@ function recordingPrisma(calls: Recorded[]) {
         return { count: 1 };
       },
       findFirst: async () => ({
+        id: "run-1",
+        status: "running",
+        lastAction: "Skipped 2 denied forums",
+        lastError: "e".repeat(250),
         currentHostId: "host-1",
         currentUrl: "https://forum.example/register",
       }),
@@ -214,6 +218,7 @@ describe("ops routes", () => {
         config: { driver: string; browser: string; search: string };
         hosts: Array<{ domain: string; logins: number }>;
         computers: Array<{ browserSeenAt: string | null }>;
+        run: { id: string; lastAction: string | null; lastError: string | null } | null;
       };
       expect(json.revision).toBe("abc123def456");
       expect(json.config).toMatchObject({
@@ -234,6 +239,11 @@ describe("ops routes", () => {
         },
       ]);
       expect(json.computers[0]?.browserSeenAt).toBeNull();
+      expect(json.run?.lastAction).toBe("Skipped 2 denied forums");
+      expect(json.run?.lastError).toHaveLength(200);
+      expect(json.run?.lastError ?? "").not.toContain("e2b-secret-value-not-for-output");
+      expect(json.run?.lastError ?? "").not.toContain("secret-db-password");
+      expect(json.run?.lastError ?? "").not.toContain("re_secret_value_not_for_output");
 
       const stopped = await app.request("/api/ops/stop-all", {
         method: "POST",

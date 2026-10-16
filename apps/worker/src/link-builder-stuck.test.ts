@@ -212,6 +212,12 @@ describe("recoverStuckStep", () => {
         },
       },
     } as unknown as StepContext);
-    expect(result).toEqual({ kind: "wait", reason: "no_workable_host" });
+    expect(result).toEqual({
+      kind: "step",
+      stepKind: "select_host",
+      hostId: null,
+      lastAction: "Skipped 1 denied forums",
+      outcome: { skipped: ["frauenselbsthilfe.de"] },
+    });
   });
 });

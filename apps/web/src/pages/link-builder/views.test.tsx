@@ -640,6 +640,42 @@ describe("link builder screens", () => {
     expect(html).not.toContain("28px 28px");
   });
 
+  it("shows a skipped forum on the dark pane while the project is active", () => {
+    const run = {
+      id: "run-1",
+      date: "2026-10-16",
+      status: "running" as const,
+      newToday: 0,
+      liveToday: 0,
+      liveWeek: 0,
+      uniqueHosts: 0,
+      lastAction: "Skipped 2 denied forums",
+      lastError: null,
+    };
+    const active = renderOverview(
+      statusView({
+        projectStatus: "active",
+        activity: "running",
+        activityLabel: "running",
+        run,
+      }),
+      [],
+    );
+    expect(active).toContain("Skipped 2 denied forums");
+    expect(active).not.toContain("Computer is off");
+    const paused = renderOverview(
+      statusView({
+        projectStatus: "paused",
+        activity: "paused",
+        activityLabel: "paused",
+        run,
+      }),
+      [],
+    );
+    expect(paused).toContain("Computer is off");
+    expect(paused).not.toContain("Skipped 2 denied forums");
+  });
+
   it("says the computer is off when nothing is running", () => {
     const html = renderOverview(
       statusView({ activity: "paused", activityLabel: "paused", run: null }),

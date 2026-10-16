@@ -42,6 +42,12 @@ export interface OpsState {
     logins: number;
     currentUrl: string | null;
   }>;
+  run?: {
+    id: string;
+    status: string;
+    lastAction: string | null;
+    lastError: string | null;
+  } | null;
 }
 
 export function opsAuthorized(
@@ -171,8 +177,23 @@ export async function opsState(
   const run = await deps.prisma.lbRun.findFirst({
     where: { projectId },
     orderBy: { updatedAt: "desc" },
-    select: { currentHostId: true, currentUrl: true },
+    select: {
+      id: true,
+      status: true,
+      lastAction: true,
+      lastError: true,
+      currentHostId: true,
+      currentUrl: true,
+    },
   });
+  state.run = run
+    ? {
+        id: run.id,
+        status: run.status,
+        lastAction: run.lastAction,
+        lastError: run.lastError ? run.lastError.slice(0, 200) : null,
+      }
+    : null;
   state.hosts = await Promise.all(
     hosts.map(async (host) => ({
       domain: host.registrableDomain,

@@ -40,6 +40,27 @@ const SCREEN_PANE_STATUS: Record<Exclude<ScreenState, "live">, string> = {
   no_browser: "Opening the browser",
 };
 
+/** Idle sentences the worker records while the browser is still off. */
+function recordedPaneSentence(action: string | null, projectStatus: string | null): string | null {
+  if (projectStatus !== "active") return null;
+  const text = action?.trim() ?? "";
+  if (!text) return null;
+  if (
+    /^Skipped \d+ denied forums$/.test(text) ||
+    text.startsWith("Search failed:") ||
+    text.startsWith("Working on ") ||
+    text.startsWith("Found forum ") ||
+    text === "No topics to search" ||
+    text === "Waiting for a site admin" ||
+    text === "No forum left to work on" ||
+    text === "Registration cap" ||
+    text === "Reading the forum first"
+  ) {
+    return text;
+  }
+  return null;
+}
+
 import {
   addWizardPage,
   disclosureLabel,
@@ -786,6 +807,8 @@ function Dashboard({
           screenError={screenError}
           screenPending={screenPending}
           loadArtifact={loadArtifact}
+          projectStatus={status?.projectStatus ?? null}
+          runLastAction={status?.run?.lastAction ?? null}
         />
         <div
           ref={taskColumn}
@@ -922,6 +945,8 @@ function ComputerPane({
   screenError,
   screenPending,
   loadArtifact,
+  projectStatus,
+  runLastAction,
 }: {
   working: boolean;
   action: string;
@@ -931,6 +956,8 @@ function ComputerPane({
   screenError?: string | null;
   screenPending?: boolean;
   loadArtifact?: ArtifactLoader;
+  projectStatus: string | null;
+  runLastAction: string | null;
 }) {
   const label = action || WORK_STAGE_LABELS[stage];
   const stageIndex = WORK_STAGES.indexOf(stage);
@@ -945,6 +972,10 @@ function ComputerPane({
   const serverStatus =
     screenState && screenState !== "live" ? SCREEN_PANE_STATUS[screenState] : null;
   const showLive = Boolean(frameUrl) && (screenState == null || screenState === "live");
+  const runSentence =
+    !showLive && !serverStatus && !errorStatus && waiting
+      ? recordedPaneSentence(runLastAction, projectStatus)
+      : null;
   const idleStatus = errorStatus
     ? null
     : serverStatus
@@ -953,7 +984,9 @@ function ComputerPane({
         ? null
         : screenPending || working
           ? "Reconnecting"
-          : "Computer is off";
+          : runSentence
+            ? runSentence
+            : "Computer is off";
   useEffect(() => {
     setStripStatus(null);
   }, [frameUrl]);
@@ -1012,14 +1045,14 @@ function ComputerPane({
             sandbox={computerFrameSandbox(frame.url)}
             onStatus={onPaneStatus}
           />
-        ) : serverStatus ? (
+        ) : serverStatus || runSentence ? (
           <div
             className="flex h-full min-h-0 items-center justify-center"
             data-live-pane="dark"
             data-desktop="hidden"
             style={{ background: LIVE_PANE_BG }}
           >
-            <p className="font-mono text-[13px] text-[#C8C4B8]">{serverStatus}</p>
+            <p className="font-mono text-[13px] text-[#C8C4B8]">{serverStatus || runSentence}</p>
           </div>
         ) : (
           <section

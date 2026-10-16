@@ -71,6 +71,17 @@ export interface DueWorkDeps {
 }
 
 export async function runDueWork(deps: DueWorkDeps): Promise<void> {
+  try {
+    await runScheduledWork(deps);
+  } catch (error) {
+    console.error(
+      "linkbuilder.schedule",
+      error instanceof Error ? error.message : "schedule failed",
+    );
+  }
+}
+
+async function runScheduledWork(deps: DueWorkDeps): Promise<void> {
   const productionWebhooks = deps.productionWebhooks ?? process.env.NODE_ENV === "production";
   const resolveHostname = productionWebhooks ? deps.resolveHostname : undefined;
   const alerts = createAlertSink({
@@ -92,7 +103,7 @@ export async function runDueWork(deps: DueWorkDeps): Promise<void> {
       fetchImpl: deps.probeFetch,
       allowPrivate: deps.allowPrivateProbe ?? false,
       now: deps.now,
-    }).catch(() => undefined);
+    });
   }
   if (deps.proxies) {
     await renewDueLeases({

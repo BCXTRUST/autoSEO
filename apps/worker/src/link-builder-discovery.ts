@@ -16,6 +16,8 @@ import {
 } from "@rakazo/linkbuilder-core";
 import { recordCost } from "./link-builder-costs.js";
 
+const DISCOVER_RETRY_MS = 15 * 60 * 1000;
+
 const adapter: AdapterContext = {
   operationId: "lb-discover",
   traceId: "lb-discover",
@@ -51,13 +53,24 @@ export async function discoverDueProjects(input: {
     const markets = LbMarketsSchema.safeParse(project.markets);
     const lanes = LbTopicLaneSchema.array().safeParse(project.topicLanes);
     const policy = LbMarketPolicySchema.safeParse(project.marketPolicy);
-    if (!markets.success || !lanes.success || lanes.data.length === 0 || !policy.success) {
+    if (lanes.success && lanes.data.length === 0) {
+      await recordDiscoveryFailure(
+        input.prisma,
+        project,
+        input.now,
+        "no topic lanes",
+        "No topics to search",
+      );
+      continue;
+    }
+    if (!markets.success || !lanes.success || !policy.success) {
       await input.prisma.lbProject.update({
         where: { id: project.id },
         data: { lastDiscoveredAt: input.now },
       });
       continue;
     }
+    if (await discoveryHeld(input.prisma, project.id, input.now)) continue;
     const hosts = await input.prisma.lbHost.findMany({
       where: { projectId: project.id },
       select: { registrableDomain: true, status: true, country: true, language: true },
@@ -72,38 +85,51 @@ export async function discoverDueProjects(input: {
       supply[key] = (supply[key] ?? 0) + 1;
     }
     const quotas = project.quotas as { livePerDay?: number } | null;
-    const discovered = await discoverHosts({
-      lanes: lanes.data,
-      markets: markets.data,
-      policy: policy.data,
-      supply,
-      need: Math.max(1, quotas?.livePerDay ?? 1),
-      denyHosts: project.denyHosts,
-      usedHosts: hosts
-        .filter((host) => host.status === "used")
-        .map((host) => host.registrableDomain),
-      depth: 100,
-      search: async (request) => {
-        const results = await input.search.search(request, {
-          ...adapter,
-          workspaceId: project.workspaceId,
-        });
-        await recordCost(input.prisma, {
-          workspaceId: project.workspaceId,
-          projectId: project.id,
-          kind: "search_query",
-          quantity: 1,
-          sourceKey: `search:${project.id}:${localDateKey(input.now, timeZone)}:${request.query}`,
-          occurredAt: input.now,
-        });
-        return results;
-      },
-      fetchText: (url) =>
-        fetchProbeText(url, {
-          fetchImpl: input.fetchImpl ?? fetch,
-          allowPrivate: input.allowPrivate ?? false,
-        }),
-    });
+    let discovered: Awaited<ReturnType<typeof discoverHosts>>;
+    try {
+      discovered = await discoverHosts({
+        lanes: lanes.data,
+        markets: markets.data,
+        policy: policy.data,
+        supply,
+        need: Math.max(1, quotas?.livePerDay ?? 1),
+        denyHosts: project.denyHosts,
+        usedHosts: hosts
+          .filter((host) => host.status === "used")
+          .map((host) => host.registrableDomain),
+        depth: 100,
+        search: async (request) => {
+          const results = await input.search.search(request, {
+            ...adapter,
+            workspaceId: project.workspaceId,
+          });
+          await recordCost(input.prisma, {
+            workspaceId: project.workspaceId,
+            projectId: project.id,
+            kind: "search_query",
+            quantity: 1,
+            sourceKey: `search:${project.id}:${localDateKey(input.now, timeZone)}:${request.query}`,
+            occurredAt: input.now,
+          });
+          return results;
+        },
+        fetchText: (url) =>
+          fetchProbeText(url, {
+            fetchImpl: input.fetchImpl ?? fetch,
+            allowPrivate: input.allowPrivate ?? false,
+          }),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "search failed";
+      await recordDiscoveryFailure(
+        input.prisma,
+        project,
+        input.now,
+        message,
+        `Search failed: ${message}`.slice(0, 90),
+      );
+      continue;
+    }
     for (const host of discovered) {
       const existing = await input.prisma.lbHost.findUnique({
         where: {
@@ -172,6 +198,70 @@ export async function discoverDueProjects(input: {
     });
   }
   return found;
+}
+
+async function discoveryHeld(prisma: PrismaClient, projectId: string, now: Date): Promise<boolean> {
+  const run = await prisma.lbRun.findFirst({
+    where: { projectId, status: { in: ["running", "overtime"] } },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true },
+  });
+  if (!run) return false;
+  const newest = await prisma.lbRunStep.findFirst({
+    where: { runId: run.id },
+    orderBy: { stepIndex: "desc" },
+    select: { kind: true, finishedAt: true, error: true },
+  });
+  if (newest?.kind !== "discover" || !newest.error || !newest.finishedAt) return false;
+  return now.getTime() - newest.finishedAt.getTime() < DISCOVER_RETRY_MS;
+}
+
+async function recordDiscoveryFailure(
+  prisma: PrismaClient,
+  project: { id: string; workspaceId: string },
+  now: Date,
+  message: string,
+  lastAction: string,
+): Promise<void> {
+  const error = message.slice(0, 500);
+  const run = await prisma.lbRun.findFirst({
+    where: { projectId: project.id, status: { in: ["running", "overtime"] } },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (!run) {
+    console.error("linkbuilder.discover", project.id, error);
+    return;
+  }
+  const newest = await prisma.lbRunStep.findFirst({
+    where: { runId: run.id },
+    orderBy: { stepIndex: "desc" },
+  });
+  if (
+    newest?.kind === "discover" &&
+    newest.error === error &&
+    newest.finishedAt &&
+    now.getTime() - newest.finishedAt.getTime() < DISCOVER_RETRY_MS
+  ) {
+    return;
+  }
+  const stepIndex = await prisma.lbRunStep.count({ where: { runId: run.id } });
+  await prisma.lbRunStep.create({
+    data: {
+      workspaceId: project.workspaceId,
+      runId: run.id,
+      stepIndex,
+      kind: "discover",
+      hostId: null,
+      error,
+      outcome: { lastAction },
+      startedAt: now,
+      finishedAt: now,
+    },
+  });
+  await prisma.lbRun.update({
+    where: { id: run.id },
+    data: { lastAction },
+  });
 }
 
 async function fetchProbeText(

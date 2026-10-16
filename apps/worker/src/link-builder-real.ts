@@ -54,6 +54,7 @@ import {
   type PlanCaps,
   planRealStep,
   type RealPlan,
+  type RealStepKind,
   redactSecrets,
   transitionRun,
 } from "@rakazo/linkbuilder-core";
@@ -143,6 +144,21 @@ export interface LinkBuilderRealDeps {
 }
 
 const CAPTELL_SECRET_MISSING = "Real mode needs a Captell token for this project";
+
+const RECORDED_WAIT_ACTION: Record<string, string> = {
+  admin_approval: "Waiting for a site admin",
+  no_workable_host: "No forum left to work on",
+  registration_cap: "Registration cap",
+  research: "Reading the forum first",
+};
+
+function sameStringList(left: unknown, right: readonly unknown[]): boolean {
+  return (
+    Array.isArray(left) &&
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
 
 const unconfiguredCaptcha: CaptchaSolver = {
   describe(): AdapterDescriptor<CaptchaSolverCapabilities> {
@@ -293,32 +309,52 @@ export class LinkBuilderRealRunner {
       return "failed";
     }
     const plan = await this.plan(ctx);
-    if (plan.kind === "done" || plan.kind === "wait") {
+    if (plan.kind === "done") {
       await this.dropDesktop(ctx, plan.kind, "", false);
       return "waited";
     }
     const startedAt = new Date();
     let result: StepResult;
     let error: string | null = null;
-    try {
-      result =
-        (await recoverStuckStep(ctx)) ??
-        (await Promise.race([
-          REAL_STEP_HANDLERS[plan.kind](ctx),
-          new Promise<StepResult>((_, reject) => {
-            setTimeout(() => reject(new Error("Browser action timed out")), 3 * 60_000);
-          }),
-        ]));
-    } catch (caught) {
-      error = redactSecrets(caught instanceof Error ? caught.message : "Step failed", ctx.secrets);
-      result = await this.failure(ctx, error);
+    let kind: RealStepKind = plan.kind === "wait" ? "select_host" : plan.kind;
+    if (plan.kind === "wait") {
+      const recorded = this.recordedWait(plan.reason, ctx.host?.id ?? null);
+      if (!recorded || (await this.repeatedIdleStep(ctx, recorded.outcome))) {
+        await this.dropDesktop(ctx, plan.kind, "", false);
+        return "waited";
+      }
+      result = recorded;
+    } else {
+      try {
+        result =
+          (await recoverStuckStep(ctx)) ??
+          (await Promise.race([
+            REAL_STEP_HANDLERS[plan.kind](ctx),
+            new Promise<StepResult>((_, reject) => {
+              setTimeout(() => reject(new Error("Browser action timed out")), 3 * 60_000);
+            }),
+          ]));
+      } catch (caught) {
+        error = redactSecrets(
+          caught instanceof Error ? caught.message : "Step failed",
+          ctx.secrets,
+        );
+        result = await this.failure(ctx, error);
+      }
+      if (result.kind === "wait") {
+        const recorded = this.recordedWait(result.reason, ctx.host?.id ?? null);
+        if (!recorded || (await this.repeatedIdleStep(ctx, recorded.outcome))) return "waited";
+        result = recorded;
+        kind = "select_host";
+      }
     }
-    if (result.kind === "wait") return "waited";
+    if (result.kind !== "step") return "waited";
+    if (await this.repeatedIdleStep(ctx, result.outcome)) return "waited";
     const sandboxGone = result.outcome?.sandboxGone === true;
     const committed = await this.commit(
       ctx,
       fence,
-      plan.kind,
+      kind,
       result,
       sandboxGone ? "SandboxNotFoundError" : error,
       startedAt,
@@ -621,6 +657,41 @@ export class LinkBuilderRealRunner {
         ? (tx) => moveHost(tx, host, "failed", { statusReason: message.slice(0, 500) })
         : undefined,
     };
+  }
+
+  private recordedWait(
+    reason: string,
+    hostId: string | null,
+  ): Extract<StepResult, { kind: "step" }> | null {
+    const lastAction = RECORDED_WAIT_ACTION[reason];
+    if (!lastAction) return null;
+    return {
+      kind: "step",
+      stepKind: "select_host",
+      lastAction,
+      hostId,
+      outcome: { reason },
+    };
+  }
+
+  /** One skip or one recorded wait per run. A newer different step may record it again. */
+  private async repeatedIdleStep(
+    ctx: StepContext,
+    outcome: Record<string, unknown> | undefined,
+  ): Promise<boolean> {
+    const reason = typeof outcome?.reason === "string" ? outcome.reason : null;
+    const skipped = Array.isArray(outcome?.skipped) ? outcome.skipped : null;
+    const recordedReason = reason !== null && reason in RECORDED_WAIT_ACTION;
+    if (!recordedReason && !skipped) return false;
+    const newest = await this.deps.prisma.lbRunStep.findFirst({
+      where: { runId: ctx.run.id },
+      orderBy: { stepIndex: "desc" },
+      select: { outcome: true },
+    });
+    if (!newest?.outcome || typeof newest.outcome !== "object") return false;
+    const stored = newest.outcome as { reason?: unknown; skipped?: unknown };
+    if (recordedReason && stored.reason === reason) return true;
+    return skipped !== null && sameStringList(stored.skipped, skipped);
   }
 
   private async commit(

@@ -1,10 +1,19 @@
-import type { AdapterContext, ProxyEndpoint } from "@rakazo/adapter-kit";
-import { FakeSandboxProvider } from "@rakazo/adapters";
+import type { AdapterContext, BrowserSessionFactory, ProxyEndpoint } from "@rakazo/adapter-kit";
+import { FakeBrowserSessionProvider, FakeCaptchaSolver } from "@rakazo/adapter-kit";
+import { EncryptedSecretStore, FakeSandboxProvider, StaticPlanProvider } from "@rakazo/adapters";
+import {
+  createLbProject,
+  grantExplicitProjectAllowance,
+  startLbProject,
+  updateLbProject,
+} from "@rakazo/api/link-builder";
+import { type Actor, LbProjectPatchSchema } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
+import { createPgliteDb, type TestDatabase } from "@rakazo/db/pglite";
 import { LocalBrowserRefused } from "@rakazo/linkbuilder-browser";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isLinkBuilderFakeEnabled } from "./link-builder-fake.js";
-import { isLinkBuilderRealEnabled } from "./link-builder-real.js";
+import { isLinkBuilderRealEnabled, LinkBuilderRealRunner } from "./link-builder-real.js";
 import {
   countsAsRegistration,
   helperConnectionPlan,
@@ -269,5 +278,169 @@ describe("template reply", () => {
       format: "markdown",
     });
     expect(body).toContain("[Planner](https://planner.example/)");
+  });
+});
+
+describe("recorded host skips", () => {
+  let db: TestDatabase;
+  const clock = new Date("2026-10-16T12:00:00.000Z");
+  const actor: Actor = {
+    userId: "user_skip",
+    workspaceId: "org_skip",
+    email: "owner@example.test",
+    isDeploymentOwner: false,
+  };
+  const secrets = new EncryptedSecretStore("skip-placeholder-encryption-key");
+
+  beforeAll(async () => {
+    db = await createPgliteDb();
+    await db.prisma.organization.create({
+      data: { id: actor.workspaceId, name: "Skip", slug: "skip", createdAt: new Date() },
+    });
+    await db.prisma.user.create({ data: { id: actor.userId, name: "Owner", email: actor.email } });
+    await grantExplicitProjectAllowance(db.prisma, actor.workspaceId);
+  });
+
+  afterAll(async () => {
+    await db?.close();
+  });
+
+  function runner(browsers: BrowserSessionFactory) {
+    return new LinkBuilderRealRunner({
+      prisma: db.prisma,
+      secrets,
+      artifacts: { put: async () => ({ id: "art" }), remove: async () => undefined } as never,
+      browsers,
+      captcha: new FakeCaptchaSolver({ balance: 5_000 }),
+      mailbox: {
+        describe: () => ({
+          id: "unused",
+          contractVersion: "1",
+          adapterVersion: "0",
+          capabilities: { inbound: "webhook" },
+        }),
+        ensureInbox: async () => ({ inboxId: "mbx", address: "a@inbox.example" }),
+      },
+      now: () => clock,
+      workerId: `skip-${Math.random()}`,
+    });
+  }
+
+  async function startedProject(name: string, denyHosts: string[]) {
+    const deps = {
+      prisma: db.prisma,
+      secrets,
+      plan: new StaticPlanProvider({
+        name: "starter",
+        caps: { projects: 8, live_per_day: 10, personas: 8 },
+      }),
+    };
+    const created = await createLbProject(deps as never, actor, {
+      name,
+      brandName: "Nordlicht",
+      allowedDomains: ["nordlicht.example"],
+    });
+    await updateLbProject(deps as never, actor, {
+      projectId: created.id,
+      ...LbProjectPatchSchema.parse({
+        persona: { displayName: "Mira Sol", register: "du" },
+        quotas: { newPerDay: 2, livePerDay: 1 },
+        schedule: {
+          timezone: "UTC",
+          weekdaysOnly: false,
+          window: { start: "00:00", end: "23:59" },
+        },
+        topicLanes: [{ id: "lane", tag: "sleep", description: "Rest" }],
+        targets: [{ url: "https://nordlicht.example/guide", priority: 50 }],
+        captchaToken: "ct_live_placeholder",
+        provisionMailbox: true,
+        denyHosts,
+      }),
+    });
+    await startLbProject(deps as never, actor, created.id);
+    return created;
+  }
+
+  async function host(projectId: string, domain: string, status: "pending_admin" | "ready") {
+    return db.prisma.lbHost.create({
+      data: {
+        workspaceId: actor.workspaceId,
+        projectId,
+        registrableDomain: domain,
+        homepageUrl: `https://${domain}/`,
+        platform: "phpbb",
+        language: "de",
+        country: "DE",
+        locale: "de-DE",
+        timezoneId: "Europe/Berlin",
+        status,
+      },
+    });
+  }
+
+  function skipSteps(projectId: string) {
+    return db.prisma.lbRunStep.findMany({
+      where: { run: { projectId } },
+      orderBy: { stepIndex: "asc" },
+    });
+  }
+
+  it("records one skip for denied forums and does not open a browser", async () => {
+    const project = await startedProject("Denied", ["macuser.de", "medizin-forum.de"]);
+    await host(project.id, "macuser.de", "pending_admin");
+    await host(project.id, "medizin-forum.de", "ready");
+    const browsers = new FakeBrowserSessionProvider({});
+    const real = runner(Object.assign(browsers, { mode: "local" as const }));
+    await real.tick();
+    await real.tick();
+    const steps = await skipSteps(project.id);
+    const skips = steps.filter((step) => step.kind === "select_host" && step.hostId === null);
+    expect(skips).toHaveLength(1);
+    expect(skips[0]?.outcome).toMatchObject({
+      lastAction: "Skipped 2 denied forums",
+      skipped: ["macuser.de", "medizin-forum.de"],
+    });
+    const run = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
+    expect(run.lastAction).toBe("Skipped 2 denied forums");
+    expect(browsers.sessions).toHaveLength(0);
+    await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
+    await db.prisma.lbRun.updateMany({
+      where: { projectId: project.id },
+      data: { status: "paused" },
+    });
+  });
+
+  it("records one admin wait for an allowed pending forum", async () => {
+    const project = await startedProject("Admin", []);
+    const pending = await host(project.id, "gartentipps.de", "pending_admin");
+    const run = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
+    await db.prisma.lbRunStep.create({
+      data: {
+        workspaceId: actor.workspaceId,
+        runId: run.id,
+        stepIndex: 0,
+        kind: "admin_check",
+        hostId: pending.id,
+        createdAt: new Date(clock.getTime() - 60 * 60 * 1000),
+        finishedAt: new Date(clock.getTime() - 60 * 60 * 1000),
+      },
+    });
+    const browsers = new FakeBrowserSessionProvider({});
+    const real = runner(Object.assign(browsers, { mode: "local" as const }));
+    await real.tick();
+    await real.tick();
+    const steps = await skipSteps(project.id);
+    const waits = steps.filter((step) => {
+      const outcome = step.outcome as { lastAction?: string };
+      return outcome.lastAction === "Waiting for a site admin";
+    });
+    expect(waits).toHaveLength(1);
+    expect(waits[0]?.outcome).toMatchObject({
+      reason: "admin_approval",
+      domains: ["gartentipps.de"],
+    });
+    const updated = await db.prisma.lbRun.findFirstOrThrow({ where: { id: run.id } });
+    expect(updated.lastAction).toBe("Waiting for a site admin");
+    expect(browsers.sessions).toHaveLength(0);
   });
 });
