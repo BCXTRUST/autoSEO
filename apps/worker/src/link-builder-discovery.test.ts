@@ -493,11 +493,14 @@ describe("discoverDueProjects", () => {
     expect(searches).toBe(1);
     expect(costs).toBe(1);
     const browserLine = steps[0]?.outcome.lastAction ?? "";
-    expect(browserLine.startsWith("Searched the browser:")).toBe(true);
-    expect(queries[0]).not.toBe(browserLine.slice("Searched the browser: ".length));
-    expect(steps.some((step) => step.outcome.lastAction === "Browser search found no forum.")).toBe(
-      true,
-    );
+    expect(browserLine).toMatch(/^Searched the browser: .+ — 0 forums$/);
+    const browserQuery = browserLine
+      .slice("Searched the browser: ".length)
+      .replace(/ — 0 forums$/, "");
+    expect(queries[0]).not.toBe(browserQuery);
+    expect(
+      steps.filter((step) => step.outcome.lastAction?.startsWith("Searched the browser")),
+    ).toHaveLength(1);
   });
 
   it("searches in the browser before a stored forum and does not sign that forum up", async () => {
@@ -884,4 +887,255 @@ describe("discoverDueProjects", () => {
     expect(browsers).toBe(2);
     expect(searches).toBe(2);
   });
+
+  it("solves a sorry page from an iframe key and then keeps the forum", async () => {
+    const now = new Date("2026-10-16T10:00:00.000Z");
+    const steps: Array<{ outcome: { lastAction?: string } }> = [];
+    let hostsCreated = 0;
+    let searches = 0;
+    let solvedKey = "";
+    const html = sampleForumHtml({ platform: "phpbb" });
+    const prisma = discoveryPrisma(steps, () => {
+      hostsCreated += 1;
+    });
+    let blocked = true;
+    const session = {
+      goto: async () => undefined,
+      url: async () =>
+        blocked ? "https://www.google.com/sorry/index" : "https://www.google.de/search?q=problem",
+      pageText: async () => (blocked ? "unusual traffic" : "Foren Ergebnisse captcha tipp"),
+      pageHtml: async () =>
+        `<script src="https://www.google.com/recaptcha/api2/anchor?k=6LcSorryKey12345678"></script>`,
+      listAnchors: async () =>
+        blocked
+          ? []
+          : [
+              {
+                text: "",
+                href: "https://www.google.com/url?q=https://gartentipps.example/viewtopic.php%3Ft%3D9",
+              },
+            ],
+      exists: async (selector: string) => selector.includes("submit"),
+      attribute: async () => null,
+      click: async () => {
+        blocked = false;
+      },
+      injectToken: async () => undefined,
+      close: async () => undefined,
+    } as BrowserSession;
+    await discoverDueProjects({
+      prisma,
+      search: countingSearch(() => {
+        searches += 1;
+      }),
+      now,
+      openBrowser: async () => session,
+      resolveCaptcha: async () => ({
+        describe: () => ({
+          id: "captell",
+          contractVersion: "1",
+          adapterVersion: "0",
+          capabilities: { image: false, token: true, question: false },
+        }),
+        solve: async (request: { websiteKey: string }) => {
+          solvedKey = request.websiteKey;
+          return { answer: "token", credits: 1 };
+        },
+        balance: async () => ({ credits: 1 }),
+        answerQuestion: async () => ({ couldNotAnswer: true as const }),
+      }),
+      fetchImpl: async (url) => {
+        if (String(url).includes("gartentipps.example")) {
+          return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+        }
+        return new Response("no", { status: 404 });
+      },
+    });
+    expect(solvedKey).toBe("6LcSorryKey12345678");
+    expect(hostsCreated).toBe(1);
+    expect(searches).toBe(0);
+    expect(
+      steps.some((step) => step.outcome.lastAction === "Searched the browser: Magnesium Schlaf"),
+    ).toBe(false);
+    expect(steps[0]?.outcome.lastAction).toMatch(/Searched the browser: .+ — 1 forums$/);
+  });
+
+  it("does not treat a results snippet that says captcha as a block", async () => {
+    const now = new Date("2026-10-16T10:00:00.000Z");
+    const steps: Array<{ outcome: { lastAction?: string } }> = [];
+    let solves = 0;
+    const html = sampleForumHtml({ platform: "phpbb" });
+    await discoverDueProjects({
+      prisma: discoveryPrisma(steps),
+      search: countingSearch(() => undefined),
+      now,
+      resolveCaptcha: async () => {
+        solves += 1;
+        return null;
+      },
+      openBrowser: async () =>
+        ({
+          goto: async () => undefined,
+          url: async () => "https://www.google.de/search?q=problem",
+          pageText: async () => "Forum thread about a captcha on the board",
+          listAnchors: async () => [
+            { text: "Forum", href: "https://gartentipps.example/viewtopic.php?t=9" },
+          ],
+          exists: async () => false,
+          close: async () => undefined,
+        }) as BrowserSession,
+      fetchImpl: async (url) => {
+        if (String(url).includes("gartentipps.example")) {
+          return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+        }
+        return new Response("no", { status: 404 });
+      },
+    });
+    expect(solves).toBe(0);
+    expect(steps.some((step) => step.outcome.lastAction?.includes("captcha"))).toBe(false);
+    expect(steps[0]?.outcome.lastAction).toMatch(/— 1 forums$/);
+  });
+
+  it("keeps a forum link after twenty Google anchors when the link has no text", async () => {
+    const now = new Date("2026-10-16T10:00:00.000Z");
+    const steps: Array<{ outcome: { lastAction?: string } }> = [];
+    let created = "";
+    const google = Array.from({ length: 20 }, (_, index) => ({
+      text: "Google",
+      href: `https://www.google.de/search?q=${index}`,
+    }));
+    const html = `<html><body><a href="/register">Registrieren</a></body></html>`;
+    await discoverDueProjects({
+      prisma: discoveryPrisma(steps, (domain) => {
+        created = domain;
+      }),
+      search: countingSearch(() => undefined),
+      now,
+      openBrowser: browserWith([
+        ...google,
+        { text: "", href: "https://www.google.com/url?q=https://neu.example/forum/thread/1" },
+      ]),
+      fetchImpl: async (url) => {
+        if (String(url).includes("neu.example")) {
+          return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+        }
+        return new Response("no", { status: 404 });
+      },
+    });
+    expect(created).toBe("neu.example");
+    expect(steps[0]?.outcome.lastAction).toMatch(/— 1 forums$/);
+  });
+
+  it("records captcha before any DataForSEO call and does not store the query alone", async () => {
+    const now = new Date("2026-10-16T10:00:00.000Z");
+    const steps: Array<{ outcome: { lastAction?: string } }> = [];
+    const order: string[] = [];
+    await discoverDueProjects({
+      prisma: discoveryPrisma(steps),
+      search: {
+        describe: () => ({
+          id: "fake-search",
+          contractVersion: "1",
+          adapterVersion: "0",
+          capabilities: { maxDepth: 10, operators: false },
+        }),
+        search: async () => {
+          order.push(steps.map((step) => step.outcome.lastAction).join("|"));
+          return [];
+        },
+      },
+      now,
+      openBrowser: async () =>
+        ({
+          goto: async () => undefined,
+          url: async () => "https://www.google.com/sorry/index",
+          pageText: async () => "ungewöhnlicher datenverkehr",
+          pageHtml: async () => "<html></html>",
+          listAnchors: async () => [],
+          exists: async () => false,
+          attribute: async () => null,
+          close: async () => undefined,
+        }) as BrowserSession,
+      resolveCaptcha: async () => null,
+    });
+    expect(steps[0]?.outcome.lastAction).toBe("Browser search failed: captcha");
+    expect(
+      steps.some((step) => step.outcome.lastAction === "Searched the browser: Magnesium Schlaf"),
+    ).toBe(false);
+    expect(order[0]).toContain("captcha");
+  });
 });
+
+function countingSearch(onSearch: () => void): SearchProvider {
+  return {
+    describe: () => ({
+      id: "fake-search",
+      contractVersion: "1",
+      adapterVersion: "0",
+      capabilities: { maxDepth: 10, operators: false },
+    }),
+    search: async () => {
+      onSearch();
+      return [];
+    },
+  };
+}
+
+function discoveryPrisma(
+  steps: Array<{ outcome: { lastAction?: string } }>,
+  onCreate?: (domain: string) => void,
+): PrismaClient {
+  return {
+    lbProject: {
+      findMany: async () => [
+        {
+          id: "p1",
+          workspaceId: "w1",
+          name: "Nordlicht",
+          brandName: "Nordlicht",
+          status: "active",
+          archivedAt: null,
+          lastDiscoveredAt: new Date("2026-10-15T09:10:11.995Z"),
+          schedule: { timezone: "Europe/Berlin" },
+          markets: [
+            { country: "DE", language: "de", locale: "de-DE", timezoneId: "Europe/Berlin" },
+          ],
+          topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
+          marketPolicy: "primary_first",
+          quotas: { livePerDay: 1 },
+          denyHosts: [],
+        },
+      ],
+      update: async () => ({}),
+      updateMany: async () => ({ count: 1 }),
+    },
+    lbHost: {
+      findMany: async () => [],
+      findUnique: async () => null,
+      create: async (args: { data: { registrableDomain: string } }) => {
+        onCreate?.(args.data.registrableDomain);
+        return { id: "host-new", registrableDomain: args.data.registrableDomain };
+      },
+    },
+    lbThreadCandidate: { upsert: async () => ({}) },
+    lbCostEntry: { create: async () => ({}) },
+    lbRun: {
+      findFirst: async () => ({
+        id: "run-1",
+        status: "running",
+        projectId: "p1",
+        workspaceId: "w1",
+      }),
+      update: async () => ({}),
+    },
+    lbRunStep: {
+      findFirst: async () => null,
+      findMany: async () => [],
+      count: async () => steps.length,
+      create: async (args: { data: (typeof steps)[number] }) => {
+        steps.push(args.data);
+        return args.data;
+      },
+    },
+  } as unknown as PrismaClient;
+}

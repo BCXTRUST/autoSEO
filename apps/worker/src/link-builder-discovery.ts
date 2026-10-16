@@ -35,6 +35,9 @@ import { recordCost } from "./link-builder-costs.js";
 
 /** Hosts that must not be opened for a new signup. */
 const DROPPED_FORUM_HOSTS = [
+  "aquacomputer.de",
+  "edubily.de",
+  "science-fitness.de",
   "medizin-forum.de",
   "phpbb.de",
   "macuser.de",
@@ -42,6 +45,8 @@ const DROPPED_FORUM_HOSTS = [
   "frauenselbsthilfe.de",
   "bulli-forum.com",
 ] as const;
+
+const FORUM_LINK_CAP = 30;
 
 export interface DiscoveryBrowserProject {
   id: string;
@@ -370,13 +375,6 @@ async function searchBrowserFirst(args: {
     );
     return { allowed: false, hosts: [] };
   }
-  await recordDiscoveryStep(
-    input.prisma,
-    project,
-    input.now,
-    `Searched the browser: ${browserQuery}`,
-    null,
-  );
   const blocked = await searchPageBlocked(session);
   if (blocked) {
     const solved = await solveSearchCaptcha(input, project, session);
@@ -400,17 +398,15 @@ async function searchBrowserFirst(args: {
     usedHosts: args.usedHosts,
     fetchText: args.fetchText,
   });
-  const allowed = probed.filter((host) => host.status === "qualified");
-  if (allowed.length === 0) {
-    await recordDiscoveryStep(
-      input.prisma,
-      project,
-      input.now,
-      "Browser search found no forum.",
-      null,
-    );
-    return { allowed: false, hosts: [] };
-  }
+  const allowed = probed.filter(probedHostKept).map(asStartableHost);
+  await recordDiscoveryStep(
+    input.prisma,
+    project,
+    input.now,
+    `Searched the browser: ${browserQuery} — ${allowed.length} forums`,
+    null,
+  );
+  if (allowed.length === 0) return { allowed: false, hosts: [] };
   return { allowed: true, hosts: allowed };
 }
 
@@ -513,11 +509,19 @@ function isGoogleHost(hostname: string): boolean {
   );
 }
 
+function sorryPath(url: string): boolean {
+  try {
+    const path = new URL(url).pathname.toLowerCase();
+    return path === "/sorry" || path.startsWith("/sorry/");
+  } catch {
+    return false;
+  }
+}
+
 async function searchPageBlocked(session: BrowserSession): Promise<boolean> {
-  const url = await session.url();
-  if (url.includes("/sorry")) return true;
-  const text = await session.pageText();
-  return /sorry|unusual traffic|captcha/i.test(text);
+  if (sorryPath(await session.url())) return true;
+  const text = (await session.pageText()).toLowerCase();
+  return text.includes("unusual traffic") || text.includes("ungewöhnlicher datenverkehr");
 }
 
 async function solveSearchCaptcha(
@@ -584,8 +588,27 @@ async function collectForumUrls(
     if (!domain || hostDenied(domain, denyHosts) || seen.has(domain)) continue;
     seen.add(domain);
     urls.push(absolute);
+    if (urls.length >= FORUM_LINK_CAP) break;
   }
   return urls;
+}
+
+function probedHostKept(host: Awaited<ReturnType<typeof discoverHosts>>[number]): boolean {
+  if (hostDenied(host.registrableDomain, DROPPED_FORUM_HOSTS)) return false;
+  if (host.status === "qualified") return true;
+  if (
+    host.reason === "commercial_links_forbidden" ||
+    host.reason === "links_forbidden" ||
+    host.reason === "unsupported_captcha"
+  ) {
+    return false;
+  }
+  return host.facts.platform !== "unknown" || Boolean(host.facts.registerUrl);
+}
+
+function asStartableHost<T extends { status: string; reason: string | null }>(host: T): T {
+  if (host.status === "qualified") return host;
+  return { ...host, status: "qualified", reason: null };
 }
 
 function unwrapHttps(href: string, base: string): string | null {

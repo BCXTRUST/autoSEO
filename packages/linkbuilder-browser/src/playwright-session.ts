@@ -602,6 +602,10 @@ export class PlaywrightBrowserSession implements BrowserSession {
     return deadline(this.page.locator("body").innerText({ timeout: 8_000 }));
   }
 
+  async pageHtml(): Promise<string> {
+    return deadline(this.page.content());
+  }
+
   async listText(selector: string): Promise<string[]> {
     const texts = await deadline(this.page.locator(selector).allTextContents());
     return texts.map((text) => text.replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -620,9 +624,9 @@ export class PlaywrightBrowserSession implements BrowserSession {
       for (const el of root.document.querySelectorAll(rootSelector)) {
         const href = el.getAttribute("href");
         const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-        if (!href || !text) continue;
+        if (!href) continue;
         anchors.push({ text, href });
-        if (anchors.length >= 20) break;
+        if (anchors.length >= 120) break;
       }
       return anchors;
     }, selector);

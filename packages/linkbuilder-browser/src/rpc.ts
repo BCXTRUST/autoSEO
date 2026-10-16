@@ -45,6 +45,7 @@ export const BrowserRpcRequestSchema = z.discriminatedUnion("method", [
     })
     .strict(),
   z.object({ method: z.literal("pageText") }).strict(),
+  z.object({ method: z.literal("pageHtml") }).strict(),
   z.object({ method: z.literal("ariaSnapshot") }).strict(),
   z.object({ method: z.literal("navigationMeta") }).strict(),
   z.object({ method: z.literal("formFields"), selector }).strict(),
@@ -150,6 +151,8 @@ export class BrowserRpcServer {
         return session.injectToken(request.fieldName, request.token);
       case "pageText":
         return session.pageText();
+      case "pageHtml":
+        return session.pageHtml ? session.pageHtml() : "";
       case "ariaSnapshot":
         return session.ariaSnapshot ? session.ariaSnapshot() : "";
       case "navigationMeta":
@@ -276,6 +279,10 @@ export class RpcBrowserSession implements BrowserSession {
 
   async pageText(): Promise<string> {
     return z.string().parse(await this.call({ method: "pageText" }));
+  }
+
+  async pageHtml(): Promise<string> {
+    return z.string().parse(await this.call({ method: "pageHtml" }));
   }
 
   async ariaSnapshot(): Promise<string> {
