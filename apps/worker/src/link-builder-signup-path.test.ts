@@ -460,4 +460,142 @@ describe("signup path", () => {
     expect(hosts[1]?.status).toBe("qualified");
     expect(pauses).toEqual(["paused"]);
   });
+
+  it("solves an iframe site key and does not call Captell when no key exists", async () => {
+    const solved: string[] = [];
+    const calls = { solve: 0 };
+    const driver = {
+      detectCaptcha: async (session: BrowserSession) => {
+        const { detectWidget } = await import("@rakazo/linkbuilder-drivers");
+        return detectWidget(session);
+      },
+      submitRegistration: async () => ({ kind: "pending_email" as const }),
+      registerSubmitSelector: "button",
+      pageMessages: async () => [],
+    };
+    const ctxFor = (html: string | null) =>
+      ({
+        now: new Date("2026-10-16T12:00:00.000Z"),
+        stepIndex: 1,
+        run: { id: "run-1", status: "running", counters: startRunCounters() },
+        project: {
+          id: "p1",
+          workspaceId: "w1",
+          spamSentences: [],
+          spamMaxRetries: 1,
+        },
+        host: {
+          id: "h1",
+          status: "registering",
+          platform: "unknown",
+          homepageUrl: "https://forum.example/",
+          registrableDomain: "forum.example",
+          parkedFrom: null,
+        },
+        adapter: {
+          operationId: "t",
+          traceId: "t",
+          workspaceId: "w1",
+          userId: "u",
+          signal: new AbortController().signal,
+        },
+        secrets: [],
+        storeArtifact: async () => "art",
+        pool: () => ({
+          session: {
+            url: async () => "https://forum.example/register",
+            exists: async () => false,
+            attribute: async () => null,
+            pageHtml: async () => html ?? "",
+            pageText: async () => "",
+            waitFor: async () => false,
+            screenshotPng: async () => new Uint8Array([1]),
+            injectToken: async () => undefined,
+            click: async () => undefined,
+          },
+          hostId: "h1",
+          helperConnected: true,
+          cookieChecked: true,
+          registerFormReady: true,
+          captchaAttempts: 0,
+          registrationRetried: false,
+          spamRetries: 0,
+          profileSet: false,
+          engine: "chromium",
+          marketKey: "DE:de",
+          helperVersion: null,
+          driver,
+        }),
+        services: {
+          pageHelperButtonSelector: "[data-page-helper]",
+          captcha: {
+            solve: async (request: { websiteKey: string }) => {
+              calls.solve += 1;
+              solved.push(request.websiteKey);
+              return { answer: "token", credits: 1, balance: 1, taskId: "task" };
+            },
+          },
+        },
+      }) as unknown as StepContext;
+
+    const solvedStep = await REAL_STEP_HANDLERS.captcha(
+      ctxFor(
+        `<iframe src="https://www.google.com/recaptcha/api2/anchor?k=6LcIframeKey123456"></iframe>`,
+      ),
+    );
+    expect(solved).toEqual(["6LcIframeKey123456"]);
+    expect(solvedStep).toMatchObject({
+      kind: "step",
+      lastAction: "Registered, waiting for the verification mail",
+    });
+
+    const before = calls.solve;
+    const skipped = await REAL_STEP_HANDLERS.captcha(
+      ctxFor("<html><body><form></form></body></html>"),
+    );
+    expect(calls.solve).toBe(before);
+    expect(skipped).toMatchObject({ kind: "step" });
+    if (skipped.kind === "step") {
+      const status: string[] = [];
+      await skipped.apply?.({
+        lbHost: {
+          updateMany: async (args: { data: { status?: string } }) => {
+            if (args.data.status) status.push(args.data.status);
+            return { count: 1 };
+          },
+        },
+        lbHostAccount: { update: async () => ({}) },
+        lbCaptchaEvent: { create: async () => ({}) },
+      } as never);
+      expect(status).not.toContain("dead");
+      expect(status).not.toContain("unsupported_captcha");
+    }
+  });
+
+  it("refuses a post and a link for a host that just reached pending_email", async () => {
+    const ctx = {
+      now: new Date("2026-10-16T12:00:00.000Z"),
+      host: {
+        id: "h1",
+        status: "pending_email",
+        platform: "phpbb",
+        homepageUrl: "https://forum.example/",
+        registrableDomain: "forum.example",
+      },
+      account: { id: "acct", createdAt: new Date("2026-10-16T11:59:00.000Z"), postCount: 0 },
+      project: {
+        schedule: { timezone: "Europe/Berlin" },
+        warmup: { minPostsBeforeLink: 0, minAccountAgeHours: 0 },
+      },
+    } as unknown as StepContext;
+    const posted = await REAL_STEP_HANDLERS.post(ctx);
+    const warmed = await REAL_STEP_HANDLERS.warmup_post(ctx);
+    expect(posted).toMatchObject({ kind: "step", outcome: { refused: "pending_email" } });
+    expect(warmed).toMatchObject({ kind: "step", outcome: { refused: "pending_email" } });
+    const linked = await REAL_STEP_HANDLERS.post({
+      ...ctx,
+      host: { ...ctx.host, status: "ready" },
+    } as StepContext);
+    expect(linked).toMatchObject({ kind: "step", outcome: { refused: "link_day" } });
+  });
 });

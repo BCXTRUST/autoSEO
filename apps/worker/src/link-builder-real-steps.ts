@@ -92,6 +92,7 @@ import {
   STUCK_LOOK_SYSTEM,
   type StuckLookAction,
   type StuckRecord,
+  sameLocalDay,
   shouldCount,
   shouldSkipDesktopPage,
   skippedHostLine,
@@ -494,6 +495,9 @@ export function hostJustFound(row: { lastProbeAt?: Date | string | null }, now: 
 }
 
 const STORED_SIGNUP_DENY = [
+  "aquacomputer.de",
+  "edubily.de",
+  "science-fitness.de",
   "medizin-forum.de",
   "phpbb.de",
   "macuser.de",
@@ -501,6 +505,9 @@ const STORED_SIGNUP_DENY = [
   "frauenselbsthilfe.de",
   "bulli-forum.com",
 ] as const;
+
+const FORM_MISS_CAP = 3;
+const MAIL_WAIT_MS = 3 * 60_000;
 
 /** Stored forums for this signup, in the only order the run may open them. */
 const STORED_SIGNUP_ORDER = ["aquacomputer.de", "edubily.de", "science-fitness.de"] as const;
@@ -1334,13 +1341,33 @@ export function warmupReplyChoice(language: string): {
   };
 }
 
+async function missedFormsThisRun(ctx: StepContext): Promise<number> {
+  try {
+    const steps = await ctx.services.prisma.lbRunStep.findMany({
+      where: { runId: ctx.run.id },
+      select: { outcome: true },
+    });
+    return steps.filter((step) => stepActionText(step.outcome).startsWith("No signup form")).length;
+  } catch {
+    return 0;
+  }
+}
+
+function stepActionText(outcome: unknown): string {
+  if (!outcome || typeof outcome !== "object") return "";
+  const action = (outcome as { lastAction?: unknown }).lastAction;
+  return typeof action === "string" ? action : "";
+}
+
 /** The open page has no signup path. The host stays retryable; this run does not pick it again. */
 async function noSignupForm(
   ctx: StepContext,
   host: HostRow,
   artifactIds: string[],
 ): Promise<Extract<StepResult, { kind: "step" }>> {
-  const another = await anotherFreshForumRemains(ctx, host.registrableDomain);
+  const misses = await missedFormsThisRun(ctx);
+  const another =
+    misses + 1 < FORM_MISS_CAP && (await anotherFreshForumRemains(ctx, host.registrableDomain));
   return {
     kind: "step",
     lastAction: noSignupFormLine(host.registrableDomain),
@@ -1802,24 +1829,14 @@ async function widgetViaApi(
   attempt: number,
 ): Promise<StepResult> {
   if (!challenge.siteKey) {
-    entry.registerFormReady = false;
-    const artifactIds = await screenshot(ctx, entry, "captcha");
-    return withEvent(
-      {
-        kind: "step",
-        lastAction: "Captcha not supported",
-        hostId: host.id,
-        artifactIds,
-        outcome: { captcha: "missing_site_key" },
-        apply: (tx) => moveHost(tx, host, "unsupported_captcha", { captchaType: challenge.type }),
-      },
-      captchaEvent(
-        ctx,
-        host,
-        attempt,
-        widgetRecord(challenge, "https_api", { outcome: "missing_site_key" }),
-      ),
-      0,
+    return finishRegistration(
+      ctx,
+      host,
+      entry,
+      driver,
+      attempt,
+      null,
+      await driver.submitRegistration(entry.session),
     );
   }
   const solved = await ctx.services.captcha.solve(
@@ -2145,12 +2162,36 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
     return found;
   };
   let link = linkFrom(await readInbox());
+  if (!link && ctx.services.sleep) {
+    await ctx.services.sleep(1_000);
+    link = linkFrom(await readInbox());
+  }
   if (!link) {
     const resent = await clickResendMail(entry.session);
     if (resent) await new Promise((resolve) => setTimeout(resolve, 1500));
     link = linkFrom(await readInbox());
   }
   if (!link) {
+    const waited = ctx.now.getTime() - account.createdAt.getTime();
+    if (waited >= MAIL_WAIT_MS) {
+      const domain = (process.env.RESEND_INBOUND_DOMAIN ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/^@/, "");
+      return {
+        kind: "step",
+        hostId: host.id,
+        lastAction: domain ? `No confirmation mail on ${domain}` : "No confirmation mail",
+        outcome: { mail: "not_in_inbox", paused: true },
+        run: { status: transitionRun(ctx.run.status, "paused") },
+        apply: async (tx) => {
+          await tx.lbProject.updateMany({
+            where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
+            data: { status: transitionProject("active", "paused") },
+          });
+        },
+      };
+    }
     return {
       kind: "step",
       hostId: host.id,
@@ -2426,11 +2467,32 @@ async function recoverOpenThreads(
 
 async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   const host = requireHost(ctx);
+  if (
+    host.status === "pending_email" ||
+    host.status === "registering" ||
+    host.status === "qualified"
+  ) {
+    return {
+      kind: "step",
+      hostId: host.id,
+      lastAction: "Waiting for the confirmation",
+      outcome: { refused: "pending_email" },
+    };
+  }
+  const account = ctx.account;
+  if (!account) throw new StepFailure("Host has no account");
+  const timeZone = ctx.project.schedule?.timezone || "Europe/Berlin";
+  if (!warmup && sameLocalDay(account.createdAt, ctx.now, timeZone)) {
+    return {
+      kind: "step",
+      hostId: host.id,
+      lastAction: "Link waits for a later day",
+      outcome: { refused: "link_day" },
+    };
+  }
   const entry = requireSession(ctx, host);
   const driver = requireDriver(host, entry);
   const { prisma } = ctx.services;
-  const account = ctx.account;
-  if (!account) throw new StepFailure("Host has no account");
   if (!account.siteLoginId) {
     const plan = await desktopSkipPlan(ctx, host, "missing_password");
     return {

@@ -112,6 +112,19 @@ describe("planRealStep", () => {
     ).toEqual({
       kind: "email_verify",
     });
+    const fresh = planRealStep(
+      input({
+        host: { id: "h1", ...hostState("pending_email") },
+        session: onHost,
+        warmupMet: true,
+        warmupPostsShort: true,
+        minPostsBeforeLink: 0,
+        warmupPosts: 0,
+      }),
+    );
+    expect(fresh.kind).not.toBe("post");
+    expect(fresh.kind).not.toBe("warmup_post");
+    expect(fresh).toEqual({ kind: "email_verify" });
   });
 
   it("registers a chosen host instead of parking it on research", () => {
