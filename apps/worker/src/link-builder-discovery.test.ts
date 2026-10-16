@@ -1,8 +1,9 @@
 import type { BrowserSession, SearchProvider } from "@rakazo/adapter-kit";
+import { CaptchaSolverError } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
 import { sampleForumHtml, startRunCounters } from "@rakazo/linkbuilder-core";
 import { describe, expect, it } from "vitest";
-import { discoverDueProjects } from "./link-builder-discovery.js";
+import { discoverDueProjects, reprobeDeadHosts } from "./link-builder-discovery.js";
 import { REAL_STEP_HANDLERS, type StepContext } from "./link-builder-real-steps.js";
 
 function browserWith(links: Array<{ text: string; href: string }>): () => Promise<BrowserSession> {
@@ -957,7 +958,8 @@ describe("discoverDueProjects", () => {
     expect(
       steps.some((step) => step.outcome.lastAction === "Searched the browser: Magnesium Schlaf"),
     ).toBe(false);
-    expect(steps[0]?.outcome.lastAction).toMatch(/Searched the browser: .+ — 1 forums$/);
+    expect(steps.some((step) => /— 1 forums$/.test(step.outcome.lastAction ?? ""))).toBe(true);
+    expect(steps.some((step) => step.outcome.lastAction?.includes("captcha solved"))).toBe(true);
   });
 
   it("does not treat a results snippet that says captcha as a block", async () => {
@@ -1028,7 +1030,15 @@ describe("discoverDueProjects", () => {
 
   it("records captcha before any DataForSEO call and does not store the query alone", async () => {
     const now = new Date("2026-10-16T10:00:00.000Z");
-    const steps: Array<{ outcome: { lastAction?: string } }> = [];
+    const steps: Array<{
+      outcome: {
+        lastAction?: string;
+        websiteURL?: string;
+        type?: string;
+        siteKey?: string | null;
+        code?: string;
+      };
+    }> = [];
     const order: string[] = [];
     await discoverDueProjects({
       prisma: discoveryPrisma(steps),
@@ -1058,11 +1068,177 @@ describe("discoverDueProjects", () => {
         }) as BrowserSession,
       resolveCaptcha: async () => null,
     });
-    expect(steps[0]?.outcome.lastAction).toBe("Browser search failed: captcha");
+    expect(steps[0]?.outcome.lastAction).toMatch(/Browser search captcha failed:/);
+    expect(steps[0]?.outcome).toMatchObject({
+      websiteURL: "https://www.google.com/sorry/index",
+      type: "RecaptchaV2",
+      siteKey: null,
+      code: "missing",
+    });
     expect(
       steps.some((step) => step.outcome.lastAction === "Searched the browser: Magnesium Schlaf"),
     ).toBe(false);
     expect(order[0]).toContain("captcha");
+  });
+
+  it("sends data-s from a sorry page and stores a thrown solver error", async () => {
+    const now = new Date("2026-10-16T10:00:00.000Z");
+    const steps: Array<{
+      outcome: {
+        lastAction?: string;
+        websiteURL?: string;
+        type?: string;
+        siteKey?: string | null;
+        code?: string;
+        message?: string;
+        solved?: boolean;
+      };
+    }> = [];
+    let searches = 0;
+    let sent: {
+      type?: string;
+      websiteURL?: string;
+      websiteKey?: string;
+      enterprisePayload?: { s?: string };
+    } | null = null;
+    const page = "https://www.google.com/sorry/index";
+    await discoverDueProjects({
+      prisma: discoveryPrisma(steps),
+      search: countingSearch(() => {
+        searches += 1;
+      }),
+      now,
+      openBrowser: async () =>
+        ({
+          goto: async () => undefined,
+          url: async () => page,
+          pageText: async () => "unusual traffic",
+          pageHtml: async () =>
+            `<div class="g-recaptcha" data-sitekey="6LcSorryKey12345678" data-s="sorry-data-s"></div>`,
+          listAnchors: async () => [],
+          exists: async () => false,
+          attribute: async () => null,
+          close: async () => undefined,
+        }) as BrowserSession,
+      resolveCaptcha: async () => ({
+        describe: () => ({
+          id: "captell",
+          contractVersion: "1",
+          adapterVersion: "0",
+          capabilities: { image: false, token: true, question: false },
+        }),
+        solve: async (request: {
+          type?: string;
+          websiteURL?: string;
+          websiteKey?: string;
+          enterprisePayload?: { s?: string };
+        }) => {
+          sent = request;
+          throw new CaptchaSolverError("invalid_request", "invalid_request");
+        },
+        balance: async () => ({ credits: 1 }),
+        answerQuestion: async () => ({ couldNotAnswer: true as const }),
+      }),
+    });
+    expect(sent).toMatchObject({
+      type: "recaptcha_v2",
+      websiteURL: page,
+      websiteKey: "6LcSorryKey12345678",
+      enterprisePayload: { s: "sorry-data-s" },
+    });
+    expect(steps[0]?.outcome).toMatchObject({
+      websiteURL: page,
+      type: "RecaptchaV2",
+      siteKey: "6LcSorryKey12345678",
+      code: "invalid_request",
+      message: "invalid_request",
+    });
+    expect(JSON.stringify(steps[0]?.outcome)).not.toMatch(/Bearer |ct_live_|sorry-data-s/);
+    expect(searches).toBe(1);
+  });
+
+  it("records stored DataForSEO rows and does not buy a second search", async () => {
+    const now = new Date("2026-10-16T10:00:00.000Z");
+    let searches = 0;
+    const project = {
+      id: "p1",
+      workspaceId: "w1",
+      name: "Nordlicht",
+      brandName: "Nordlicht",
+      status: "active",
+      archivedAt: null,
+      lastDiscoveredAt: new Date("2026-10-15T09:10:11.995Z"),
+      schedule: { timezone: "Europe/Berlin" },
+      markets: [{ country: "DE", language: "de", locale: "de-DE", timezoneId: "Europe/Berlin" }],
+      topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
+      marketPolicy: "primary_first",
+      quotas: { livePerDay: 1 },
+      denyHosts: [],
+    };
+    const steps: Array<{ kind: string; finishedAt: Date; outcome: { lastAction?: string } }> = [];
+    const prisma = {
+      lbProject: {
+        findMany: async () => [project],
+        update: async (args: { data: { lastDiscoveredAt?: Date } }) => {
+          if (args.data.lastDiscoveredAt) project.lastDiscoveredAt = args.data.lastDiscoveredAt;
+          return {};
+        },
+        updateMany: async () => ({ count: 1 }),
+      },
+      lbHost: {
+        findMany: async () => [
+          { registrableDomain: "gartentipps.de", status: "qualified", accounts: [] },
+        ],
+      },
+      lbRun: {
+        findFirst: async () => ({
+          id: "run-1",
+          status: "running",
+          projectId: "p1",
+          workspaceId: "w1",
+        }),
+        update: async () => ({}),
+      },
+      lbRunStep: {
+        findMany: async () => steps.filter((step) => step.kind === "discover"),
+        findFirst: async () => null,
+        count: async () => steps.length,
+        create: async (args: { data: (typeof steps)[number] }) => {
+          steps.push({
+            ...args.data,
+            finishedAt: args.data.finishedAt ?? now,
+            kind: args.data.kind ?? "discover",
+          });
+          return args.data;
+        },
+      },
+      lbCostEntry: { create: async () => ({}) },
+    } as unknown as PrismaClient;
+    const search = {
+      describe: () => ({
+        id: "fake-search",
+        contractVersion: "1",
+        adapterVersion: "0",
+        capabilities: { maxDepth: 10, operators: false },
+      }),
+      search: async () => {
+        searches += 1;
+        return [{ url: "https://gartentipps.de/forum", title: "", snippet: "" }];
+      },
+    } satisfies SearchProvider;
+    const open = async () => browserWith([])();
+    await discoverDueProjects({ prisma, search, now, openBrowser: open });
+    expect(searches).toBe(1);
+    expect(
+      steps.some((step) => step.outcome.lastAction === "Search rows were already stored: 1"),
+    ).toBe(true);
+    await discoverDueProjects({
+      prisma,
+      search,
+      now: new Date(now.getTime() + 20 * 60_000),
+      openBrowser: open,
+    });
+    expect(searches).toBe(1);
   });
 
   it("restores a dead host from a register link and a later form, and leaves denied and down hosts", async () => {
@@ -1076,7 +1252,7 @@ describe("discoverDueProjects", () => {
       hostRow("psychic", "psychic.de", "dead"),
     ];
     const fetched: string[] = [];
-    let searches = 0;
+    const searches = 0;
     let paused = 0;
     const steps: Array<{ outcome: { lastAction?: string; restored?: unknown } }> = [];
     const pages: Record<string, string> = {
@@ -1143,23 +1319,20 @@ describe("discoverDueProjects", () => {
         },
       },
     } as unknown as PrismaClient;
-    await discoverDueProjects({
-      prisma,
-      search: countingSearch(() => {
-        searches += 1;
-      }),
-      now,
-      openBrowser: async () => {
-        throw new Error("browser must stay closed during the re-probe");
+    await reprobeDeadHosts(
+      {
+        prisma,
+        now,
+        fetchImpl: async (url) => {
+          const key = String(url);
+          fetched.push(key);
+          const html = pages[key];
+          if (!html) return new Response("down", { status: 503 });
+          return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+        },
       },
-      fetchImpl: async (url) => {
-        const key = String(url);
-        fetched.push(key);
-        const html = pages[key];
-        if (!html) return new Response("down", { status: 503 });
-        return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
-      },
-    });
+      { id: "p1", workspaceId: "w1", denyHosts: [] },
+    );
     expect(hosts.find((row) => row.id === "back")).toMatchObject({
       status: "qualified",
       statusReason: null,

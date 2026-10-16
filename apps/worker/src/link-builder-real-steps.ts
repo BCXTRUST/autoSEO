@@ -71,6 +71,7 @@ import {
   isMailSendFailure,
   isMissingSandboxWorkspace,
   isNewSignupBannedHost,
+  isRestoredSignupHost,
   isSandboxGoneText,
   isWarmupMet,
   localStuckChoice,
@@ -89,6 +90,7 @@ import {
   recordRegistration,
   redactSecrets,
   resolvePersonaDisplayName,
+  restoredSignupIndex,
   STUCK_LOOK_SYSTEM,
   type StuckLookAction,
   type StuckRecord,
@@ -519,6 +521,11 @@ function registrableKey(domain: string): string {
     .replace(/^www\./, "");
 }
 
+function restoredSignupRank(domain: string): number {
+  const index = restoredSignupIndex(domain);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
 function storedSignupIndex(domain: string): number {
   const index = (STORED_SIGNUP_ORDER as readonly string[]).indexOf(registrableKey(domain));
   return index === -1 ? STORED_SIGNUP_ORDER.length : index;
@@ -644,7 +651,9 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
       return false;
     }
     if (row.status === "qualified") {
-      if (!hostJustFound(row, ctx.now)) return false;
+      const restored = isRestoredSignupHost(row.registrableDomain);
+      if (restored && row.accounts.length > 0) return false;
+      if (!restored && !hostJustFound(row, ctx.now)) return false;
       return ctx.run.counters.newToday < ctx.project.quotas.newPerDay;
     }
     if (row.status === "warming") {
@@ -685,7 +694,12 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     if (aTarget !== bTarget) return aTarget ? -1 : 1;
     const aOpen = unusedQualifiedHost(a, deny);
     const bOpen = unusedQualifiedHost(b, deny);
-    if (aOpen && bOpen) return hostCreatedMs(a) - hostCreatedMs(b);
+    if (aOpen && bOpen) {
+      const restored =
+        restoredSignupRank(a.registrableDomain) - restoredSignupRank(b.registrableDomain);
+      if (restored !== 0) return restored;
+      return hostCreatedMs(a) - hostCreatedMs(b);
+    }
     if (aOpen && deniedForStoredSignup(b.registrableDomain, deny)) return -1;
     if (bOpen && deniedForStoredSignup(a.registrableDomain, deny)) return 1;
     return (

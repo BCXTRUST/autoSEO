@@ -303,6 +303,38 @@ function registerCtx(host: StoredHost, session: ScriptedSession, prisma: unknown
 }
 
 describe("signup path", () => {
+  it("opens diabetes-forum.de first among restored qualified hosts", async () => {
+    const hosts = [
+      storedHost({
+        id: "bmw",
+        registrableDomain: "bmw-syndikat.de",
+        createdAt: new Date("2026-10-01T00:00:00.000Z"),
+        lastProbeAt: new Date("2026-10-16T20:24:00.000Z"),
+      }),
+      storedHost({
+        id: "denied",
+        registrableDomain: "medizin-forum.de",
+        createdAt: new Date("2026-10-01T00:00:00.000Z"),
+      }),
+      storedHost({
+        id: "diabetes",
+        registrableDomain: "diabetes-forum.de",
+        createdAt: new Date("2026-10-10T00:00:00.000Z"),
+        lastProbeAt: new Date("2026-10-16T20:24:00.000Z"),
+      }),
+    ];
+    const { prisma } = harness(hosts);
+    const select = await REAL_STEP_HANDLERS.select_host({
+      now: new Date("2026-10-17T08:00:00.000Z"),
+      run: { id: "run-1", counters: startRunCounters() },
+      project: project(),
+      host: null,
+      pool: () => undefined,
+      services: { prisma },
+    } as unknown as StepContext);
+    expect(select).toMatchObject({ kind: "step", hostId: "diabetes" });
+  });
+
   it("follows a register link and a rules step onto the form", async () => {
     const previous = process.env.RESEND_INBOUND_DOMAIN;
     process.env.RESEND_INBOUND_DOMAIN = "sideinbox.email";

@@ -4,6 +4,7 @@ import type {
   CaptchaSolver,
   SearchProvider,
 } from "@rakazo/adapter-kit";
+import { CaptchaSolverError } from "@rakazo/adapter-kit";
 import {
   type LbLanguage,
   type LbLocale,
@@ -22,6 +23,7 @@ import {
   isFixtureHostDomain,
   isMailSendFailure,
   isNewSignupBannedHost,
+  isRestoredSignupHost,
   localDateKey,
   primaryProblemQuery,
   problemInputFromProject,
@@ -32,7 +34,7 @@ import {
   useCaseLanes,
   walkDeadHostSignup,
 } from "@rakazo/linkbuilder-core";
-import { captchaResponseField, detectWidget } from "@rakazo/linkbuilder-drivers";
+import { captchaResponseField, sorryCaptchaFromMarkup } from "@rakazo/linkbuilder-drivers";
 import { recordCost } from "./link-builder-costs.js";
 
 /** Hosts that must not be opened for a new signup. */
@@ -97,16 +99,13 @@ export async function discoverDueProjects(input: {
   });
   let found = 0;
   for (const project of projects) {
-    const reprobe = await reprobeDeadHosts(input, project);
-    if (reprobe.handled) {
-      if (reprobe.qualified === 0) await pauseAfterEmptySearch(input, project);
-      continue;
-    }
+    if (await restoredHostWaiting(input.prisma, project)) continue;
     const schedule = project.schedule as { timezone?: string } | null;
     const timeZone = schedule?.timezone || "Europe/Berlin";
     const due = shouldDiscover(project.lastDiscoveredAt, input.now, timeZone);
     if (!due) {
       if (await browserSearchRecent(input.prisma, project.id, input.now)) continue;
+      if (await storedSearchRows(input.prisma, project.id)) continue;
       const stored = await input.prisma.lbHost.findMany({
         where: { projectId: project.id },
         select: { registrableDomain: true, status: true },
@@ -216,6 +215,25 @@ export async function discoverDueProjects(input: {
       await recordSearchCost(input, project, timeZone, paidQuery);
       const notice = partialNoticeOf(input.search);
       if (notice) await recordPartialResults(input.prisma, project, input.now, notice);
+      const resultDomains = resultDomainsOf(results.map((result) => result.url));
+      const known = new Set(hosts.map((host) => host.registrableDomain.toLowerCase()));
+      if (
+        resultDomains.length > 0 &&
+        resultDomains.every((domain) => known.has(domain.toLowerCase()))
+      ) {
+        await recordDiscoveryStep(
+          input.prisma,
+          project,
+          input.now,
+          `Search rows were already stored: ${resultDomains.length}`,
+          null,
+        );
+        await input.prisma.lbProject.update({
+          where: { id: project.id },
+          data: { lastDiscoveredAt: input.now },
+        });
+        continue;
+      }
       paid = await probeResultUrls({
         urls: results.map((result) => result.url),
         lanes: lanes.data,
@@ -257,7 +275,7 @@ const REPROBE_ACTION = "Re-probed dead hosts:";
  * A loaded page with no signup path becomes form_not_found. A block, a closed registration,
  * and a fetch failure stay dead. This pass does not search and does not submit an account.
  */
-async function reprobeDeadHosts(
+export async function reprobeDeadHosts(
   input: {
     prisma: PrismaClient;
     fetchImpl?: typeof fetch;
@@ -546,16 +564,7 @@ async function searchBrowserFirst(args: {
   const blocked = await searchPageBlocked(session);
   if (blocked) {
     const solved = await solveSearchCaptcha(input, project, session);
-    if (!solved) {
-      await recordDiscoveryStep(
-        input.prisma,
-        project,
-        input.now,
-        "Browser search failed: captcha",
-        "captcha",
-      );
-      return { allowed: false, hosts: [] };
-    }
+    if (!solved.cleared) return { allowed: false, hosts: [] };
   }
   const urls = await collectForumUrls(session, args.denyHosts);
   const probed = await probeResultUrls({
@@ -628,6 +637,61 @@ function stepAction(outcome: unknown): string {
   return typeof action === "string" ? action : "";
 }
 
+/** A restored forum is waiting to sign up. This pass does not search or re-probe. */
+async function restoredHostWaiting(
+  prisma: PrismaClient,
+  project: { id: string; denyHosts?: readonly string[] | null },
+): Promise<boolean> {
+  const rows = await prisma.lbHost.findMany({
+    where: { projectId: project.id, status: "qualified" },
+    select: {
+      registrableDomain: true,
+      status: true,
+      accounts: { select: { id: true } },
+    },
+  });
+  const deny = droppedHosts(project.denyHosts ?? []);
+  return rows.some(
+    (row) =>
+      row.status === "qualified" &&
+      isRestoredSignupHost(row.registrableDomain) &&
+      (row.accounts?.length ?? 0) === 0 &&
+      !hostDenied(row.registrableDomain, deny),
+  );
+}
+
+function resultDomainsOf(urls: readonly string[]): string[] {
+  const domains: string[] = [];
+  for (const url of urls) {
+    try {
+      const domain = registrableDomain(url);
+      if (domain) domains.push(domain);
+    } catch {
+      // A result that is not a URL does not count as a stored row.
+    }
+  }
+  return domains;
+}
+
+/** The paid search already matched stored hosts, so this run does not buy another one. */
+async function storedSearchRows(prisma: PrismaClient, projectId: string): Promise<boolean> {
+  const run = await prisma.lbRun.findFirst({
+    where: { projectId, status: { in: ["running", "overtime"] } },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true },
+  });
+  if (!run) return false;
+  const steps = await prisma.lbRunStep.findMany({
+    where: { runId: run.id, kind: "discover" },
+    orderBy: { finishedAt: "desc" },
+    take: 12,
+    select: { outcome: true },
+  });
+  return steps.some((step) =>
+    stepAction(step.outcome).startsWith("Search rows were already stored"),
+  );
+}
+
 /** A browser search that finished inside the retry window blocks another search. */
 async function browserSearchRecent(
   prisma: PrismaClient,
@@ -694,6 +758,8 @@ async function searchPageBlocked(session: BrowserSession): Promise<boolean> {
 
 async function solveSearchCaptcha(
   input: {
+    prisma: PrismaClient;
+    now: Date;
     resolveCaptcha?: (project: {
       id: string;
       workspaceId: string;
@@ -701,22 +767,41 @@ async function solveSearchCaptcha(
   },
   project: { id: string; workspaceId: string },
   session: BrowserSession,
-): Promise<boolean> {
+): Promise<{ cleared: boolean }> {
+  const websiteURL = await session.url();
+  const html = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
+  const parsed = sorryCaptchaFromMarkup(html);
+  const enterprise = parsed.enterprise;
+  const type = enterprise ? "recaptcha_enterprise" : "recaptcha_v2";
+  const wireType = "RecaptchaV2";
+  const siteKey = parsed.siteKey;
+  const detail = {
+    websiteURL,
+    type: wireType,
+    siteKey,
+    ...(enterprise ? { isEnterprise: true } : {}),
+  };
   const solver = await input.resolveCaptcha?.(project);
-  if (!solver) return false;
-  const widget = await detectWidget(session);
-  if (widget.kind !== "widget" || !widget.siteKey) return false;
+  if (!solver || !siteKey) {
+    await recordCaptchaAttempt(input.prisma, project, input.now, {
+      ...detail,
+      code: solver ? "no_site_key" : "missing",
+      message: solver ? "no site key" : "solver missing",
+    });
+    return { cleared: false };
+  }
   try {
     const solved = await solver.solve(
       {
-        type: widget.type,
-        websiteURL: await session.url(),
-        websiteKey: widget.siteKey,
+        type,
+        websiteURL,
+        websiteKey: siteKey,
+        ...(parsed.dataS ? { enterprisePayload: { s: parsed.dataS } } : {}),
       },
       { ...adapter, workspaceId: project.workspaceId },
     );
     if (session.injectToken) {
-      await session.injectToken(captchaResponseField(widget.type), solved.answer);
+      await session.injectToken(captchaResponseField(type), solved.answer);
     }
     for (const selector of [
       "#captcha-form input[type='submit']",
@@ -728,10 +813,60 @@ async function solveSearchCaptcha(
         break;
       }
     }
-    return !(await searchPageBlocked(session));
-  } catch {
-    return false;
+    const cleared = !(await searchPageBlocked(session));
+    await recordCaptchaAttempt(input.prisma, project, input.now, { ...detail, solved: true });
+    return { cleared };
+  } catch (error) {
+    const failure = publicSolverFailure(error);
+    await recordCaptchaAttempt(input.prisma, project, input.now, { ...detail, ...failure });
+    return { cleared: false };
   }
+}
+
+function publicSolverFailure(error: unknown): { code: string; message: string } {
+  if (error instanceof CaptchaSolverError) {
+    return { code: error.code, message: scrubSolverText(error.message || error.code) };
+  }
+  const message = error instanceof Error ? error.message : "solver failed";
+  return { code: "error", message: scrubSolverText(message) };
+}
+
+/** Drops a bearer, an API key, and an answer token before a step is stored. */
+function scrubSolverText(value: string): string {
+  return value
+    .replace(/Bearer\s+\S+/gi, "Bearer")
+    .replace(/ct_live_[A-Za-z0-9_-]+/g, "")
+    .replace(/CAPTELL_API_KEY/g, "")
+    .replace(/"(?:answer|gRecaptchaResponse|token)"\s*:\s*"[^"]*"/gi, "")
+    .slice(0, 180);
+}
+
+async function recordCaptchaAttempt(
+  prisma: PrismaClient,
+  project: { id: string; workspaceId: string },
+  now: Date,
+  detail: {
+    websiteURL: string;
+    type: string;
+    siteKey: string | null;
+    isEnterprise?: boolean;
+    solved?: boolean;
+    code?: string;
+    message?: string;
+  },
+): Promise<void> {
+  const summary = detail.solved
+    ? `Browser search captcha solved: ${detail.type} ${detail.siteKey ?? ""} ${detail.websiteURL}`
+    : `Browser search captcha failed: ${detail.type} ${detail.siteKey ?? ""} ${detail.code ?? ""} ${detail.message ?? ""} ${detail.websiteURL}`;
+  await recordDiscoveryStep(prisma, project, now, summary, detail.solved ? null : "captcha", {
+    websiteURL: detail.websiteURL,
+    type: detail.type,
+    siteKey: detail.siteKey,
+    ...(detail.isEnterprise ? { isEnterprise: true } : {}),
+    ...(detail.solved
+      ? { solved: true }
+      : { code: detail.code ?? "error", message: scrubSolverText(detail.message ?? "") }),
+  });
 }
 
 async function collectForumUrls(
@@ -991,6 +1126,7 @@ async function recordDiscoveryStep(
   now: Date,
   lastAction: string,
   error: string | null,
+  detail?: Record<string, unknown>,
 ): Promise<void> {
   const action = lastAction.slice(0, 180);
   const stored = error?.slice(0, 500) ?? null;
@@ -1011,7 +1147,7 @@ async function recordDiscoveryStep(
       kind: "discover",
       hostId: null,
       error: stored,
-      outcome: { lastAction: action },
+      outcome: { lastAction: action, ...detail },
       startedAt: now,
       finishedAt: now,
     },

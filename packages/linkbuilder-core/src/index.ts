@@ -32,6 +32,7 @@ export * from "./project-state.js";
 export * from "./prompts.js";
 export * from "./real-pipeline.js";
 export * from "./redact.js";
+export * from "./restored-signup.js";
 export * from "./run-phrase.js";
 export * from "./run-state.js";
 export * from "./sandbox-workspace.js";
