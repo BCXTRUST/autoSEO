@@ -62,7 +62,10 @@ const TRANSITIONS: Record<
   registration_started: { from: ["qualified"], to: "registering" },
   email_pending: { from: ["registering"], to: "pending_email" },
   admin_pending: { from: ["registering", "pending_email"], to: "pending_admin" },
-  account_active: { from: ["registering", "pending_email", "pending_admin"], to: "warming" },
+  account_active: {
+    from: ["qualified", "registering", "pending_email", "pending_admin"],
+    to: "warming",
+  },
   warmup_completed: { from: ["warming"], to: "ready" },
   link_counted: { from: ["ready"], to: "used" },
   denied: { from: NON_TERMINAL, to: "denied" },

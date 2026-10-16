@@ -32,6 +32,7 @@ const LEGAL: Array<[HostStatus, HostEvent, HostStatus]> = [
   ["discovered", "probe_succeeded", "probed"],
   ["probed", "qualified", "qualified"],
   ["qualified", "registration_started", "registering"],
+  ["qualified", "account_active", "warming"],
   ["registering", "email_pending", "pending_email"],
   ["registering", "admin_pending", "pending_admin"],
   ["pending_email", "admin_pending", "pending_admin"],

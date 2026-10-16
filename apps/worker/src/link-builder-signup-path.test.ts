@@ -1,14 +1,21 @@
 import type { BrowserSession, ClickableControl, FormFieldInfo } from "@rakazo/adapter-kit";
 import { personMailboxAddress } from "@rakazo/adapters";
-import { startRunCounters, topicStatusForPage } from "@rakazo/linkbuilder-core";
+import {
+  planRealStep,
+  startRunCounters,
+  topicStatusForPage,
+  transitionHost,
+} from "@rakazo/linkbuilder-core";
 import { describe, expect, it } from "vitest";
 import { keptRunLastAction } from "./link-builder-real.js";
 import {
   type HostRow,
   type ProjectConfig,
+  postsRequiredBeforeLink,
   REAL_STEP_HANDLERS,
   recoverStuckStep,
   type StepContext,
+  warmupReplyChoice,
 } from "./link-builder-real-steps.js";
 
 const FORM_URL = "https://aquacomputer.de/ucp.php?mode=register&agreed=1";
@@ -403,6 +410,97 @@ describe("signup path", () => {
       services: { prisma },
     } as unknown as StepContext);
     expect(select).toMatchObject({ kind: "step", hostId: "health" });
+  });
+
+  it("warms a verified restored account and still signs up a host with no account", async () => {
+    expect(transitionHost("qualified", "account_active").status).toBe("warming");
+    expect(postsRequiredBeforeLink(2, "phpbb")).toBe(4);
+    expect(postsRequiredBeforeLink(5, "phpbb")).toBe(5);
+    expect(warmupReplyChoice("de")).toMatchObject({
+      linkSlot: "none",
+      targetUrl: null,
+      anchorText: null,
+    });
+    const verified = storedHost({
+      id: "verified",
+      registrableDomain: "med2-forum.de",
+      status: "warming",
+      platform: "woltlab",
+      lastProbeAt: new Date("2026-10-01T00:00:00.000Z"),
+      accounts: [
+        {
+          id: "acct-verified",
+          emailVerifiedAt: new Date("2026-10-10T18:30:00.000Z"),
+          adminApprovedAt: null,
+          postCount: 0,
+          createdAt: new Date("2026-10-10T18:04:34.672Z"),
+          lastPostAt: null,
+        },
+      ],
+    });
+    const unverified = storedHost({
+      id: "unverified",
+      registrableDomain: "krank.de",
+      status: "qualified",
+      platform: "phpbb",
+      lastProbeAt: new Date("2026-10-01T00:00:00.000Z"),
+      accounts: [
+        {
+          id: "acct-unverified",
+          emailVerifiedAt: null,
+          adminApprovedAt: null,
+          postCount: 0,
+          createdAt: new Date("2026-10-09T14:54:06.366Z"),
+          lastPostAt: null,
+        },
+      ],
+    });
+    const signup = storedHost({
+      id: "signup",
+      registrableDomain: "fitness.com",
+      platform: "xenforo",
+      lastProbeAt: new Date("2026-10-01T00:00:00.000Z"),
+    });
+    const hosts = [verified, unverified, signup];
+    const { prisma } = harness(hosts);
+    const now = new Date("2026-10-19T08:00:00.000Z");
+    const base = {
+      now,
+      project: project(),
+      host: null,
+      pool: () => undefined,
+      services: { prisma },
+    };
+    const first = await REAL_STEP_HANDLERS.select_host({
+      ...base,
+      run: { id: "run-1", counters: startRunCounters() },
+    } as unknown as StepContext);
+    expect(first).toMatchObject({ kind: "step", hostId: "signup" });
+    const second = await REAL_STEP_HANDLERS.select_host({
+      ...base,
+      run: { id: "run-1", counters: { ...startRunCounters(), newToday: 1 } },
+    } as unknown as StepContext);
+    expect(second).toMatchObject({ kind: "step", hostId: "verified" });
+    expect(second).not.toMatchObject({ hostId: "unverified" });
+    const plan = planRealStep({
+      runStatus: "running",
+      liveMet: false,
+      host: { id: "verified", status: "warming", parkedFrom: null },
+      session: {
+        hostId: "verified",
+        helperConnected: true,
+        cookieChecked: true,
+        registerFormReady: false,
+      },
+      warmupMet: false,
+      warmupPostsShort: true,
+      minPostsBeforeLink: 4,
+      warmupPosts: 0,
+      placement: null,
+      researchComplete: true,
+      adminCheckDue: false,
+    });
+    expect(plan).toEqual({ kind: "warmup_post" });
   });
 
   it("follows a register link and a rules step onto the form", async () => {

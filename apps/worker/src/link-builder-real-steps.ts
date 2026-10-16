@@ -334,10 +334,10 @@ function requireDriver(host: HostRow, entry?: PoolEntry): BoardDriver {
   return driver;
 }
 
-/** Project warm-up, raised when the driver requires more link-free posts (Discourse TL0). */
+/** Project warm-up, at least four link-free posts, and higher when the driver requires it. */
 export function postsRequiredBeforeLink(projectMin: number, platform: string): number {
   const floor = boardDriverFor(platform as LbHostPlatform)?.minPostsBeforeLink ?? 0;
-  return Math.max(projectMin, floor);
+  return Math.max(4, projectMin, floor);
 }
 
 function requireSession(ctx: StepContext, host: HostRow): PoolEntry {
@@ -699,7 +699,7 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     }
     if (row.status === "warming") {
       const account = row.accounts[0];
-      if (!account) return false;
+      if (!account?.emailVerifiedAt) return false;
       const postsShort =
         account.postCount <
         postsRequiredBeforeLink(ctx.project.warmup.minPostsBeforeLink, row.platform);
@@ -740,6 +740,9 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
         restoredSignupRank(a.registrableDomain) - restoredSignupRank(b.registrableDomain);
       if (restored !== 0) return restored;
       return hostCreatedMs(a) - hostCreatedMs(b);
+    }
+    if (ctx.run.counters.newToday === 0 && aOpen !== bOpen) {
+      return aOpen ? -1 : 1;
     }
     if (aOpen && deniedForStoredSignup(b.registrableDomain, deny)) return -1;
     if (bOpen && deniedForStoredSignup(a.registrableDomain, deny)) return 1;
@@ -2537,7 +2540,10 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   const account = ctx.account;
   if (!account) throw new StepFailure("Host has no account");
   const timeZone = ctx.project.schedule?.timezone || "Europe/Berlin";
-  if (!warmup && sameLocalDay(account.createdAt, ctx.now, timeZone)) {
+  const postedToday = account.lastPostAt
+    ? sameLocalDay(account.lastPostAt, ctx.now, timeZone)
+    : false;
+  if (!warmup && (sameLocalDay(account.createdAt, ctx.now, timeZone) || postedToday)) {
     return {
       kind: "step",
       hostId: host.id,
