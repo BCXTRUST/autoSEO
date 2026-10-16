@@ -1,6 +1,6 @@
 import type { AdapterContext } from "@rakazo/adapter-kit";
 import { describe, expect, it } from "vitest";
-import { DataForSeoSearchProvider } from "./dataforseo-search.js";
+import { DATAFORSEO_TIMEOUT_MS, DataForSeoSearchProvider } from "./dataforseo-search.js";
 
 const context: AdapterContext = {
   operationId: "search",
@@ -194,6 +194,21 @@ describe("DataForSeoSearchProvider", () => {
     await expect(
       provider.search({ query: "x", country: "DE", language: "de", depth: 1 }, context),
     ).rejects.toThrow(/status 20000\/40101/);
+  });
+
+  it("maps a TimeoutError to the default 60 second limit", async () => {
+    expect(DATAFORSEO_TIMEOUT_MS).toBe(60_000);
+    const timeout = new Error("The operation was aborted due to timeout");
+    timeout.name = "TimeoutError";
+    const provider = new DataForSeoSearchProvider({
+      credentials: async () => ({ login: "test-login", password: "test-pass" }),
+      fetch: async () => {
+        throw timeout;
+      },
+    });
+    await expect(
+      provider.search({ query: "x", country: "DE", language: "de", depth: 1 }, context),
+    ).rejects.toThrow("timed out after 60 seconds");
   });
 
   it("puts the provider status on an invalid task", async () => {

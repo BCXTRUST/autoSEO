@@ -18,6 +18,9 @@ import { z } from "zod";
 export const DATAFORSEO_ENDPOINT =
   "https://api.dataforseo.com/v3/serp/google/organic/live/advanced";
 
+/** Live SERP calls. Production uses this when wiring does not pass timeoutMs. */
+export const DATAFORSEO_TIMEOUT_MS = 60_000;
+
 /** Location codes for the wizard countries. Unknown countries are refused, not guessed. */
 export const DATAFORSEO_LOCATION_CODES: Readonly<Record<string, number>> = {
   DE: 2276,
@@ -112,7 +115,7 @@ export class DataForSeoSearchProvider implements SearchProvider {
     this.onSecret = options.onSecret;
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     this.endpoint = options.endpoint ?? DATAFORSEO_ENDPOINT;
-    this.timeoutMs = options.timeoutMs ?? 20_000;
+    this.timeoutMs = options.timeoutMs ?? DATAFORSEO_TIMEOUT_MS;
     if (!this.endpoint.startsWith("https://")) {
       throw new SearchProviderError("invalid", "invalid");
     }
@@ -160,6 +163,12 @@ export class DataForSeoSearchProvider implements SearchProvider {
         signal: AbortSignal.any([context.signal, AbortSignal.timeout(this.timeoutMs)]),
       });
     } catch (error) {
+      if (isSearchTimeout(error)) {
+        throw new SearchProviderError(
+          "upstream",
+          `timed out after ${Math.round(this.timeoutMs / 1000)} seconds`,
+        );
+      }
       throw new SearchProviderError("upstream", redact(errorText(error), creds));
     }
     if (response.status === 401 || response.status === 403) {
@@ -244,6 +253,13 @@ async function readJson(response: Response): Promise<unknown> {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : "upstream";
+}
+
+function isSearchTimeout(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const named = error as { name?: unknown; message?: unknown };
+  if (named.name === "TimeoutError") return true;
+  return typeof named.message === "string" && named.message.includes("timeout");
 }
 
 function redact(message: string, creds: DataForSeoCredentials): string {
