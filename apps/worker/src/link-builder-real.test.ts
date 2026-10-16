@@ -480,4 +480,45 @@ describe("recorded host skips", () => {
       data: { status: "paused" },
     });
   });
+
+  it("keeps a partial search line when the tick then skips denied forums", async () => {
+    const project = await startedProject("Partial line", ["macuser.de", "medizin-forum.de"]);
+    await host(project.id, "macuser.de", "pending_admin");
+    await host(project.id, "medizin-forum.de", "ready");
+    const browsers = new FakeBrowserSessionProvider({});
+    const search = {
+      partialNotice: null as string | null,
+      describe: () => ({
+        id: "fake-search",
+        contractVersion: "1",
+        adapterVersion: "0",
+        capabilities: { maxDepth: 10, operators: false },
+      }),
+      search: async () => {
+        search.partialNotice = "status 20000/40106 Task completed with partial results.";
+        return [
+          {
+            url: "https://macuser.de/viewtopic.php?t=1",
+            title: "Mac",
+            snippet: "",
+            domain: "macuser.de",
+          },
+        ];
+      },
+    } satisfies SearchProvider & { partialNotice: string | null };
+    const real = runner(Object.assign(browsers, { mode: "local" as const }), search);
+    await real.tick();
+    const run = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
+    expect(run.lastAction?.startsWith("Search used partial results")).toBe(true);
+    expect(run.lastAction).toContain("status ");
+    const steps = await skipSteps(project.id);
+    expect(steps.some((step) => step.kind === "discover" && step.error === null)).toBe(true);
+    expect(steps.some((step) => step.kind === "select_host")).toBe(true);
+    expect(browsers.sessions).toHaveLength(0);
+    await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
+    await db.prisma.lbRun.updateMany({
+      where: { projectId: project.id },
+      data: { status: "paused" },
+    });
+  });
 });

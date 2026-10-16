@@ -109,6 +109,91 @@ describe("DataForSeoSearchProvider", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]?.domain).toBe("rueckenforum.example");
     expect(rows[0]?.snippet).toBe("");
+    expect(provider.partialNotice).toBeNull();
+  });
+
+  it("keeps organic rows from a partial task and records the provider status", async () => {
+    const provider = new DataForSeoSearchProvider({
+      credentials: async () => ({ login: "test-login", password: "test-pass" }),
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            status_code: 20000,
+            status_message: "Ok.",
+            tasks: [
+              {
+                status_code: 40106,
+                status_message: "Task completed with partial results.",
+                result: [
+                  {
+                    items: [
+                      {
+                        type: "organic",
+                        url: "https://gartentipps.example/viewtopic.php?t=1",
+                        title: "Garten",
+                        description: null,
+                        domain: null,
+                      },
+                      { type: "people_also_ask", url: null, title: null, description: null },
+                    ],
+                  },
+                ],
+              },
+            ],
+          }),
+        ),
+    });
+    const rows = await provider.search(
+      { query: "Magnesium", country: "DE", language: "de", depth: 10 },
+      context,
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.url).toBe("https://gartentipps.example/viewtopic.php?t=1");
+    expect(provider.partialNotice).toContain("status 20000/40106");
+  });
+
+  it("rejects a partial task that has no organic URL", async () => {
+    const provider = new DataForSeoSearchProvider({
+      credentials: async () => ({ login: "test-login", password: "test-pass" }),
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            status_code: 20000,
+            status_message: "Ok.",
+            tasks: [
+              {
+                status_code: 40106,
+                status_message: "Task completed with partial results.",
+                result: [
+                  {
+                    items: [{ type: "people_also_ask", url: null, title: null, description: null }],
+                  },
+                ],
+              },
+            ],
+          }),
+        ),
+    });
+    await expect(
+      provider.search({ query: "x", country: "DE", language: "de", depth: 1 }, context),
+    ).rejects.toThrow(/status 20000\/40106/);
+  });
+
+  it("still rejects an internal task error", async () => {
+    const provider = new DataForSeoSearchProvider({
+      credentials: async () => ({ login: "test-login", password: "test-pass" }),
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            status_code: 20000,
+            status_message: "Ok.",
+            tasks: [{ status_code: 40101, status_message: "Internal SE Server Error." }],
+          }),
+        ),
+    });
+    await expect(
+      provider.search({ query: "x", country: "DE", language: "de", depth: 1 }, context),
+    ).rejects.toThrow(/status 20000\/40101/);
   });
 
   it("puts the provider status on an invalid task", async () => {

@@ -71,6 +71,7 @@ export async function discoverDueProjects(input: {
       continue;
     }
     if (await discoveryHeld(input.prisma, project.id, input.now)) continue;
+    let stopAfterPartial = false;
     const hosts = await input.prisma.lbHost.findMany({
       where: { projectId: project.id },
       select: { registrableDomain: true, status: true, country: true, language: true },
@@ -99,10 +100,16 @@ export async function discoverDueProjects(input: {
           .map((host) => host.registrableDomain),
         depth: 100,
         search: async (request) => {
+          if (stopAfterPartial) return [];
           const results = await input.search.search(request, {
             ...adapter,
             workspaceId: project.workspaceId,
           });
+          const notice = partialNoticeOf(input.search);
+          if (notice) {
+            stopAfterPartial = true;
+            await recordPartialResults(input.prisma, project, input.now, notice);
+          }
           await recordCost(input.prisma, {
             workspaceId: project.workspaceId,
             projectId: project.id,
@@ -214,6 +221,47 @@ async function discoveryHeld(prisma: PrismaClient, projectId: string, now: Date)
   });
   if (!newest?.finishedAt) return false;
   return now.getTime() - newest.finishedAt.getTime() < DISCOVER_RETRY_MS;
+}
+
+function partialNoticeOf(search: SearchProvider): string | null {
+  if (!("partialNotice" in search)) return null;
+  const notice = search.partialNotice;
+  return typeof notice === "string" && notice.length > 0 ? notice : null;
+}
+
+async function recordPartialResults(
+  prisma: PrismaClient,
+  project: { id: string; workspaceId: string },
+  now: Date,
+  notice: string,
+): Promise<void> {
+  const action = `Search used partial results: ${notice}`.slice(0, 90);
+  const run = await prisma.lbRun.findFirst({
+    where: { projectId: project.id, status: { in: ["running", "overtime"] } },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (!run) {
+    console.error("linkbuilder.discover", project.id, "partial");
+    return;
+  }
+  const stepIndex = await prisma.lbRunStep.count({ where: { runId: run.id } });
+  await prisma.lbRunStep.create({
+    data: {
+      workspaceId: project.workspaceId,
+      runId: run.id,
+      stepIndex,
+      kind: "discover",
+      hostId: null,
+      error: null,
+      outcome: { lastAction: action },
+      startedAt: now,
+      finishedAt: now,
+    },
+  });
+  await prisma.lbRun.update({
+    where: { id: run.id },
+    data: { lastAction: action },
+  });
 }
 
 async function recordDiscoveryFailure(

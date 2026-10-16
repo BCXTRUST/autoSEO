@@ -713,7 +713,8 @@ export class LinkBuilderRealRunner {
         });
         const keepSearch =
           result.lastAction.startsWith("Skipped") &&
-          current?.lastAction?.startsWith("Search failed");
+          (current?.lastAction?.startsWith("Search failed") ||
+            current?.lastAction?.startsWith("Search used partial results"));
         const lastAction = keepSearch ? current.lastAction : result.lastAction;
         const fenced = await tx.lbRun.updateMany({
           where: { id: ctx.run.id, leaseOwner: this.workerId, leaseFence: fence },

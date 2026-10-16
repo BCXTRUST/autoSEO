@@ -100,6 +100,7 @@ export interface DataForSeoSearchOptions {
 }
 
 export class DataForSeoSearchProvider implements SearchProvider {
+  partialNotice: string | null = null;
   private readonly credentials: DataForSeoSearchOptions["credentials"];
   private readonly onSecret: ((secret: string) => void) | undefined;
   private readonly fetchImpl: typeof fetch;
@@ -127,6 +128,7 @@ export class DataForSeoSearchProvider implements SearchProvider {
   }
 
   async search(request: WebSearchRequest, context: AdapterContext): Promise<WebSearchResult[]> {
+    this.partialNotice = null;
     const parsed = WebSearchRequestSchema.parse(request);
     const location = DATAFORSEO_LOCATION_CODES[parsed.country];
     if (!location) throw new SearchProviderError("unsupported_market");
@@ -173,7 +175,7 @@ export class DataForSeoSearchProvider implements SearchProvider {
         providerStatusLine(json),
       );
     }
-    if (task.status_code && task.status_code !== 20000) {
+    if (task.status_code && task.status_code !== 20000 && task.status_code !== 40106) {
       throw new SearchProviderError(
         task.status_code === 40100 ? "unauthorized" : "invalid",
         providerStatusLine(json),
@@ -194,6 +196,12 @@ export class DataForSeoSearchProvider implements SearchProvider {
       });
       if (row.success) results.push(row.data);
       if (results.length >= parsed.depth) break;
+    }
+    if (task.status_code === 40106) {
+      if (results.length === 0) {
+        throw new SearchProviderError("invalid", providerStatusLine(json));
+      }
+      this.partialNotice = providerStatusLine(json);
     }
     return results;
   }
