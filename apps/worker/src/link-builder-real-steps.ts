@@ -484,6 +484,45 @@ function hostOrder(status: string): number {
   return (WORKABLE_HOST_ORDER as readonly string[]).indexOf(status);
 }
 
+const STORED_SIGNUP_DENY = [
+  "medizin-forum.de",
+  "phpbb.de",
+  "macuser.de",
+  "lifters-lounge.com",
+  "frauenselbsthilfe.de",
+  "bulli-forum.com",
+] as const;
+
+function hostCreatedMs(row: { createdAt?: Date | string | null }): number {
+  if (row.createdAt instanceof Date) return row.createdAt.getTime();
+  if (typeof row.createdAt === "string") {
+    const parsed = Date.parse(row.createdAt);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function deniedForStoredSignup(domain: string, deny: ReadonlySet<string>): boolean {
+  const host = domain
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "");
+  if (deny.has(host)) return true;
+  const needles = [...deny, ...STORED_SIGNUP_DENY];
+  return needles.some((item) => item.length > 0 && (host === item || host.endsWith(`.${item}`)));
+}
+
+function unusedQualifiedHost(
+  row: { status: string; registrableDomain: string; accounts: readonly unknown[] },
+  deny: ReadonlySet<string>,
+): boolean {
+  return (
+    row.status === "qualified" &&
+    row.accounts.length === 0 &&
+    !deniedForStoredSignup(row.registrableDomain, deny)
+  );
+}
+
 function hostSortRank(row: {
   status: string;
   statusReason: string | null;
@@ -559,12 +598,18 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     if (row.status === "qualified" && !(await registrationOpen(ctx, row.id))) continue;
     eligible.push(row);
   }
-  eligible.sort(
-    (a, b) =>
+  eligible.sort((a, b) => {
+    const aOpen = unusedQualifiedHost(a, deny);
+    const bOpen = unusedQualifiedHost(b, deny);
+    if (aOpen && bOpen) return hostCreatedMs(a) - hostCreatedMs(b);
+    if (aOpen && deniedForStoredSignup(b.registrableDomain, deny)) return -1;
+    if (bOpen && deniedForStoredSignup(a.registrableDomain, deny)) return 1;
+    return (
       hostSortRank(a) - hostSortRank(b) ||
       Number(prefer.has(b.registrableDomain)) - Number(prefer.has(a.registrableDomain)) ||
-      b.qualityScore - a.qualityScore,
-  );
+      b.qualityScore - a.qualityScore
+    );
+  });
   const picked = eligible[0];
   if (!picked) {
     const openRows = rows.filter((row) => !blocked(row));

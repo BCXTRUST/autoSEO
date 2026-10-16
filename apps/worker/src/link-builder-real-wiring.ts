@@ -23,7 +23,7 @@ import {
   recordedSerpDir,
   toComputerRef,
 } from "@rakazo/adapters";
-import type { PrismaClient } from "@rakazo/db";
+import { type PrismaClient, ensureComputerRecord } from "@rakazo/db";
 import {
   camoufoxExecutable,
   LocalBrowserSessionFactory,
@@ -58,15 +58,22 @@ export async function resolvePersonaComputer(input: {
 }): Promise<ComputerRef> {
   const project = await input.prisma.lbProject.findUnique({
     where: { id: input.projectId },
-    select: { workspaceId: true },
+    select: { workspaceId: true, createdByUserId: true },
   });
   if (!project) throw new Error("Link builder project not found");
   const computers = await input.prisma.computer.findMany({
     where: { workspaceId: project.workspaceId },
     orderBy: { updatedAt: "desc" },
   });
-  const computer = choosePersonaComputer(computers);
-  if (!computer) throw new Error("The workspace has no computer for the persona browser");
+  let computer = choosePersonaComputer(computers);
+  if (!computer) {
+    computer = await ensureComputerRecord(input.prisma, {
+      mode: "team",
+      workspaceId: project.workspaceId,
+      userId: project.createdByUserId,
+      kind: process.env.SANDBOX_PROVIDER?.trim() || "e2b",
+    });
+  }
   if (computer.state === "running" || computer.state === "booting") return toComputerRef(computer);
   const ref = await input.sandbox.provision(
     {

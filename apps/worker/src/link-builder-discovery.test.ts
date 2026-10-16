@@ -1,8 +1,9 @@
 import type { BrowserSession, SearchProvider } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
-import { sampleForumHtml } from "@rakazo/linkbuilder-core";
+import { sampleForumHtml, startRunCounters } from "@rakazo/linkbuilder-core";
 import { describe, expect, it } from "vitest";
 import { discoverDueProjects } from "./link-builder-discovery.js";
+import { REAL_STEP_HANDLERS, type StepContext } from "./link-builder-real-steps.js";
 
 function browserWith(links: Array<{ text: string; href: string }>): () => Promise<BrowserSession> {
   return async () =>
@@ -497,5 +498,143 @@ describe("discoverDueProjects", () => {
     expect(steps.some((step) => step.outcome.lastAction === "Browser search found no forum.")).toBe(
       true,
     );
+  });
+
+  it("skips search and opens the oldest stored forum", async () => {
+    const now = new Date("2026-10-16T10:00:00.000Z");
+    let searches = 0;
+    let browsers = 0;
+    const steps: unknown[] = [];
+    const stored = [
+      {
+        id: "ready-denied",
+        registrableDomain: "medizin-forum.de",
+        status: "ready",
+        statusReason: null,
+        accounts: [{ id: "acct-denied" }],
+        placements: [],
+        platform: "phpbb",
+        qualityScore: 9,
+        homepageUrl: "https://medizin-forum.de/",
+        createdAt: new Date("2026-10-16T08:00:00.000Z"),
+      },
+      {
+        id: "newer",
+        registrableDomain: "science-fitness.de",
+        status: "qualified",
+        statusReason: null,
+        accounts: [],
+        placements: [],
+        platform: "phpbb",
+        qualityScore: 8,
+        homepageUrl: "https://science-fitness.de/",
+        createdAt: new Date("2026-10-16T12:00:00.000Z"),
+      },
+      {
+        id: "oldest",
+        registrableDomain: "aquacomputer.de",
+        status: "qualified",
+        statusReason: null,
+        accounts: [],
+        placements: [],
+        platform: "phpbb",
+        qualityScore: 1,
+        homepageUrl: "https://aquacomputer.de/",
+        createdAt: new Date("2026-10-16T09:00:00.000Z"),
+      },
+      {
+        id: "middle",
+        registrableDomain: "edubily.de",
+        status: "qualified",
+        statusReason: null,
+        accounts: [],
+        placements: [],
+        platform: "phpbb",
+        qualityScore: 5,
+        homepageUrl: "https://edubily.de/",
+        createdAt: new Date("2026-10-16T11:00:00.000Z"),
+      },
+    ];
+    const prisma = {
+      lbProject: {
+        findMany: async () => [
+          {
+            id: "p1",
+            workspaceId: "w1",
+            name: "Nordlicht",
+            brandName: "Nordlicht",
+            status: "active",
+            archivedAt: null,
+            lastDiscoveredAt: new Date("2026-10-15T09:10:11.995Z"),
+            schedule: { timezone: "Europe/Berlin" },
+            markets: [
+              { country: "DE", language: "de", locale: "de-DE", timezoneId: "Europe/Berlin" },
+            ],
+            topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
+            marketPolicy: "primary_first",
+            quotas: { livePerDay: 1 },
+            denyHosts: ["frauenselbsthilfe.de"],
+          },
+        ],
+        update: async () => {
+          throw new Error("discovery must not stamp the project");
+        },
+      },
+      lbHost: { findMany: async () => stored },
+      lbRun: { findFirst: async () => null },
+      lbRunStep: {
+        findFirst: async () => null,
+        findMany: async () => [],
+        count: async () => 0,
+        create: async (args: { data: unknown }) => {
+          steps.push(args.data);
+          return args.data;
+        },
+      },
+    } as unknown as PrismaClient;
+    const search = {
+      describe: () => ({
+        id: "fake-search",
+        contractVersion: "1",
+        adapterVersion: "0",
+        capabilities: { maxDepth: 10, operators: false },
+      }),
+      search: async () => {
+        searches += 1;
+        throw new Error("DataForSEO must not run");
+      },
+    } satisfies SearchProvider;
+    await discoverDueProjects({
+      prisma,
+      search,
+      now,
+      openBrowser: async () => {
+        browsers += 1;
+        throw new Error("browser must not open");
+      },
+    });
+    const chosen = await REAL_STEP_HANDLERS.select_host({
+      now,
+      run: { id: "run-1", counters: startRunCounters() },
+      project: {
+        id: "p1",
+        workspaceId: "w1",
+        denyHosts: ["frauenselbsthilfe.de"],
+        preferHosts: [],
+        quotas: { newPerDay: 2 },
+        schedule: { timezone: "Europe/Berlin" },
+      },
+      host: null,
+      pool: () => undefined,
+      services: { prisma },
+    } as unknown as StepContext);
+    expect(searches).toBe(0);
+    expect(browsers).toBe(0);
+    expect(steps).toHaveLength(0);
+    expect(chosen).toMatchObject({
+      kind: "step",
+      hostId: "oldest",
+      lastAction: "Working on aquacomputer.de",
+    });
   });
 });

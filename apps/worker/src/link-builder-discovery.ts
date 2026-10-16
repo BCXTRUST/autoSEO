@@ -109,7 +109,11 @@ export async function discoverDueProjects(input: {
     if (await discoveryHeld(input.prisma, project.id, input.now)) continue;
     const hosts = await input.prisma.lbHost.findMany({
       where: { projectId: project.id },
-      select: { registrableDomain: true, status: true },
+      select: {
+        registrableDomain: true,
+        status: true,
+        accounts: { select: { id: true } },
+      },
     });
     const market = markets.data[0];
     if (!market) {
@@ -120,6 +124,7 @@ export async function discoverDueProjects(input: {
       continue;
     }
     const denyHosts = droppedHosts(project.denyHosts);
+    if (hasStoredSignupHost(hosts, project.denyHosts)) continue;
     const usedHosts = hosts
       .filter((host) => host.status === "used")
       .map((host) => host.registrableDomain);
@@ -362,6 +367,33 @@ function problemQueries(project: {
 
 function droppedHosts(denyHosts: readonly string[]): string[] {
   return [...new Set([...denyHosts, ...DROPPED_FORUM_HOSTS])];
+}
+
+/** A qualified forum with no account is enough. Search stays closed until that signup is used. */
+function hasStoredSignupHost(
+  hosts: ReadonlyArray<{
+    registrableDomain: string;
+    status: string;
+    accounts?: ReadonlyArray<unknown> | null;
+  }>,
+  denyHosts: readonly string[],
+): boolean {
+  const denied = new Set(
+    [...denyHosts, ...DROPPED_FORUM_HOSTS].map((host) => host.trim().toLowerCase()),
+  );
+  return hosts.some((host) => {
+    if (host.status !== "qualified") return false;
+    if ((host.accounts?.length ?? 0) > 0) return false;
+    const domain = host.registrableDomain
+      .trim()
+      .toLowerCase()
+      .replace(/^www\./, "");
+    for (const item of denied) {
+      if (!item) continue;
+      if (domain === item || domain.endsWith(`.${item}`)) return false;
+    }
+    return true;
+  });
 }
 
 function hostDenied(domain: string, denyHosts: readonly string[]): boolean {

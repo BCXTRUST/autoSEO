@@ -194,6 +194,99 @@ describe("link builder real driver wiring", () => {
     expect(ref.providerRef).toBe("sb-old");
     expect(updates).toEqual([{ state: "running", providerRef: "sb-old", kind: "e2b" }]);
   });
+
+  it("creates one team computer when the workspace list is empty", async () => {
+    const rows: Array<{
+      id: string;
+      scope: string;
+      scopeKey: string;
+      state: string;
+      providerRef: string | null;
+      kind: string;
+      homeKey: string;
+    }> = [];
+    let upserts = 0;
+    let provisions = 0;
+    const prisma = {
+      lbProject: {
+        findUnique: async () => ({ workspaceId: "ws", createdByUserId: "user-1" }),
+      },
+      computer: {
+        findMany: async () => rows.map((row) => ({ ...row })),
+        upsert: async (args: {
+          where: { scopeKey: string };
+          create: { userId: string; kind: string; homeKey: string; scope: string; scopeKey: string };
+        }) => {
+          upserts += 1;
+          const found = rows.find((row) => row.scopeKey === args.where.scopeKey);
+          if (found) return { ...found };
+          const created = {
+            id: "comp-new",
+            scope: args.create.scope,
+            scopeKey: args.create.scopeKey,
+            state: "stopped",
+            providerRef: null,
+            kind: args.create.kind,
+            homeKey: args.create.homeKey,
+          };
+          rows.push(created);
+          expect(args.create.userId).toBe("user-1");
+          expect(args.create.scope).toBe("team");
+          expect(args.create.kind).toBe(process.env.SANDBOX_PROVIDER?.trim() || "e2b");
+          return { ...created };
+        },
+        update: async (args: {
+          where: { id: string };
+          data: { state: string; providerRef: string; kind: string };
+        }) => {
+          const row = rows.find((item) => item.id === args.where.id);
+          if (!row) throw new Error("missing computer");
+          row.state = args.data.state;
+          row.providerRef = args.data.providerRef;
+          row.kind = args.data.kind;
+          return { ...row };
+        },
+      },
+    } as unknown as PrismaClient;
+    const sandbox = {
+      provision: async (request: { botId: string; providerKind?: string }) => {
+        provisions += 1;
+        return {
+          id: "sb-new",
+          botId: request.botId,
+          kind: "e2b" as const,
+          providerRef: "sb-new",
+          fresh: true,
+        };
+      },
+    } as unknown as FakeSandboxProvider;
+    const context = {
+      operationId: "op",
+      traceId: "tr",
+      workspaceId: "ws",
+      userId: "user",
+      signal: new AbortController().signal,
+    } satisfies AdapterContext;
+    const first = await resolvePersonaComputer({
+      prisma,
+      sandbox,
+      projectId: "project-1",
+      context,
+      dataDir: "/tmp/data",
+    });
+    const second = await resolvePersonaComputer({
+      prisma,
+      sandbox,
+      projectId: "project-1",
+      context,
+      dataDir: "/tmp/data",
+    });
+    expect(rows).toHaveLength(1);
+    expect(upserts).toBe(1);
+    expect(provisions).toBe(1);
+    expect(first.providerRef).toBe("sb-new");
+    expect(second.providerRef).toBe("sb-new");
+  });
 });
 
 describe("proxy resolver", () => {
