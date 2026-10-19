@@ -1102,6 +1102,10 @@ async function openSession(ctx: StepContext): Promise<StepResult> {
     }
     throw error;
   }
+  await ctx
+    .pool()
+    ?.session.releaseForm?.()
+    .catch(() => undefined);
   const engine = host.engineHint === "camoufox" ? "camoufox" : "chromium";
   let entry: PoolEntry;
   try {
@@ -3468,11 +3472,16 @@ async function lookAtStuckPage(ctx: StepContext, stepKind = ""): Promise<StepRes
       return looked(ctx, pageUrl, "Looking at the page to open another thread", choice.action);
     }
     const visible = fields.filter((field) => !field.hidden);
+    let movedToForm = false;
     if (visible.length === 0) {
       const registerUrl = registrationLink(await collectPageAnchors(entry.session), pageUrl);
-      if (registerUrl && registerUrl !== pageUrl) await entry.session.goto(registerUrl);
+      if (registerUrl && registerUrl !== pageUrl) {
+        await entry.session.goto(registerUrl);
+        movedToForm = true;
+      }
     }
-    await entry.session.holdForm?.();
+    if (visible.length > 0 || movedToForm) await entry.session.holdForm?.();
+    else await entry.session.releaseForm?.();
     return looked(ctx, pageUrl, "Looking at the page to find the form", "find_form");
   } catch (error) {
     if (sandboxGoneError(error)) {

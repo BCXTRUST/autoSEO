@@ -223,6 +223,45 @@ describe("recoverStuckStep", () => {
     expect(gotos.some((url) => url.includes("thread"))).toBe(false);
   });
 
+  it("does not freeze navigation when the looked page is blank", async () => {
+    let held = 0;
+    let released = 0;
+    const session = {
+      url: async () => "about:blank",
+      formFields: async () => [],
+      listAnchors: async () => [],
+      goto: async () => undefined,
+      holdForm: async () => {
+        held += 1;
+      },
+      releaseForm: async () => {
+        released += 1;
+      },
+      exists: async () => false,
+    };
+    const looked = await recoverStuckStep({
+      ...ctx({
+        steps: [
+          {
+            outcome: { lastAction: "The page did not finish, trying again" },
+            error: null,
+            createdAt: new Date("2026-10-15T11:00:00Z"),
+          },
+        ],
+      }),
+      host: {
+        id: "host-1",
+        status: "warming",
+        registrableDomain: "med2-forum.de",
+        homepageUrl: "https://www.med2-forum.de/",
+      },
+      pool: () => ({ session }),
+    } as unknown as StepContext);
+    expect(looked?.kind).toBe("step");
+    expect(held).toBe(0);
+    expect(released).toBe(1);
+  });
+
   it("does not start a signup on a banned host with no account", async () => {
     const result = await REAL_STEP_HANDLERS.select_host({
       now: new Date("2026-10-15T12:00:00Z"),

@@ -114,6 +114,53 @@ describe("woltlab login", () => {
     }
   });
 
+  it("releases a form hold before opening the login page", async () => {
+    let held = true;
+    const form = `<!DOCTYPE html><html><body>
+<form id="loginForm" method="post" action="/login/">
+<input id="username" name="username" type="text">
+<input id="password" name="password" type="password">
+<input type="submit" value="Anmelden">
+</form>
+</body></html>`;
+    const done = `<!DOCTYPE html><html><body><a class="userMenuItemLink" href="/account-management/">Konto</a></body></html>`;
+    const server = createServer((request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(request.method === "POST" ? done : form);
+    });
+    const origin = await new Promise<string>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        resolve(`http://127.0.0.1:${port}/`);
+      });
+    });
+    const inner = new HtmlBrowserSession();
+    const open = inner.goto.bind(inner);
+    const session = Object.assign(inner, {
+      async releaseForm() {
+        held = false;
+      },
+      async goto(url: string) {
+        if (held) return;
+        await open(url);
+      },
+    });
+    try {
+      expect(
+        await new WoltlabDriver().login(session, origin, {
+          username: "member",
+          password: "secret-value",
+        }),
+      ).toBe(true);
+      expect(held).toBe(false);
+    } finally {
+      await new Promise((doneClose, reject) =>
+        server.close((error) => (error ? reject(error) : doneClose())),
+      );
+    }
+  });
+
   it("treats the user menu as a signed-in homepage", async () => {
     const home = `<!DOCTYPE html><html><body>
 <a class="userMenuItemLink" href="/account-management/">Konto</a>

@@ -294,7 +294,8 @@ export class PlaywrightBrowserSession implements BrowserSession {
       return;
     }
     const visible = this.page.locator(selector).locator("visible=true");
-    const field = (await visible.count()) > 0 ? visible.first() : this.first(selector);
+    const field =
+      (await deadline(visible.count()).catch(() => 0)) > 0 ? visible.first() : this.first(selector);
     try {
       // A moving captcha frame or a banner can block the focus click. The value still lands.
       await deadline(field.fill(text, { timeout: 8_000 }));

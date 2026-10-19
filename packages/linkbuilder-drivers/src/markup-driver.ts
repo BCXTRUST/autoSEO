@@ -273,6 +273,7 @@ export class MarkupBoardDriver implements BoardDriver {
     homepageUrl: string,
     account: Pick<BoardAccount, "username" | "password">,
   ): Promise<boolean> {
+    await session.releaseForm?.();
     try {
       await session.goto(href(this.config.paths.login, homepageUrl));
     } catch {
