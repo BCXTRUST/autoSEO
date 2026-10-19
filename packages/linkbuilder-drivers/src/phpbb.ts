@@ -238,7 +238,13 @@ export class PhpbbDriver implements BoardDriver {
     homepageUrl: string,
     account: Pick<BoardAccount, "username" | "password">,
   ): Promise<boolean> {
-    await session.goto(`${boardRoot(homepageUrl)}ucp.php?mode=login`);
+    const root = boardRoot(homepageUrl);
+    try {
+      await session.goto(`${root}ucp.php?mode=login`);
+    } catch {
+      await session.goto(root);
+      await session.click("a[href*='mode=login']").catch(() => false);
+    }
     await acceptCookieWall(session);
     if (await this.isLoggedIn(session)) return true;
     if (!(await session.waitFor(PHPBB_SELECTORS.loginForm, { timeoutMs: 10_000 }))) return false;

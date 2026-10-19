@@ -1138,11 +1138,19 @@ export class GenericFormDriver implements BoardDriver {
       ]),
     ];
     for (const url of guesses) {
-      await session.goto(url);
+      try {
+        await session.goto(url);
+      } catch {
+        continue;
+      }
       if (await this.isLoggedIn(session)) return true;
       if (await this.onLoginForm(session)) return true;
     }
-    await session.goto(homepageUrl);
+    try {
+      await session.goto(homepageUrl);
+    } catch {
+      return false;
+    }
     const followed = await followAnchor(
       session,
       ["a[href*='mode=login']", "a[href*='/login']", "a[href*='login']"],

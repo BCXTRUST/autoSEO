@@ -263,7 +263,11 @@ export class MarkupBoardDriver implements BoardDriver {
     homepageUrl: string,
     account: Pick<BoardAccount, "username" | "password">,
   ): Promise<boolean> {
-    await session.goto(href(this.config.paths.login, homepageUrl));
+    try {
+      await session.goto(href(this.config.paths.login, homepageUrl));
+    } catch {
+      await session.goto(homepageUrl);
+    }
     if (await this.isLoggedIn(session)) return true;
     if (!(await session.waitFor("form#login", { timeoutMs: 10_000 }))) return false;
     const fields = this.config.fields;
