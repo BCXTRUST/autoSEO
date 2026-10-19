@@ -72,7 +72,8 @@ export class WoltlabDriver extends MarkupBoardDriver {
   override async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {
     const listed = await super.listThreads(session, homepageUrl);
     if (listed.length > 0 || !session.listAnchors) return listed;
-    const anchors = await session.listAnchors(TOPIC_LINK);
+    let anchors = await session.listAnchors(TOPIC_LINK);
+    if (anchors.length === 0) anchors = await session.listAnchors("a.wbbTopicLink");
     const threads: BoardThread[] = [];
     const seen = new Set<string>();
     const base = await session.url();
@@ -92,8 +93,10 @@ export class WoltlabDriver extends MarkupBoardDriver {
   }
 
   override async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {
+    const threadUrl = thread.url.replace(/\?action=firstNew$/, "");
     if (session.listAnchors) {
-      await session.goto(thread.url);
+      await session.goto(threadUrl);
+      if (await this.replySelector(session)) return true;
       const anchors = await session.listAnchors(REPLY_LINK);
       const reply = anchors.find((anchor) => /action=(?:reply|add)\b/.test(anchor.href));
       if (reply) {
@@ -101,7 +104,7 @@ export class WoltlabDriver extends MarkupBoardDriver {
         if (await this.replySelector(session)) return true;
       }
     }
-    return super.openReply(session, thread);
+    return super.openReply(session, { ...thread, url: threadUrl });
   }
 
   override async fillReply(session: BrowserSession, body: string): Promise<void> {

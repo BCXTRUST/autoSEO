@@ -58,12 +58,25 @@ export function usablePageLinks(
   return links;
 }
 
+function withoutFirstNew(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.searchParams.get("action") === "firstNew") {
+      parsed.searchParams.delete("action");
+      parsed.hash = "";
+    }
+    return parsed.href;
+  } catch {
+    return url.replace(/\?action=firstNew$/, "");
+  }
+}
+
 export function threadsFromLinks(links: readonly PageLink[]): BoardThread[] {
   return links
     .filter((link) => THREAD_HREF.test(link.url))
     .slice(0, 8)
     .map((link) => ({
-      url: link.url,
+      url: withoutFirstNew(link.url),
       title: link.text,
       openQuestion: /\?/.test(link.text),
     }));

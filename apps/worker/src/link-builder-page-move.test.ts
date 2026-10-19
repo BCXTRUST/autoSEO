@@ -51,6 +51,14 @@ describe("page move when rules find no thread", () => {
     expect(threadsFromLinks(links).map((thread) => thread.url)).toEqual([
       "https://www.office-fragen.de/thread-29336-lastpost.html",
     ]);
+    expect(
+      threadsFromLinks([
+        {
+          text: "Serie",
+          url: "https://www.med2-forum.de/forum/thread/328-serienjunkies/?action=firstNew",
+        },
+      ]).map((thread) => thread.url),
+    ).toEqual(["https://www.med2-forum.de/forum/thread/328-serienjunkies/"]);
     expect(boardLink(links, ["excel"])?.url).toBe("https://www.office-fragen.de/forum-2.html");
   });
 

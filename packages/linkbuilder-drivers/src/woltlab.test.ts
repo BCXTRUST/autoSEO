@@ -238,6 +238,7 @@ describe("woltlab login", () => {
     try {
       const threads = await driver.listThreads(session, origin);
       expect(threads.map((threadRow) => threadRow.title)).toEqual(["Diabetes Typ 2"]);
+      expect(threads[0]?.url).not.toContain("action=firstNew");
       expect(await driver.openReply(session, threads[0]!)).toBe(true);
       await driver.fillReply(session, "Kurzer Hinweis ohne Link.");
       const result = await driver.submitReply(session);
