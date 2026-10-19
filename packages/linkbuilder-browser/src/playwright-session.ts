@@ -11,6 +11,7 @@ import {
 } from "@rakazo/linkbuilder-core";
 import type { BrowserContext, BrowserType, Page, Request } from "playwright";
 import { clickControl, clickControlHeld } from "./page-click.js";
+import { writeWysiwygText } from "./wysiwyg.js";
 
 /** Playwright resets its own action timeout when a page navigates, so a reloading board can wait forever. */
 const ACTION_DEADLINE_MS = 12_000;
@@ -307,6 +308,17 @@ export class PlaywrightBrowserSession implements BrowserSession {
         throw error;
       }
     }
+    await this.syncWysiwyg(selector, text, options.secret === true);
+  }
+
+  /**
+   * WoltLab's save button reads CKEditor, then overwrites the textarea. Filling `#text`
+   * alone submits an empty reply and the page never gains a permalink.
+   */
+  private async syncWysiwyg(selector: string, text: string, secret: boolean): Promise<void> {
+    if (secret) return;
+    const result = await deadline(this.page.evaluate(writeWysiwygText, { selector, text }));
+    if (result === "missing") throw new Error("The editor was not ready");
   }
 
   /** Crops the element from the current viewport. locator.screenshot scrolls it into view. */

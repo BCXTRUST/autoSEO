@@ -4,7 +4,12 @@ import { answerBoardQuestion } from "./captcha.js";
 import { platformSuite } from "./platform-suite.js";
 import { HtmlBrowserSession } from "./testing/html-session.js";
 import { startWoltlabFixture } from "./testing/woltlab-fixture.js";
-import { WoltlabDriver } from "./woltlab.js";
+import {
+  newestWoltlabPostId,
+  WoltlabDriver,
+  woltlabPermalink,
+  woltlabPermalinkForPost,
+} from "./woltlab.js";
 
 async function readBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -249,6 +254,64 @@ describe("woltlab login", () => {
         server.close((error) => (error ? reject(error) : doneClose())),
       );
     }
+  });
+
+  it("records a quick reply when the board inserts the post without a redirect", async () => {
+    const thread = `<!DOCTYPE html><html><body>
+<article id="post10"></article>
+<form method="post" action="/forum/thread/1972-der-filme-thread/">
+<textarea id="text" name="text" class="wysiwygTextarea"></textarea>
+<button type="button" data-type="save">Absenden</button>
+</form>
+</body></html>`;
+    const posted = `<!DOCTYPE html><html><body>
+<article id="post10"></article>
+<article id="post77"></article>
+</body></html>`;
+    const server = createServer(async (request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(request.method === "POST" ? posted : thread);
+    });
+    const origin = await new Promise<string>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        resolve(`http://127.0.0.1:${port}/`);
+      });
+    });
+    const session = new HtmlBrowserSession();
+    const driver = new WoltlabDriver();
+    try {
+      expect(
+        await driver.openReply(session, {
+          url: `${origin}forum/thread/1972-der-filme-thread/`,
+          title: "Filme",
+        }),
+      ).toBe(true);
+      await driver.fillReply(session, "Kurzer Hinweis ohne Link.");
+      const result = await driver.submitReply(session);
+      expect(result).toEqual({
+        kind: "posted",
+        permalink: `${origin}forum/thread/1972-der-filme-thread/?postID=77#post77`,
+      });
+    } finally {
+      await new Promise((doneClose, reject) =>
+        server.close((error) => (error ? reject(error) : doneClose())),
+      );
+    }
+  });
+});
+
+describe("woltlab permalinks", () => {
+  it("keeps a hash permalink and a newly inserted post id", () => {
+    expect(
+      woltlabPermalink("https://www.med2-forum.de/forum/thread/1972-der-filme-thread/#post77"),
+    ).toBe("https://www.med2-forum.de/forum/thread/1972-der-filme-thread/?postID=77#post77");
+    expect(newestWoltlabPostId([10], [10, 77])).toBe(77);
+    expect(newestWoltlabPostId([10], [10])).toBeNull();
+    expect(
+      woltlabPermalinkForPost("https://www.med2-forum.de/forum/thread/1972-der-filme-thread/", 77),
+    ).toBe("https://www.med2-forum.de/forum/thread/1972-der-filme-thread/?postID=77#post77");
   });
 });
 

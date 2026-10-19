@@ -10,7 +10,43 @@ export function woltlabPermalink(url: string): string | null {
   if (!match) return null;
   const post = parsed.searchParams.get("postID") ?? /^#post(\d+)$/.exec(parsed.hash)?.[1];
   if (!post || !/^\d+$/.test(post)) return null;
-  return `${parsed.origin}/forum/thread/${match[1]}-${match[2]}/?postID=${post}#post${post}`;
+  return permalinkFor(parsed, match[1]!, match[2]!, post);
+}
+
+/** Post ids already rendered on a thread page, from `id="post123"`. */
+export function woltlabPostIds(html: string): number[] {
+  const ids = new Set<number>();
+  for (const match of html.matchAll(/\bid=["']post(\d+)["']/g)) {
+    ids.add(Number(match[1]));
+  }
+  return [...ids];
+}
+
+/** The post id that appeared after a quick reply. */
+export function newestWoltlabPostId(
+  before: readonly number[],
+  after: readonly number[],
+): number | null {
+  const known = new Set(before);
+  let newest: number | null = null;
+  for (const id of after) {
+    if (known.has(id)) continue;
+    if (newest === null || id > newest) newest = id;
+  }
+  return newest;
+}
+
+/** Permalink for a post id inserted into the current thread. */
+export function woltlabPermalinkForPost(pageUrl: string, postId: number): string | null {
+  const parsed = parseUrl(pageUrl);
+  if (!parsed || !Number.isInteger(postId) || postId <= 0) return null;
+  const match = /\/forum\/thread\/(\d+)-([^/?#]+)\/?/.exec(parsed.pathname);
+  if (!match) return null;
+  return permalinkFor(parsed, match[1]!, match[2]!, String(postId));
+}
+
+function permalinkFor(parsed: URL, threadId: string, slug: string, postId: string): string {
+  return `${parsed.origin}/forum/thread/${threadId}-${slug}/?postID=${postId}#post${postId}`;
 }
 
 function parseUrl(url: string): URL | null {
@@ -18,6 +54,14 @@ function parseUrl(url: string): URL | null {
     return new URL(url);
   } catch {
     return null;
+  }
+}
+
+async function readHtml(session: BrowserSession): Promise<string> {
+  try {
+    return (await session.pageHtml?.()) ?? "";
+  } catch {
+    return "";
   }
 }
 
@@ -120,16 +164,33 @@ export class WoltlabDriver extends MarkupBoardDriver {
       await super.fillReply(session, body);
       return;
     }
+    // The quick reply mounts CKEditor after the thread HTML arrives. Wait before writing.
+    if (await session.exists("textarea.wysiwygTextarea")) {
+      await session.waitFor(".ck-editor, .ck-content", { timeoutMs: 15_000 });
+    }
     await session.fill(field, body);
   }
 
   override async submitReply(session: BrowserSession): Promise<ReplyResult> {
     if (!(await session.exists("textarea[name='text'], #text"))) return super.submitReply(session);
+    const before = woltlabPostIds((await session.pageHtml?.()) ?? "");
     await session.click(REPLY_SUBMIT);
-    await session.waitFor("#message, .error, .innerError", { timeoutMs: 15_000 });
-    const permalink = woltlabPermalink(await session.url());
+    const deadlineAt = Date.now() + 15_000;
+    let permalink = woltlabPermalink(await session.url());
+    while (!permalink && Date.now() < deadlineAt) {
+      permalink = woltlabPermalink(await session.url());
+      if (permalink) break;
+      const created = newestWoltlabPostId(before, woltlabPostIds(await readHtml(session)));
+      if (created !== null) permalink = woltlabPermalinkForPost(await session.url(), created);
+      if (permalink) break;
+      if ((await session.text(".innerError"))?.trim()) break;
+      await session.waitFor("[data-rakazo-woltlab-wait]", { timeoutMs: 1_000 });
+    }
     if (permalink) return { kind: "posted", permalink };
-    return { kind: "unknown", messages: await this.pageMessages(session) };
+    const messages = await this.pageMessages(session);
+    const inline = (await session.text(".innerError"))?.trim();
+    if (inline) messages.push(inline);
+    return { kind: "unknown", messages };
   }
 
   private async replySelector(session: BrowserSession): Promise<string | null> {
