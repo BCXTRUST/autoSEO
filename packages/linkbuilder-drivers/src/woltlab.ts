@@ -13,15 +13,6 @@ export function woltlabPermalink(url: string): string | null {
   return permalinkFor(parsed, match[1]!, match[2]!, post);
 }
 
-/** Post ids already rendered on a thread page, from `id="post123"`. */
-export function woltlabPostIds(html: string): number[] {
-  const ids = new Set<number>();
-  for (const match of html.matchAll(/\bid=["']post(\d+)["']/g)) {
-    ids.add(Number(match[1]));
-  }
-  return [...ids];
-}
-
 /** The post id that appeared after a quick reply. */
 export function newestWoltlabPostId(
   before: readonly number[],
@@ -57,12 +48,16 @@ function parseUrl(url: string): URL | null {
   }
 }
 
-async function readHtml(session: BrowserSession): Promise<string> {
-  try {
-    return (await session.pageHtml?.()) ?? "";
-  } catch {
-    return "";
+/** Post ids from permalink anchors. The full page is too large to pull back through the sandbox. */
+async function listedPostIds(session: BrowserSession): Promise<number[]> {
+  if (!session.listAnchors) return [];
+  const anchors = await session.listAnchors("a[href*='postID=']");
+  const ids: number[] = [];
+  for (const anchor of anchors) {
+    const match = /postID=(\d+)/.exec(anchor.href);
+    if (match) ids.push(Number(match[1]));
   }
+  return ids;
 }
 
 export const woltlabBoard = defineBoard({
@@ -173,14 +168,14 @@ export class WoltlabDriver extends MarkupBoardDriver {
 
   override async submitReply(session: BrowserSession): Promise<ReplyResult> {
     if (!(await session.exists("textarea[name='text'], #text"))) return super.submitReply(session);
-    const before = woltlabPostIds((await session.pageHtml?.()) ?? "");
+    const before = await listedPostIds(session);
     await session.click(REPLY_SUBMIT);
     const deadlineAt = Date.now() + 15_000;
     let permalink = woltlabPermalink(await session.url());
     while (!permalink && Date.now() < deadlineAt) {
       permalink = woltlabPermalink(await session.url());
       if (permalink) break;
-      const created = newestWoltlabPostId(before, woltlabPostIds(await readHtml(session)));
+      const created = newestWoltlabPostId(before, await listedPostIds(session));
       if (created !== null) permalink = woltlabPermalinkForPost(await session.url(), created);
       if (permalink) break;
       if ((await session.text(".innerError"))?.trim()) break;

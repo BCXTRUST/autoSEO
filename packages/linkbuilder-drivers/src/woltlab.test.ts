@@ -258,15 +258,15 @@ describe("woltlab login", () => {
 
   it("records a quick reply when the board inserts the post without a redirect", async () => {
     const thread = `<!DOCTYPE html><html><body>
-<article id="post10"></article>
+<a href="/forum/thread/1972-der-filme-thread/?postID=10#post10">10</a>
 <form method="post" action="/forum/thread/1972-der-filme-thread/">
 <textarea id="text" name="text" class="wysiwygTextarea"></textarea>
 <button type="button" data-type="save">Absenden</button>
 </form>
 </body></html>`;
     const posted = `<!DOCTYPE html><html><body>
-<article id="post10"></article>
-<article id="post77"></article>
+<a href="/forum/thread/1972-der-filme-thread/?postID=10#post10">10</a>
+<a href="/forum/thread/1972-der-filme-thread/?postID=77#post77">77</a>
 </body></html>`;
     const server = createServer(async (request, response) => {
       response.writeHead(200, { "content-type": "text/html" });
