@@ -103,10 +103,33 @@ describe("loadSiteLoginForFill", () => {
         }),
       },
     };
+    let where: unknown;
+    prisma.siteLogin.findFirst = async (args: { where: unknown }) => {
+      where = args.where;
+      return {
+        id: "login-1",
+        host: "forum.example.test",
+        url: "https://forum.example.test/login",
+        username: "demo",
+        share: "workspace",
+        createdByBotId: null,
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        secret: { ciphertext: stored.ciphertext },
+      };
+    };
     const loaded = await loadSiteLoginForFill(
       { prisma: prisma as never, secrets },
-      { workspaceId: "w", userId: "u", botId: "b", loginId: "login-1" },
+      { workspaceId: "w", userId: "project-owner", botId: "b", loginId: "login-1" },
     );
+    expect(where).toEqual({
+      id: "login-1",
+      workspaceId: "w",
+      OR: [
+        { userId: "project-owner", OR: [{ share: "workspace" }, { createdByBotId: "b" }] },
+        { share: "workspace" },
+      ],
+    });
     expect("password" in loaded && loaded.password).toBe("owner-password-not-for-model");
     if (!("login" in loaded)) throw new Error("expected login");
     const published = publicVaultFillResult(loaded.login);

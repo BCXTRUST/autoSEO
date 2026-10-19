@@ -100,18 +100,21 @@ export async function discoverDueProjects(input: {
   });
   let found = 0;
   for (const project of projects) {
-    if (await restoredHostWaiting(input.prisma, project)) continue;
+    const followWarmup = await confirmedWarmupReady(input.prisma, project.id);
+    if (!followWarmup && (await restoredHostWaiting(input.prisma, project))) continue;
     const schedule = project.schedule as { timezone?: string } | null;
     const timeZone = schedule?.timezone || "Europe/Berlin";
     const due = shouldDiscover(project.lastDiscoveredAt, input.now, timeZone);
     if (!due) {
       if (await browserSearchRecent(input.prisma, project.id, input.now)) continue;
-      if (await storedSearchRows(input.prisma, project.id)) continue;
-      const stored = await input.prisma.lbHost.findMany({
-        where: { projectId: project.id },
-        select: { registrableDomain: true, status: true },
-      });
-      if (stored.some((host) => hostStartable(host, project.denyHosts))) continue;
+      if (!followWarmup && (await storedSearchRows(input.prisma, project.id))) continue;
+      if (!followWarmup) {
+        const stored = await input.prisma.lbHost.findMany({
+          where: { projectId: project.id },
+          select: { registrableDomain: true, status: true },
+        });
+        if (stored.some((host) => hostStartable(host, project.denyHosts))) continue;
+      }
     }
     const markets = LbMarketsSchema.safeParse(project.markets);
     const lanes = LbTopicLaneSchema.array().safeParse(project.topicLanes);
@@ -643,6 +646,50 @@ function stepAction(outcome: unknown): string {
   if (!outcome || typeof outcome !== "object") return "";
   const action = (outcome as { lastAction?: unknown }).lastAction;
   return typeof action === "string" ? action : "";
+}
+
+/** One browser search after this run confirmed a signup and posted on every warming host. */
+export function browserSearchFollowsWarmup(input: {
+  confirmed: boolean;
+  warmingHostIds: readonly string[];
+  postedHostIds: readonly string[];
+}): boolean {
+  if (!input.confirmed || input.warmingHostIds.length === 0) return false;
+  const posted = new Set(input.postedHostIds);
+  return input.warmingHostIds.every((id) => posted.has(id));
+}
+
+async function confirmedWarmupReady(prisma: PrismaClient, projectId: string): Promise<boolean> {
+  const run = await prisma.lbRun.findFirst({
+    where: { projectId, status: { in: ["running", "overtime"] } },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true },
+  });
+  if (!run) return false;
+  const steps = await prisma.lbRunStep.findMany({
+    where: { runId: run.id },
+    select: { kind: true, hostId: true, error: true, outcome: true },
+  });
+  const hosts = await prisma.lbHost.findMany({
+    where: { projectId, status: "warming" },
+    select: { id: true, accounts: { select: { emailVerifiedAt: true } } },
+  });
+  const postedHostIds = steps
+    .filter(
+      (step) =>
+        step.kind === "warmup_post" &&
+        step.error == null &&
+        step.hostId != null &&
+        stepAction(step.outcome) === "Posted the reply",
+    )
+    .map((step) => step.hostId as string);
+  return browserSearchFollowsWarmup({
+    confirmed: steps.some((step) => stepAction(step.outcome) === "Email verified"),
+    warmingHostIds: hosts
+      .filter((host) => host.accounts.some((account) => account.emailVerifiedAt))
+      .map((host) => host.id),
+    postedHostIds,
+  });
 }
 
 /** A restored forum is waiting to sign up. This pass does not search or re-probe. */

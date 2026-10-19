@@ -2278,19 +2278,13 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
     lastAction: verified ? "Email verified" : "Email verified, waiting for the admin",
     hostId: host.id,
     artifactIds,
-    outcome: { activation, ...(verified ? { paused: true } : {}) },
-    run: verified ? { status: transitionRun(ctx.run.status, "paused") } : undefined,
+    outcome: { activation },
     apply: async (tx) => {
       await tx.lbHostAccount.update({
         where: { id: account.id },
         data: { emailVerifiedAt: verifiedAt },
       });
       await moveHost(tx, host, verified ? "account_active" : "admin_pending");
-      if (!verified) return;
-      await tx.lbProject.updateMany({
-        where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
-        data: { status: transitionProject("active", "paused") },
-      });
     },
   };
 }
@@ -2628,7 +2622,6 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     };
   }
   const selectionBudget = found.searched ? 4 : 1;
-  if (!ctx.services.textModel) throw new StepFailure("Draft model is not configured");
   const model = ctx.services.textModel;
   let chosen: {
     thread: (typeof threads)[number];
@@ -2716,6 +2709,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       };
       break;
     }
+    if (!model) throw new StepFailure("Draft model is not configured");
     const editorText = await entry.session.pageText().catch(() => "");
     const pageText = [discussion, editorText].filter(Boolean).join("\n");
     rule = driver.probePageLinkRule

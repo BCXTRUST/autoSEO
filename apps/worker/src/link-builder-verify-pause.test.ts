@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { REAL_STEP_HANDLERS, type StepContext } from "./link-builder-real-steps.js";
 
 describe("email verification", () => {
-  it("pauses after a successful verify and does not plan a post", async () => {
+  it("keeps running after a successful verify so warmup can post", async () => {
     const link = "https://forum.example/ucp.php?mode=activate&u=1&k=abc";
     const persona = {
       projectId: "p1",
@@ -105,15 +105,16 @@ describe("email verification", () => {
     expect(result.kind).toBe("step");
     if (result.kind !== "step") return;
     expect(result.lastAction).toBe("Email verified");
-    expect(result.run?.status).toBe("paused");
+    expect(result.run?.status).toBeUndefined();
     await result.apply?.(tx as never);
-    expect(updates).toContain("paused");
+    expect(updates).not.toContain("paused");
+    expect(updates).toContain("account");
     expect(session.actions.some((action) => action.kind === "goto" && action.url === link)).toBe(
       true,
     );
 
     const plan = planRealStep({
-      runStatus: "paused",
+      runStatus: "running",
       liveMet: false,
       host: { id: "h1", ...hostState("warming") },
       session: {
@@ -128,9 +129,7 @@ describe("email verification", () => {
       warmupPosts: 0,
       placement: null,
     });
-    expect(plan.kind).not.toBe("post");
-    expect(plan.kind).not.toBe("warmup_post");
-    expect(plan).toEqual({ kind: "wait", reason: "paused" });
+    expect(plan).toEqual({ kind: "warmup_post" });
   });
 
   it("polls until the confirmation link arrives and keeps one login", async () => {

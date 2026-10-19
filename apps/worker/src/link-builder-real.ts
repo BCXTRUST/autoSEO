@@ -700,6 +700,7 @@ export class LinkBuilderRealRunner {
     const giveUp =
       host !== null &&
       !infra &&
+      message !== "Vault login is missing" &&
       !isHostTerminal(host.status as LbHostStatus) &&
       (repeated || postFailures + 1 >= MAX_CONSECUTIVE_ERRORS);
     return {
