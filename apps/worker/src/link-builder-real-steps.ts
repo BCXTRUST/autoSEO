@@ -653,26 +653,66 @@ async function hostsStuckOnLogin(
 ): Promise<Set<string>> {
   const stuck = new Set<string>();
   if (hostIds.length === 0) return stuck;
-  let steps: Array<{ hostId: string | null; error: string | null; outcome: unknown }> = [];
+  let steps: Array<{
+    hostId: string | null;
+    kind: string;
+    error: string | null;
+    outcome: unknown;
+  }> = [];
   try {
     steps = await ctx.services.prisma.lbRunStep.findMany({
       where: { runId: ctx.run.id, hostId: { in: [...hostIds] } },
       orderBy: { stepIndex: "desc" },
-      take: 12,
-      select: { hostId: true, error: true, outcome: true },
+      take: 24,
+      select: { hostId: true, kind: true, error: true, outcome: true },
     });
   } catch {
     return stuck;
   }
-  const newest = steps[0];
-  if (!newest?.hostId) return stuck;
-  const outcome =
-    newest.outcome && typeof newest.outcome === "object"
-      ? (newest.outcome as Record<string, unknown>)
-      : {};
-  const error = newest.error ?? "";
-  if (outcome.login === false || /angaben sind ungültig/i.test(error)) stuck.add(newest.hostId);
+  const seen = new Set<string>();
+  for (const step of steps) {
+    if (!step.hostId || seen.has(step.hostId) || step.kind === "page_look") continue;
+    seen.add(step.hostId);
+    const outcome =
+      step.outcome && typeof step.outcome === "object"
+        ? (step.outcome as Record<string, unknown>)
+        : {};
+    const error = step.error ?? "";
+    if (outcome.login === false || /angaben sind ungültig|kennwort ist falsch/i.test(error)) {
+      stuck.add(step.hostId);
+    }
+  }
   return stuck;
+}
+
+/** Warming hosts that already posted a link-free reply on this run. */
+async function hostsPostedThisRun(
+  ctx: StepContext,
+  hostIds: readonly string[],
+): Promise<Set<string>> {
+  const posted = new Set<string>();
+  if (hostIds.length === 0) return posted;
+  try {
+    const steps = await ctx.services.prisma.lbRunStep.findMany({
+      where: {
+        runId: ctx.run.id,
+        hostId: { in: [...hostIds] },
+        kind: "warmup_post",
+        error: null,
+      },
+      select: { hostId: true, outcome: true },
+    });
+    for (const step of steps) {
+      const outcome =
+        step.outcome && typeof step.outcome === "object"
+          ? (step.outcome as Record<string, unknown>)
+          : {};
+      if (outcome.lastAction === "Posted the reply" && step.hostId) posted.add(step.hostId);
+    }
+  } catch {
+    return posted;
+  }
+  return posted;
 }
 
 function hostSortRank(row: {
@@ -762,6 +802,11 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     ctx,
     eligible.map((row) => row.id),
   );
+  const warmingIds = eligible
+    .filter((row) => row.status === "warming" && row.accounts[0]?.emailVerifiedAt)
+    .map((row) => row.id);
+  const postedThisRun = await hostsPostedThisRun(ctx, warmingIds);
+  const warmupPosted = warmingIds.length > 0 && warmingIds.every((id) => postedThisRun.has(id));
   eligible.sort((a, b) => {
     const aTarget = storedSignupTarget(a, deny);
     const bTarget = storedSignupTarget(b, deny);
@@ -782,6 +827,11 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     }
     if (aOpen && deniedForStoredSignup(b.registrableDomain, deny)) return -1;
     if (bOpen && deniedForStoredSignup(a.registrableDomain, deny)) return 1;
+    if (warmupPosted) {
+      const finishSignup = (row: (typeof eligible)[number]) =>
+        row.status === "registering" || row.status === "pending_email";
+      if (finishSignup(a) !== finishSignup(b)) return finishSignup(a) ? -1 : 1;
+    }
     if (loginStuck.has(a.id) !== loginStuck.has(b.id)) return loginStuck.has(a.id) ? 1 : -1;
     const warmingPosts = (row: (typeof eligible)[number]) =>
       row.status === "warming" ? (row.accounts[0]?.postCount ?? 0) : null;

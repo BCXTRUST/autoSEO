@@ -1,7 +1,7 @@
 import type { BrowserSession } from "@rakazo/adapter-kit";
 import type { LbHostPlatform } from "@rakazo/contracts";
 import type { ReferenceFormat } from "@rakazo/linkbuilder-core";
-import { detectKnowledgeQuestion } from "./captcha.js";
+import { answerBoardQuestion, detectKnowledgeQuestion } from "./captcha.js";
 import type {
   ActivationResult,
   BoardAccount,
@@ -275,16 +275,51 @@ export class MarkupBoardDriver implements BoardDriver {
     }
     if (await this.isLoggedIn(session)) return true;
     if (!(await session.waitFor(LOGIN_FORM, { timeoutMs: 10_000 }))) return false;
+    await this.submitLogin(session, account);
+    if (await session.waitFor(LOGGED_OUT_LINK, { timeoutMs: 10_000 })) return true;
+    // The question is missing on the first paint and the board asks for it after submit.
+    if (await session.exists("#captchaAnswer")) {
+      await this.submitLogin(session, account);
+      if (await session.waitFor(LOGGED_OUT_LINK, { timeoutMs: 10_000 })) return true;
+    }
+    const detail = await this.loginFailure(session);
+    if (detail) throw new Error(detail.slice(0, 240));
+    return false;
+  }
+
+  private async submitLogin(
+    session: BrowserSession,
+    account: Pick<BoardAccount, "username" | "password">,
+  ): Promise<void> {
     const fields = this.config.fields;
     await session.fill(`#${fields.username.id}`, account.username);
     await session.fill(`#${fields.password.id}`, account.password, { secret: true });
     // WoltLab copies the XSRF cookie into the hidden field after the page scripts run.
     await session.waitFor(".xsrfTokenInputHandled", { timeoutMs: 5_000 });
+    await this.fillLoginQuestion(session);
     await session.click(LOGIN_SUBMIT);
-    if (await session.waitFor(LOGGED_OUT_LINK, { timeoutMs: 10_000 })) return true;
-    const detail = (await this.pageMessages(session)).find((message) => message.length > 0) ?? "";
-    if (detail) throw new Error(detail.slice(0, 240));
-    return false;
+  }
+
+  private async fillLoginQuestion(session: BrowserSession): Promise<void> {
+    if (!(await session.exists("#captchaAnswer"))) return;
+    const label = ((await session.text("label[for='captchaAnswer']")) ?? "").trim();
+    const answer = answerBoardQuestion(label);
+    if (!answer) throw new Error((label || "Login question was not answered").slice(0, 180));
+    await session.fill("#captchaAnswer", answer);
+  }
+
+  private async loginFailure(session: BrowserSession): Promise<string> {
+    const messages = [
+      (await session.text(".formError")) ?? "",
+      (await session.text(".innerError")) ?? "",
+      ...(await this.pageMessages(session)),
+    ]
+      .map((message) => message.trim())
+      .filter(Boolean);
+    const specific = messages.find((message) =>
+      /kennwort ist falsch|bitte fülle dieses eingabefeld/i.test(message),
+    );
+    return specific ?? messages[0] ?? "";
   }
 
   async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {

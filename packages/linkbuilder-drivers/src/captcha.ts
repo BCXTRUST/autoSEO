@@ -48,6 +48,32 @@ const QUESTION_FIELDS: ReadonlyArray<{ input: string; label: string }> = [
   { input: "#question_answer", label: "label[for='question_answer']" },
 ];
 
+/**
+ * Answer a board's own login or reset question when the arithmetic or the hint is on the page.
+ * Returns null when the question needs a person.
+ */
+export function answerBoardQuestion(text: string): string | null {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (!flat) return null;
+  const have = /hast\s+(\d+)\b/i.exec(flat);
+  const added = /(?:bekommst|dazu|plus|\+)\s*(\d+)\b/i.exec(flat);
+  const removed = /(?:isst|verlierst|minus)\s*(\d+)\b/i.exec(flat);
+  if (have && added && !removed) return String(Number(have[1]) + Number(added[1]));
+  if (have && removed && !added) {
+    const left = Number(have[1]) - Number(removed[1]);
+    if (left >= 0) return String(left);
+  }
+  const sum = /(\d+)\s*(?:\+|plus)\s*(\d+)/i.exec(flat);
+  if (sum) return String(Number(sum[1]) + Number(sum[2]));
+  const difference = /(\d+)\s*(?:-|minus)\s*(\d+)/i.exec(flat);
+  if (difference) {
+    const left = Number(difference[1]) - Number(difference[2]);
+    if (left >= 0) return String(left);
+  }
+  if (/himmel/i.test(flat) && /(farbe|blau|bl\.\.)/i.test(flat)) return "blau";
+  return null;
+}
+
 /** A field is a knowledge question when it asks something or poses arithmetic. */
 export function looksLikeKnowledgeQuestion(text: string): boolean {
   const trimmed = text.trim();

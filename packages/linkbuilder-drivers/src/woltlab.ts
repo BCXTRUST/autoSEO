@@ -1,3 +1,5 @@
+import type { BrowserSession } from "@rakazo/adapter-kit";
+import type { BoardThread, ReplyResult } from "./driver.js";
 import { commonFields, defineBoard, field, MarkupBoardDriver } from "./markup-driver.js";
 
 /** Canonical WoltLab permalink `/forum/thread/<id>-slug/?postID=<id>#post<id>`. */
@@ -49,8 +51,74 @@ export const woltlabBoard = defineBoard({
   permalink: woltlabPermalink,
 });
 
+const TOPIC_LINK = "a.wbbTopicLink:not(.wbbBoardNode__lastPostLink)";
+const REPLY_LINK = "a[href*='action=reply'], a[href*='action=add']";
+const REPLY_FIELD = ["#text", "textarea[name='text']", "#message"] as const;
+const REPLY_SUBMIT =
+  "form .formSubmit input[type='submit'], form .formSubmit button[type='submit'], form button[type='submit']";
+
 export class WoltlabDriver extends MarkupBoardDriver {
   constructor() {
     super(woltlabBoard);
+  }
+
+  override async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {
+    const listed = await super.listThreads(session, homepageUrl);
+    if (listed.length > 0 || !session.listAnchors) return listed;
+    const anchors = await session.listAnchors(TOPIC_LINK);
+    const threads: BoardThread[] = [];
+    const seen = new Set<string>();
+    const base = await session.url();
+    for (const anchor of anchors) {
+      let url: string;
+      try {
+        url = new URL(anchor.href, base).href.replace(/\?action=firstNew$/, "");
+      } catch {
+        continue;
+      }
+      if (!/\/forum\/thread\//.test(url) || seen.has(url)) continue;
+      seen.add(url);
+      threads.push({ url, title: anchor.text, openQuestion: /\?/.test(anchor.text) });
+      if (threads.length >= 25) break;
+    }
+    return threads;
+  }
+
+  override async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {
+    if (session.listAnchors) {
+      await session.goto(thread.url);
+      const anchors = await session.listAnchors(REPLY_LINK);
+      const reply = anchors.find((anchor) => /action=(?:reply|add)\b/.test(anchor.href));
+      if (reply) {
+        await session.goto(new URL(reply.href, await session.url()).href);
+        if (await this.replySelector(session)) return true;
+      }
+    }
+    return super.openReply(session, thread);
+  }
+
+  override async fillReply(session: BrowserSession, body: string): Promise<void> {
+    const field = await this.replySelector(session);
+    if (!field) {
+      await super.fillReply(session, body);
+      return;
+    }
+    await session.fill(field, body);
+  }
+
+  override async submitReply(session: BrowserSession): Promise<ReplyResult> {
+    if (!(await session.exists("textarea[name='text'], #text"))) return super.submitReply(session);
+    await session.click(REPLY_SUBMIT);
+    await session.waitFor("#message, .error, .innerError", { timeoutMs: 15_000 });
+    const permalink = woltlabPermalink(await session.url());
+    if (permalink) return { kind: "posted", permalink };
+    return { kind: "unknown", messages: await this.pageMessages(session) };
+  }
+
+  private async replySelector(session: BrowserSession): Promise<string | null> {
+    for (const selector of REPLY_FIELD) {
+      if (await session.exists(selector)) return selector;
+    }
+    return null;
   }
 }
