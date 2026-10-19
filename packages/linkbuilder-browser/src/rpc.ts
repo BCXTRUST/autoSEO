@@ -23,7 +23,13 @@ export const BrowserRpcRequestSchema = z.discriminatedUnion("method", [
     .strict(),
   z.object({ method: z.literal("holdForm") }).strict(),
   z.object({ method: z.literal("releaseForm") }).strict(),
-  z.object({ method: z.literal("click"), selector }).strict(),
+  z
+    .object({
+      method: z.literal("click"),
+      selector,
+      navigationMs: z.number().int().min(1_000).max(90_000).optional(),
+    })
+    .strict(),
   z.object({ method: z.literal("text"), selector }).strict(),
   z.object({ method: z.literal("exists"), selector }).strict(),
   z.object({ method: z.literal("isVisible"), selector }).strict(),
@@ -125,7 +131,10 @@ export class BrowserRpcServer {
         if (!session.releaseForm) return null;
         return session.releaseForm();
       case "click":
-        return session.click(request.selector);
+        return session.click(
+          request.selector,
+          request.navigationMs ? { navigationMs: request.navigationMs } : undefined,
+        );
       case "text":
         return session.text(request.selector);
       case "exists":
@@ -231,8 +240,12 @@ export class RpcBrowserSession implements BrowserSession {
     await this.call({ method: "releaseForm" });
   }
 
-  async click(selector: string): Promise<void> {
-    await this.call({ method: "click", selector });
+  async click(selector: string, options?: { navigationMs?: number }): Promise<void> {
+    await this.call({
+      method: "click",
+      selector,
+      ...(options?.navigationMs ? { navigationMs: options.navigationMs } : {}),
+    });
   }
 
   async text(selector: string): Promise<string | null> {

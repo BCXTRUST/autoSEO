@@ -2668,6 +2668,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   const password = await loadPassword(ctx, account.siteLoginId);
   let loggedIn = false;
   try {
+    await noteAction(ctx, `Signing in on ${host.registrableDomain}`);
     loggedIn = await driver.login(entry.session, host.homepageUrl, {
       username: account.username,
       password,
@@ -2676,6 +2677,12 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     if (error instanceof UnmappedFormError) return unmappedForm(ctx, host);
     throw error;
   }
+  await noteAction(
+    ctx,
+    loggedIn
+      ? `Signed in on ${host.registrableDomain}`
+      : `Sign-in did not stick on ${host.registrableDomain}`,
+  );
   if (!loggedIn) {
     const plan = await desktopSkipPlan(ctx, host, "unknown_page_state");
     return {

@@ -277,13 +277,13 @@ export class PlaywrightBrowserSession implements BrowserSession {
   async releaseForm(): Promise<void> {
     this.formHeld = false;
     await rm("/tmp/rakazo-form-hold", { force: true }).catch(() => undefined);
-    await this.page
-      .evaluate(() => {
+    await deadline(
+      this.page.evaluate(() => {
         const view = globalThis as { __rakazoFormHold?: { restore: () => void } };
         view.__rakazoFormHold?.restore();
         delete view.__rakazoFormHold;
-      })
-      .catch(() => undefined);
+      }),
+    ).catch(() => undefined);
   }
 
   async fill(selector: string, text: string, options: { secret?: boolean } = {}): Promise<void> {
@@ -405,18 +405,21 @@ export class PlaywrightBrowserSession implements BrowserSession {
       .catch(() => null);
   }
 
-  private async settleNavigation(request: Request | null): Promise<void> {
+  private async settleNavigation(
+    request: Request | null,
+    responseMs = NAVIGATION_RESPONSE_MS,
+  ): Promise<void> {
     if (!request) return;
     await Promise.race([
       request.response().catch(() => null),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), NAVIGATION_RESPONSE_MS)),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), responseMs)),
     ]);
     await this.page
       .waitForLoadState("domcontentloaded", { timeout: ACTION_DEADLINE_MS })
       .catch(() => undefined);
   }
 
-  async click(selector: string): Promise<void> {
+  async click(selector: string, options?: { navigationMs?: number }): Promise<void> {
     await this.paceAction();
     const navigation = this.watchNavigation();
     // Click in the page. Playwright's actionability check waits until a captcha iframe stops
@@ -437,7 +440,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
         this.first(selector).click({ timeout: 4_000, noWaitAfter: true, force: true }),
       );
     }
-    await this.settleNavigation(await navigation);
+    await this.settleNavigation(await navigation, options?.navigationMs);
   }
 
   async text(selector: string): Promise<string | null> {

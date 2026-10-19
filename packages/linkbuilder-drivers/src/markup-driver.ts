@@ -303,7 +303,7 @@ export class MarkupBoardDriver implements BoardDriver {
     // WoltLab copies the XSRF cookie into the hidden field after the page scripts run.
     await session.waitFor(".xsrfTokenInputHandled", { timeoutMs: 5_000 });
     await this.fillLoginQuestion(session);
-    await session.click(LOGIN_SUBMIT);
+    await session.click(LOGIN_SUBMIT, { navigationMs: 12_000 });
   }
 
   private async fillLoginQuestion(session: BrowserSession): Promise<void> {

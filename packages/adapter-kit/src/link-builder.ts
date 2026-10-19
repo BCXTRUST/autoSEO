@@ -102,7 +102,7 @@ export interface BrowserSession {
   holdForm?(): Promise<void>;
   /** The current signup step was submitted. Scrolling and navigation work again. */
   releaseForm?(): Promise<void>;
-  click(selector: string): Promise<void>;
+  click(selector: string, options?: { navigationMs?: number }): Promise<void>;
   /** Visible text of the first match, or null when nothing matches. */
   text(selector: string): Promise<string | null>;
   exists(selector: string): Promise<boolean>;
