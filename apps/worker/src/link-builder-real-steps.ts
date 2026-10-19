@@ -664,17 +664,14 @@ async function hostsStuckOnLogin(
   } catch {
     return stuck;
   }
-  const seen = new Set<string>();
-  for (const step of steps) {
-    if (!step.hostId || seen.has(step.hostId)) continue;
-    seen.add(step.hostId);
-    const outcome =
-      step.outcome && typeof step.outcome === "object"
-        ? (step.outcome as Record<string, unknown>)
-        : {};
-    const error = step.error ?? "";
-    if (outcome.login === false || /angaben sind ungültig/i.test(error)) stuck.add(step.hostId);
-  }
+  const newest = steps[0];
+  if (!newest?.hostId) return stuck;
+  const outcome =
+    newest.outcome && typeof newest.outcome === "object"
+      ? (newest.outcome as Record<string, unknown>)
+      : {};
+  const error = newest.error ?? "";
+  if (outcome.login === false || /angaben sind ungültig/i.test(error)) stuck.add(newest.hostId);
   return stuck;
 }
 
