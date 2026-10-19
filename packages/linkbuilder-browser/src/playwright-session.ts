@@ -754,6 +754,14 @@ export class PlaywrightBrowserSession implements BrowserSession {
           return false;
         }
       };
+      const visibleFieldCount = (form: DomNode) => {
+        let count = 0;
+        for (const el of form.querySelectorAll("input, textarea, select")) {
+          const type = (el.getAttribute("type") ?? "").toLowerCase();
+          if (type !== "hidden") count += 1;
+        }
+        return count;
+      };
       const accountForm = () => {
         const forms = [...rootDoc.document.querySelectorAll("form")];
         let best: DomNode | null = null;
@@ -761,7 +769,10 @@ export class PlaywrightBrowserSession implements BrowserSession {
         for (const candidate of forms) {
           const action = (candidate.getAttribute("action") ?? "").toLowerCase();
           let score = 1;
-          if (
+          // A register control rendered as a button-only form must not hide the login form.
+          if (visibleFieldCount(candidate) === 0) {
+            score = 1;
+          } else if (
             hasControl(candidate, "input[type='password']") &&
             (hasControl(candidate, "input[type='email']") ||
               hasControl(candidate, "input[name='email']"))

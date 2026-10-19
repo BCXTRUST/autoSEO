@@ -492,6 +492,42 @@ describe("generic form driver", () => {
     }
   });
 
+  it("logs in when a button-only register form sits beside the password form", async () => {
+    const page = `<!DOCTYPE html><html><body>
+<form id="search" action="/home/search"><input name="term" type="text"><button type="submit">Suche</button></form>
+<form action="/profile/logon" method="post">
+<label for="UserName">Benutzername</label><input id="UserName" name="UserName" type="text">
+<label for="Password">Kennwort</label><input id="Password" name="Password" type="password">
+<button type="submit">Anmelden</button>
+</form>
+<form action="/profile/register" method="post"><button type="submit">Registrieren</button></form>
+</body></html>`;
+    const loggedIn = `<!DOCTYPE html><html><body><a class="logout" href="/logout">Abmelden</a></body></html>`;
+    const server = createServer((request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(request.method === "POST" ? loggedIn : page);
+    });
+    const origin = await new Promise<string>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        resolve(`http://127.0.0.1:${port}/`);
+      });
+    });
+    const session = new HtmlBrowserSession();
+    const driver = new GenericFormDriver();
+    try {
+      expect(
+        await driver.login(session, origin, { username: "member", password: "secret-value" }),
+      ).toBe(true);
+      expect(await session.url()).toContain("/profile/logon");
+    } finally {
+      await new Promise((done, reject) =>
+        server.close((error) => (error ? reject(error) : done())),
+      );
+    }
+  });
+
   it("clicks the header register link and only then reads the form", async () => {
     const board = await startHeaderRegisterLinkBoard();
     const driver = new GenericFormDriver();

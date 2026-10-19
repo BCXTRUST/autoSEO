@@ -226,8 +226,16 @@ export class HtmlBrowserSession {
           return false;
         }
       };
+      const fieldCount = form.find("input, textarea, select").filter((_, el) => {
+        if (el.type !== "tag") return false;
+        const type = (this.$(el).attr("type") ?? "").toLowerCase();
+        return type !== "hidden";
+      }).length;
       let score = 1;
-      if (
+      // A register control rendered as a button-only form must not hide the login form.
+      if (fieldCount === 0) {
+        score = 1;
+      } else if (
         has("input[type='password']") &&
         (has("input[type='email']") || has("input[name='email']"))
       ) {
