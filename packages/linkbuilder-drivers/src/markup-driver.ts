@@ -23,6 +23,11 @@ import {
 } from "./messages.js";
 import { detectWidget } from "./widgets.js";
 
+const LOGIN_FORM = "form#login, form#loginForm";
+const LOGIN_SUBMIT =
+  "form#login #submit, form#loginForm #submit, form#login input[type='submit'], form#loginForm input[type='submit']";
+const LOGGED_OUT_LINK = "a.logout, a[href*='logout'], a[href*='Logout'], a[href*='logoff']";
+
 /**
  * Selectors-and-URL driver shared by the forum platforms. Every page action goes through
  * `BrowserSession`, so the pacing policy on the Playwright session applies unchanged.
@@ -255,7 +260,7 @@ export class MarkupBoardDriver implements BoardDriver {
   }
 
   async isLoggedIn(session: BrowserSession): Promise<boolean> {
-    return session.exists("a.logout");
+    return session.exists(LOGGED_OUT_LINK);
   }
 
   async login(
@@ -269,12 +274,12 @@ export class MarkupBoardDriver implements BoardDriver {
       await session.goto(homepageUrl);
     }
     if (await this.isLoggedIn(session)) return true;
-    if (!(await session.waitFor("form#login", { timeoutMs: 10_000 }))) return false;
+    if (!(await session.waitFor(LOGIN_FORM, { timeoutMs: 10_000 }))) return false;
     const fields = this.config.fields;
     await session.fill(`#${fields.username.id}`, account.username);
     await session.fill(`#${fields.password.id}`, account.password, { secret: true });
-    await session.click("form#login #submit");
-    return session.waitFor("a.logout", { timeoutMs: 10_000 });
+    await session.click(LOGIN_SUBMIT);
+    return session.waitFor(LOGGED_OUT_LINK, { timeoutMs: 10_000 });
   }
 
   async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {
