@@ -102,6 +102,17 @@ export async function discoverDueProjects(input: {
   for (const project of projects) {
     const followWarmup = await confirmedWarmupReady(input.prisma, project.id);
     if (!followWarmup && (await restoredHostWaiting(input.prisma, project))) continue;
+    const countHosts = input.prisma.lbHost.count;
+    if (!followWarmup && typeof countHosts === "function") {
+      const warmingShort = await countHosts({
+        where: {
+          projectId: project.id,
+          status: "warming",
+          accounts: { some: { emailVerifiedAt: { not: null }, postCount: { lt: 4 } } },
+        },
+      });
+      if (warmingShort > 0) continue;
+    }
     const schedule = project.schedule as { timezone?: string } | null;
     const timeZone = schedule?.timezone || "Europe/Berlin";
     const due = shouldDiscover(project.lastDiscoveredAt, input.now, timeZone);
