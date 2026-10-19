@@ -15,7 +15,8 @@ export const NEW_SIGNUP_BANNED_HOSTS = [
 const NO_PROGRESS =
   /did not finish|trying again|step failed, retrying|captcha not submitted|black pane|scrolled off the form|same page/i;
 
-const SANDBOX_GONE = /SandboxNotFound|sandbox not found|not running anymore/i;
+const SANDBOX_GONE =
+  /SandboxNotFound|sandbox not found|not running anymore|runner returned no response/i;
 
 export interface StuckRecord {
   action: string;

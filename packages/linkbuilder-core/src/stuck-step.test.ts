@@ -34,6 +34,12 @@ describe("stuck step", () => {
         { action: "Step failed, retrying", error: "SandboxNotFoundError", looked: false },
       ]),
     ).toBe("yield");
+    expect(
+      decideStuckStep([
+        { action: "Step failed, retrying", error: "runner returned no response", looked: false },
+        { action: "Looking at the page to find the form", error: null, looked: true },
+      ]),
+    ).toBe("yield");
   });
 
   it("blocks a new signup on the banned hosts and keeps every other host", () => {

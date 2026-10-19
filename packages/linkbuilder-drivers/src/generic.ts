@@ -189,7 +189,9 @@ function scoreConfirm(field: FormFieldInfo): number {
 function scoreBody(field: FormFieldInfo): number {
   if (field.tag !== "textarea" && field.role !== "textbox") return 0;
   if (isCaptchaField(field)) return 0;
-  return /message|body|content|comment|\braw\b|reply/.test(blob(field)) ? 4 : 0;
+  if (/message|body|content|comment|\braw\b|reply|beitrag|nachricht|antwort|kommentar/.test(blob(field)))
+    return 4;
+  return field.tag === "textarea" ? 2 : 0;
 }
 
 function scoreConsent(field: FormFieldInfo): number {
@@ -940,8 +942,7 @@ export class GenericFormDriver implements BoardDriver {
   }
 
   async isLoggedIn(session: BrowserSession): Promise<boolean> {
-    if (await session.exists("a.logout")) return true;
-    return session.exists("a[href*='logout']");
+    return session.exists(LOGGED_IN_SELECTOR);
   }
 
   async login(
@@ -963,7 +964,7 @@ export class GenericFormDriver implements BoardDriver {
     await session.fill(mapped.identity.selector, account.username);
     await session.fill(mapped.password.selector, account.password, { secret: true });
     await session.click(mapped.submit.selector);
-    return session.waitFor("a.logout, a[href*='logout']", { timeoutMs: 10_000 });
+    return session.waitFor(LOGGED_IN_SELECTOR, { timeoutMs: 10_000 });
   }
 
   async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {
@@ -982,9 +983,15 @@ export class GenericFormDriver implements BoardDriver {
     if (!(await this.replyReady(session))) {
       const followed = await followAnchor(
         session,
-        ["a.reply", "a[href*='mode=reply']", "a[href*='add-reply']", "a[href*='/reply']"],
-        /reply|antworten|post a reply/i,
-        /quote|edit/i,
+        [
+          "a.reply",
+          "a[href*='mode=reply']",
+          "a[href*='add-reply']",
+          "a[href*='/reply']",
+          "a[href*='/forum/post/']",
+        ],
+        /reply|antworten|antwort|post a reply/i,
+        /quote|edit|zitat/i,
       );
       if (!followed) {
         const href = await session.attribute(
@@ -1008,6 +1015,7 @@ export class GenericFormDriver implements BoardDriver {
 
   async submitReply(session: BrowserSession): Promise<ReplyResult> {
     if (!this.replySelector) throw new UnmappedFormError("reply");
+    const before = await session.url();
     await session.click(this.replySelector.submit);
     await session.waitFor("#message, .error", { timeoutMs: 15_000 });
     const messages = await this.pageMessages(session);
@@ -1015,7 +1023,14 @@ export class GenericFormDriver implements BoardDriver {
     if (href && postedSuccessfully(messages.join("\n"))) {
       return { kind: "posted", permalink: new URL(href, await session.url()).href };
     }
-    if (await session.exists("form")) return { kind: "rejected", messages };
+    const after = await session.url();
+    if (/\/forum\/topic\//i.test(after) && after !== before) {
+      return { kind: "posted", permalink: after };
+    }
+    if (await this.replyReady(session)) return { kind: "rejected", messages };
+    if (postedSuccessfully(messages.join("\n"))) {
+      return { kind: "posted", permalink: after };
+    }
     return { kind: "unknown", messages };
   }
 
@@ -1209,12 +1224,16 @@ function anchorsToThreads(
   return threads;
 }
 
+const LOGGED_IN_SELECTOR =
+  "a.logout, a[href*='logout'], a[href*='Logout'], a[href*='logoff'], a[href*='Logoff']";
+
 const THREAD_LINK_SELECTORS = [
   "#threads a",
   "li.thread a.threadTitle",
   "a.topictitle",
   "li.row a.topictitle",
   "a[href*='thread-']",
+  "a[href*='/forum/topic/']",
 ];
 
 async function collectThreads(session: BrowserSession): Promise<BoardThread[]> {

@@ -749,6 +749,11 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     }
     if (aOpen && deniedForStoredSignup(b.registrableDomain, deny)) return -1;
     if (bOpen && deniedForStoredSignup(a.registrableDomain, deny)) return 1;
+    const warmingPosts = (row: (typeof eligible)[number]) =>
+      row.status === "warming" ? (row.accounts[0]?.postCount ?? 0) : null;
+    const aPosts = warmingPosts(a);
+    const bPosts = warmingPosts(b);
+    if (aPosts !== null && bPosts !== null && aPosts !== bPosts) return aPosts - bPosts;
     return (
       hostSortRank(a) - hostSortRank(b) ||
       Number(prefer.has(b.registrableDomain)) - Number(prefer.has(a.registrableDomain)) ||
