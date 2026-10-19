@@ -1540,6 +1540,14 @@ async function noSignupForm(
       });
       if (updated.count !== 1) throw new StaleState(`Host ${host.id} moved during the step`);
       if (another) return;
+      const warmingLeft = await tx.lbHost.count({
+        where: {
+          projectId: ctx.project.id,
+          status: "warming",
+          accounts: { some: { emailVerifiedAt: { not: null }, postCount: { lt: 4 } } },
+        },
+      });
+      if (warmingLeft > 0) return;
       await tx.lbProject.updateMany({
         where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
         data: { status: transitionProject("active", "paused") },
