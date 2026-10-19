@@ -128,7 +128,7 @@ describe("recoverStuckStep", () => {
     expect(result).toBeNull();
   });
 
-  it("looks once, and pauses when that look still cannot see a page", async () => {
+  it("keeps going when the look has no computer yet", async () => {
     const looked = await recoverStuckStep(
       ctx({
         steps: [
@@ -140,10 +140,7 @@ describe("recoverStuckStep", () => {
         ],
       }),
     );
-    expect(looked?.kind).toBe("step");
-    if (looked?.kind !== "step") return;
-    expect(looked.outcome).toMatchObject({ pauseSandbox: true, looked: true });
-    expect(looked.lastAction).toBe("Paused, the browser step is stuck");
+    expect(looked).toBeNull();
 
     const again = await recoverStuckStep(
       ctx({

@@ -3408,10 +3408,19 @@ function stayOnRegistration(ctx: StepContext, stepKind: string): boolean {
   return REGISTER_LOOK_KINDS.has(stepKind);
 }
 
-async function lookAtStuckPage(ctx: StepContext, stepKind = ""): Promise<StepResult> {
+async function lookAtStuckPage(ctx: StepContext, stepKind = ""): Promise<StepResult | null> {
   try {
     const entry = await sessionForLook(ctx);
-    if (!entry) return pauseStuckProject(ctx);
+    if (!entry) {
+      // No computer is open yet. The planned step opens one. Pausing here
+      // stops the run before that step can sign in.
+      const project = await ctx.services.prisma.lbProject.findUnique({
+        where: { id: ctx.project.id },
+        select: { status: true },
+      });
+      if (project?.status === "active") return null;
+      return pauseStuckProject(ctx);
+    }
     const pageUrl = await entry.session.url().catch(() => ctx.host?.homepageUrl ?? "");
     const fields = entry.session.formFields
       ? await entry.session.formFields("form").catch(() => [])
