@@ -101,7 +101,7 @@ export class WoltlabDriver extends MarkupBoardDriver {
     const threadUrl = thread.url.replace(/\?action=firstNew$/, "");
     if (session.listAnchors) {
       await session.goto(threadUrl);
-      if (await this.replySelector(session)) return true;
+      if (await this.replyReady(session)) return true;
       const anchors = await session.listAnchors(REPLY_LINK);
       const reply = anchors.find((anchor) => /action=(?:reply|add)\b/.test(anchor.href));
       if (reply) {
@@ -128,6 +128,11 @@ export class WoltlabDriver extends MarkupBoardDriver {
     const permalink = woltlabPermalink(await session.url());
     if (permalink) return { kind: "posted", permalink };
     return { kind: "unknown", messages: await this.pageMessages(session) };
+  }
+
+  private async replyReady(session: BrowserSession): Promise<boolean> {
+    if (!session.isVisible) return false;
+    return session.isVisible("#text, textarea[name='text']");
   }
 
   private async replySelector(session: BrowserSession): Promise<string | null> {
