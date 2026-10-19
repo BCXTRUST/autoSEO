@@ -55,11 +55,12 @@ const TOPIC_LINK = "a.wbbTopicLink:not(.wbbBoardNode__lastPostLink)";
 const REPLY_LINK = "a[href*='action=reply'], a[href*='action=add']";
 const REPLY_FIELD = ["#text", "textarea[name='text']", "#message"] as const;
 const REPLY_SUBMIT = [
+  "form:has(#text) button[data-type='save']",
+  "form:has(textarea[name='text']) button[data-type='save']",
   "form:has(#text) .formSubmit input[type='submit']",
   "form:has(#text) .formSubmit button",
   "form:has(textarea[name='text']) .formSubmit input[type='submit']",
   "form:has(textarea[name='text']) .formSubmit button",
-  "form:has(#text) button[type='submit']",
 ].join(", ");
 
 const SIGNED_IN =
@@ -101,7 +102,7 @@ export class WoltlabDriver extends MarkupBoardDriver {
     const threadUrl = thread.url.replace(/\?action=firstNew$/, "");
     if (session.listAnchors) {
       await session.goto(threadUrl);
-      if (await this.replyReady(session)) return true;
+      if (await this.replySelector(session)) return true;
       const anchors = await session.listAnchors(REPLY_LINK);
       const reply = anchors.find((anchor) => /action=(?:reply|add)\b/.test(anchor.href));
       if (reply) {
@@ -128,11 +129,6 @@ export class WoltlabDriver extends MarkupBoardDriver {
     const permalink = woltlabPermalink(await session.url());
     if (permalink) return { kind: "posted", permalink };
     return { kind: "unknown", messages: await this.pageMessages(session) };
-  }
-
-  private async replyReady(session: BrowserSession): Promise<boolean> {
-    if (!session.isVisible) return false;
-    return session.isVisible("#text, textarea[name='text']");
   }
 
   private async replySelector(session: BrowserSession): Promise<string | null> {
