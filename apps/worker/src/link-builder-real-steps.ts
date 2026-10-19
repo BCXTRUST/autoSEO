@@ -2739,6 +2739,14 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     threads = await recoverOpenThreads(ctx, entry, driver, host, skip);
   }
   if (threads.length === 0) {
+    if (host.status === "warming" && account.emailVerifiedAt) {
+      return {
+        kind: "step",
+        lastAction: "No thread here, trying again",
+        hostId: host.id,
+        outcome: { rejected: [] },
+      };
+    }
     return {
       kind: "step",
       lastAction: "No thread here, moving on",
