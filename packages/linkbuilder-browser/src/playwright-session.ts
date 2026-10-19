@@ -616,24 +616,26 @@ export class PlaywrightBrowserSession implements BrowserSession {
   }
 
   async listAnchors(selector: string): Promise<Array<{ text: string; href: string }>> {
-    return this.page.evaluate((rootSelector) => {
-      const root = globalThis as unknown as {
-        document: { querySelectorAll: (selector: string) => Iterable<Element> };
-      };
-      interface Element {
-        textContent: string | null;
-        getAttribute: (name: string) => string | null;
-      }
-      const anchors: Array<{ text: string; href: string }> = [];
-      for (const el of root.document.querySelectorAll(rootSelector)) {
-        const href = el.getAttribute("href");
-        const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-        if (!href) continue;
-        anchors.push({ text, href });
-        if (anchors.length >= 120) break;
-      }
-      return anchors;
-    }, selector);
+    return deadline(
+      this.page.evaluate((rootSelector) => {
+        const root = globalThis as unknown as {
+          document: { querySelectorAll: (selector: string) => Iterable<Element> };
+        };
+        interface Element {
+          textContent: string | null;
+          getAttribute: (name: string) => string | null;
+        }
+        const anchors: Array<{ text: string; href: string }> = [];
+        for (const el of root.document.querySelectorAll(rootSelector)) {
+          const href = el.getAttribute("href");
+          const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
+          if (!href) continue;
+          anchors.push({ text, href });
+          if (anchors.length >= 120) break;
+        }
+        return anchors;
+      }, selector),
+    );
   }
 
   async drag(sourceSelector: string, targetSelector: string): Promise<void> {

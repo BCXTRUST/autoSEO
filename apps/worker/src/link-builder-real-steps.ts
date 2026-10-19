@@ -2497,6 +2497,10 @@ async function collectPageAnchors(
       } catch {
         // The open runner may not know this read yet.
       }
+      if (
+        found.some((link) => /\/forum\/thread\/|thread-\d+|viewtopic|showthread/i.test(link.href))
+      )
+        break;
     }
   }
   if (
