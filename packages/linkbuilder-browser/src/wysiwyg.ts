@@ -21,7 +21,20 @@ export async function writeWysiwygText(payload: {
   const classes = typeof node.className === "string" ? node.className.split(/\s+/) : [];
   if (tag !== "TEXTAREA" || !classes.includes("wysiwygTextarea")) return "plain";
   if (typeof scope.require !== "function") return "missing";
-  const html = wysiwygHtml(payload.text);
+  // Nested on purpose. Playwright sends this function's source into the page, so a
+  // helper declared outside it is not defined there.
+  function editorHtml(text: string): string {
+    const blocks = text
+      .split(/\n{2,}/)
+      .map((block) => block.trim())
+      .filter(Boolean);
+    const parts = blocks.length > 0 ? blocks : [text];
+    return parts.map((block) => `<p>${escapeText(block).replace(/\n/g, "<br>")}</p>`).join("");
+  }
+  function escapeText(value: string): string {
+    return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  const html = editorHtml(payload.text);
   return await new Promise((resolve) => {
     let settled = false;
     const finish = (value: "wrote" | "missing") => {

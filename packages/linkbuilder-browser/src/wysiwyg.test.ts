@@ -64,4 +64,10 @@ describe("wysiwygHtml", () => {
   it("escapes markup in the reply", () => {
     expect(wysiwygHtml("a < b & c")).toBe("<p>a &lt; b &amp; c</p>");
   });
+
+  it("keeps the editor markup helper inside the function the page runs", () => {
+    const source = writeWysiwygText.toString();
+    expect(source).toContain("function editorHtml");
+    expect(source).not.toContain("wysiwygHtml");
+  });
 });
