@@ -114,6 +114,37 @@ describe("woltlab login", () => {
     }
   });
 
+  it("treats the user menu as a signed-in homepage", async () => {
+    const home = `<!DOCTYPE html><html><body>
+<a class="userMenuItemLink" href="/account-management/">Konto</a>
+<a class="userMenuItemLink" href="/settings/">Einstellungen</a>
+</body></html>`;
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(home);
+    });
+    const origin = await new Promise<string>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        resolve(`http://127.0.0.1:${port}/`);
+      });
+    });
+    const session = new HtmlBrowserSession();
+    const driver = new WoltlabDriver();
+    try {
+      await session.goto(origin);
+      expect(await driver.isLoggedIn(session)).toBe(true);
+      expect(
+        await driver.login(session, origin, { username: "member", password: "secret-value" }),
+      ).toBe(true);
+    } finally {
+      await new Promise((doneClose, reject) =>
+        server.close((error) => (error ? reject(error) : doneClose())),
+      );
+    }
+  });
+
   it("lists topic links and opens the reply form", async () => {
     const index = `<!DOCTYPE html><html><body>
 <a class="wbbBoardNode__lastPostLink wbbTopicLink" href="/forum/thread/9-old/?action=firstNew">Old</a>

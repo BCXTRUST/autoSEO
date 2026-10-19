@@ -259,8 +259,13 @@ export class MarkupBoardDriver implements BoardDriver {
     return "unknown";
   }
 
+  /** Logout link, or a platform menu that only exists after sign-in. */
+  protected signedInSelector(): string {
+    return LOGGED_OUT_LINK;
+  }
+
   async isLoggedIn(session: BrowserSession): Promise<boolean> {
-    return session.exists(LOGGED_OUT_LINK);
+    return session.exists(this.signedInSelector());
   }
 
   async login(
@@ -276,11 +281,11 @@ export class MarkupBoardDriver implements BoardDriver {
     if (await this.isLoggedIn(session)) return true;
     if (!(await session.waitFor(LOGIN_FORM, { timeoutMs: 10_000 }))) return false;
     await this.submitLogin(session, account);
-    if (await session.waitFor(LOGGED_OUT_LINK, { timeoutMs: 10_000 })) return true;
+    if (await session.waitFor(this.signedInSelector(), { timeoutMs: 10_000 })) return true;
     // The question is missing on the first paint and the board asks for it after submit.
     if (await session.exists("#captchaAnswer")) {
       await this.submitLogin(session, account);
-      if (await session.waitFor(LOGGED_OUT_LINK, { timeoutMs: 10_000 })) return true;
+      if (await session.waitFor(this.signedInSelector(), { timeoutMs: 10_000 })) return true;
     }
     const detail = await this.loginFailure(session);
     if (detail) throw new Error(detail.slice(0, 240));

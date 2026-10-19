@@ -57,9 +57,16 @@ const REPLY_FIELD = ["#text", "textarea[name='text']", "#message"] as const;
 const REPLY_SUBMIT =
   "form .formSubmit input[type='submit'], form .formSubmit button[type='submit'], form button[type='submit']";
 
+const SIGNED_IN =
+  "a.logout, a[href*='logout'], a[href*='Logout'], a[href*='logoff'], a.userMenuItemLink, a[href*='account-management']";
+
 export class WoltlabDriver extends MarkupBoardDriver {
   constructor() {
     super(woltlabBoard);
+  }
+
+  protected override signedInSelector(): string {
+    return SIGNED_IN;
   }
 
   override async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {

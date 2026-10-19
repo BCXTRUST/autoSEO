@@ -680,9 +680,9 @@ async function hostsStuckOnLogin(
     const error = step.error ?? "";
     const reason = typeof outcome.reason === "string" ? outcome.reason : "";
     if (
-      outcome.login === false ||
       reason === "unmapped_form" ||
-      /angaben sind ungültig|kennwort ist falsch/i.test(error)
+      /angaben sind ungültig|kennwort ist falsch/i.test(error) ||
+      (outcome.login === false && error.length > 0)
     ) {
       stuck.add(step.hostId);
     }
