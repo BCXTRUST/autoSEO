@@ -64,6 +64,26 @@ describe("recoverStuckStep", () => {
     expect(result).toEqual({ kind: "wait", reason: "sandbox_gone" });
   });
 
+  it("keeps going when the stuck step has no current host", async () => {
+    const result = await recoverStuckStep(
+      ctx({
+        steps: [
+          {
+            outcome: { lastAction: "The page did not finish, trying again" },
+            error: null,
+            createdAt: new Date("2026-10-15T11:02:00Z"),
+          },
+          {
+            outcome: { lastAction: "Looking at the page to find the form", looked: true },
+            error: null,
+            createdAt: new Date("2026-10-15T11:01:00Z"),
+          },
+        ],
+      }),
+    );
+    expect(result).toBeNull();
+  });
+
   it("opens a new sandbox when none is running", async () => {
     const result = await recoverStuckStep(
       ctx({

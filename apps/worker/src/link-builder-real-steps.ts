@@ -3270,11 +3270,14 @@ export async function recoverStuckStep(ctx: StepContext): Promise<StepResult | n
   ) {
     return noSignupForm(ctx, ctx.host, []);
   }
-  if (
-    decision === "pause" &&
-    ctx.host?.status === "warming" &&
-    ctx.account?.emailVerifiedAt
-  ) {
+  if (decision === "pause" && !ctx.host) {
+    const project = await ctx.services.prisma.lbProject.findUnique({
+      where: { id: ctx.project.id },
+      select: { status: true },
+    });
+    if (project?.status === "active") return null;
+  }
+  if (decision === "pause" && ctx.host?.status === "warming" && ctx.account?.emailVerifiedAt) {
     return null;
   }
   if (decision === "pause") return pauseStuckProject(ctx);
