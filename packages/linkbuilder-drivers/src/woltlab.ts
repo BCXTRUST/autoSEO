@@ -55,6 +55,7 @@ const TOPIC_LINK = "a.wbbTopicLink:not(.wbbBoardNode__lastPostLink)";
 const REPLY_LINK = "a[href*='action=reply'], a[href*='action=add']";
 const REPLY_FIELD = ["#text", "textarea[name='text']", "#message"] as const;
 const REPLY_SUBMIT = [
+  "button[data-type='save']",
   "form:has(#text) button[data-type='save']",
   "form:has(textarea[name='text']) button[data-type='save']",
   "form:has(#text) .formSubmit input[type='submit']",
