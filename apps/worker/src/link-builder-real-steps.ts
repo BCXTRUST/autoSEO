@@ -790,7 +790,12 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
         })
       );
     }
-    if (row.status === "ready") return !row.placements.some((p) => p.status !== "pending");
+    if (row.status === "ready") {
+      const account = row.accounts[0];
+      const timeZone = ctx.project.schedule?.timezone || "Europe/Berlin";
+      if (account?.lastPostAt && sameLocalDay(account.lastPostAt, ctx.now, timeZone)) return false;
+      return !row.placements.some((p) => p.status !== "pending");
+    }
     if (row.status === "pending_admin") return dueAdmin.has(row.id);
     if (row.status === "dead") {
       if (row.statusReason === "no_open_thread" && row.accounts.length > 0) return true;
@@ -2656,6 +2661,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       hostId: host.id,
       lastAction: "Link waits for a later day",
       outcome: { refused: "link_day" },
+      run: { currentHostId: null },
     };
   }
   const entry = requireSession(ctx, host);
