@@ -1,5 +1,6 @@
 import type { BrowserSession } from "@rakazo/adapter-kit";
 import type { BoardThread, ReplyResult } from "./driver.js";
+import { readThreadMetaFromSession } from "./thread-meta.js";
 import { commonFields, defineBoard, field, MarkupBoardDriver } from "./markup-driver.js";
 
 /** Canonical WoltLab permalink `/forum/thread/<id>-slug/?postID=<id>#post<id>`. */
@@ -136,6 +137,10 @@ export class WoltlabDriver extends MarkupBoardDriver {
       if (threads.length >= 25) break;
     }
     return threads;
+  }
+
+  override async readThreadMeta(session: BrowserSession) {
+    return readThreadMetaFromSession(session, "woltlab");
   }
 
   override async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {

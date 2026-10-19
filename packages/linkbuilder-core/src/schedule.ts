@@ -118,6 +118,20 @@ export function nextWindowStart(now: Date, schedule: ScheduleWindow): Date {
   return new Date(limit);
 }
 
+/** First instant of the local calendar day that contains `now`. */
+export function startOfZonedDay(now: Date, timeZone: string): Date {
+  const key = localDateKey(now, timeZone);
+  let low = now.getTime() - 36 * 3_600_000;
+  let high = now.getTime();
+  if (localDateKey(new Date(low), timeZone) === key) low -= 24 * 3_600_000;
+  while (high - low > 1_000) {
+    const mid = Math.floor((low + high) / 2);
+    if (localDateKey(new Date(mid), timeZone) === key) high = mid;
+    else low = mid;
+  }
+  return new Date(high);
+}
+
 /** Short local label: "Now" or "Sat 09:00" in the project timezone. */
 export function formatNextRun(now: Date, schedule: ScheduleWindow): string {
   if (isWithinWindow(now, schedule, { liveMet: false }).active) return "Now";

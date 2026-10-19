@@ -48,6 +48,20 @@ export interface OpsState {
     lastAction: string | null;
     lastError: string | null;
   } | null;
+  recentSteps?: Array<{
+    createdAt: string;
+    kind: string;
+    domain: string | null;
+    lastAction: string | null;
+    error: string | null;
+  }>;
+  recentCaptcha?: Array<{
+    domain: string | null;
+    type: string;
+    outcome: string;
+    credits: number;
+    errorCode: string | null;
+  }>;
 }
 
 export function opsAuthorized(
@@ -204,7 +218,44 @@ export async function opsState(
       currentUrl: run?.currentHostId === host.id ? (run.currentUrl ?? null) : null,
     })),
   );
+  const domainOf = new Map(hosts.map((host) => [host.id, host.registrableDomain]));
+  const [steps, captcha] = await Promise.all([
+    run
+      ? deps.prisma.lbRunStep.findMany({
+          where: { runId: run.id },
+          orderBy: { createdAt: "desc" },
+          take: 40,
+          select: { createdAt: true, kind: true, hostId: true, outcome: true, error: true },
+        })
+      : Promise.resolve([]),
+    deps.prisma.lbCaptchaEvent.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { hostId: true, type: true, outcome: true, creditsCharged: true },
+    }),
+  ]);
+  state.recentSteps = steps.map((step) => ({
+    createdAt: step.createdAt.toISOString(),
+    kind: step.kind,
+    domain: step.hostId ? (domainOf.get(step.hostId) ?? null) : null,
+    lastAction: redactOpsSecrets(stepAction(step.outcome), deps.env).slice(0, 200) || null,
+    error: step.error ? redactOpsSecrets(step.error, deps.env).slice(0, 200) : null,
+  }));
+  state.recentCaptcha = captcha.map((event) => ({
+    domain: event.hostId ? (domainOf.get(event.hostId) ?? null) : null,
+    type: event.type,
+    outcome: event.outcome,
+    credits: event.creditsCharged,
+    errorCode: null,
+  }));
   return state;
+}
+
+function stepAction(outcome: unknown): string {
+  if (!outcome || typeof outcome !== "object") return "";
+  const action = (outcome as { lastAction?: unknown }).lastAction;
+  return typeof action === "string" ? action : "";
 }
 
 function opsStatus(header: string | undefined): 200 | 401 | 404 {

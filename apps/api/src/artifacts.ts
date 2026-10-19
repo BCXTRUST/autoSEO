@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ArtifactStore } from "@rakazo/adapter-kit";
+import type { AdapterContext, ArtifactStore } from "@rakazo/adapter-kit";
 import type { Actor } from "@rakazo/contracts";
 import { ATTACHMENT_MAX_COUNT } from "@rakazo/contracts";
 import {
@@ -113,6 +113,31 @@ export async function getWorkspaceArtifact(
   });
   if (!row) throw new IsolationError();
   return readArtifact(deps.artifacts, actor, row, input.contextBotId);
+}
+
+export function artifactFileMissing(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  return code === "ENOENT" || code === "EISDIR";
+}
+
+/** Row bytes win. A missing file is a not-found, not an uncaught 500. */
+export async function readArtifactBytes(
+  artifacts: ArtifactStore,
+  row: { id: string; storageKey: string; content?: Uint8Array | null },
+  context: AdapterContext,
+): Promise<Uint8Array> {
+  if (row.content && row.content.byteLength > 0) return new Uint8Array(row.content);
+  try {
+    return await artifacts.get(row.storageKey, context);
+  } catch (error) {
+    if (artifactFileMissing(error)) {
+      const missing = new Error("Artifact file is missing");
+      (missing as { code?: string }).code = "ENOENT";
+      throw missing;
+    }
+    throw error;
+  }
 }
 
 async function readArtifact(

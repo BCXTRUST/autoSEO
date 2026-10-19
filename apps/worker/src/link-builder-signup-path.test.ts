@@ -15,7 +15,6 @@ import {
   REAL_STEP_HANDLERS,
   recoverStuckStep,
   type StepContext,
-  warmupReplyChoice,
 } from "./link-builder-real-steps.js";
 
 const FORM_URL = "https://aquacomputer.de/ucp.php?mode=register&agreed=1";
@@ -241,6 +240,7 @@ function harness(hosts: StoredHost[]) {
   const prisma = {
     lbHost: {
       findMany: async () => hosts,
+      count: async () => 0,
       updateMany: async (args: { where: { id: string; status: string }; data: StoredHost }) => {
         const row = hosts.find(
           (host) => host.id === args.where.id && host.status === args.where.status,
@@ -416,11 +416,6 @@ describe("signup path", () => {
     expect(transitionHost("qualified", "account_active").status).toBe("warming");
     expect(postsRequiredBeforeLink(2, "phpbb")).toBe(4);
     expect(postsRequiredBeforeLink(5, "phpbb")).toBe(5);
-    expect(warmupReplyChoice("de")).toMatchObject({
-      linkSlot: "none",
-      targetUrl: null,
-      anchorText: null,
-    });
     const verified = storedHost({
       id: "verified",
       registrableDomain: "med2-forum.de",
@@ -728,6 +723,7 @@ describe("signup path", () => {
         }),
         services: {
           pageHelperButtonSelector: "[data-page-helper]",
+          prisma: { lbCaptchaEvent: { count: async () => 0 } },
           captcha: {
             solve: async (request: { websiteKey: string }) => {
               calls.solve += 1;

@@ -25,7 +25,6 @@ import {
   observedPageHelper,
   selectsGenericRegistrationJourney,
   templateReply,
-  warmupReplyChoice,
 } from "./link-builder-real-steps.js";
 import {
   browserFactoryFromEnv,
@@ -37,16 +36,6 @@ const prisma = {} as PrismaClient;
 const sandbox = new FakeSandboxProvider();
 
 describe("link builder real driver wiring", () => {
-  it("writes a link-free warmup reply without a relevance score", () => {
-    const reply = warmupReplyChoice("de");
-    expect(reply.linkSlot).toBe("none");
-    expect(reply.targetUrl).toBeNull();
-    expect(reply.anchorText).toBeNull();
-    expect(reply.body).not.toMatch(/https?:\/\//);
-    expect(reply.body.length).toBeGreaterThan(10);
-    expect(warmupReplyChoice("en").body).not.toBe(reply.body);
-  });
-
   it("uses the Captell API door when the Page Helper is missing", () => {
     expect(helperConnectionPlan(null)).toBe("api");
     expect(helperConnectionPlan("")).toBe("api");

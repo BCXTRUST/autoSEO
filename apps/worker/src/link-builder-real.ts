@@ -79,6 +79,12 @@ import {
   type StepContext,
   type StepResult,
 } from "./link-builder-real-steps.js";
+import {
+  berlinDayStart,
+  dailyRefusal,
+  distinctWarmupThreads,
+  verifiedFlag,
+} from "./link-builder-warmup.js";
 
 /**
  * M2 browser-driven runner behind `LINK_BUILDER_DRIVER=real`. Each tick takes at most one step
@@ -616,6 +622,11 @@ export class LinkBuilderRealRunner {
     if (!schedule.active && !liveMet) return { kind: "close" };
     const entry = this.pool.get(ctx.project.id);
     const host = ctx.host;
+    const minPostsBeforeLink = postsRequiredBeforeLink(
+      ctx.project.warmup.minPostsBeforeLink,
+      ctx.host?.platform ?? "",
+    );
+    const warmupPosts = await this.distinctWarmupCount(ctx);
     return planRealStep({
       runStatus: ctx.run.status,
       liveMet,
@@ -634,25 +645,16 @@ export class LinkBuilderRealRunner {
       },
       warmupMet: ctx.account
         ? isWarmupMet({
-            postCount: ctx.account.postCount,
+            postCount: warmupPosts,
             accountCreatedAt: ctx.account.createdAt,
             now: ctx.now,
             minAccountAgeHours: ctx.project.warmup.minAccountAgeHours,
-            minPostsBeforeLink: postsRequiredBeforeLink(
-              ctx.project.warmup.minPostsBeforeLink,
-              ctx.host?.platform ?? "",
-            ),
+            minPostsBeforeLink,
           })
         : false,
-      warmupPostsShort: ctx.account
-        ? ctx.account.postCount <
-          postsRequiredBeforeLink(ctx.project.warmup.minPostsBeforeLink, ctx.host?.platform ?? "")
-        : false,
-      minPostsBeforeLink: postsRequiredBeforeLink(
-        ctx.project.warmup.minPostsBeforeLink,
-        ctx.host?.platform ?? "",
-      ),
-      warmupPosts: ctx.account?.postCount ?? 0,
+      warmupPostsShort: ctx.account ? warmupPosts < minPostsBeforeLink : false,
+      minPostsBeforeLink,
+      warmupPosts,
       placement: ctx.placement
         ? { status: ctx.placement.status as never, counted: ctx.placement.counted }
         : null,
@@ -660,6 +662,28 @@ export class LinkBuilderRealRunner {
       adminCheckDue:
         host?.status === "pending_admin" ? await this.adminCheckDue(ctx, host.id) : false,
     });
+  }
+
+  /** Distinct real warmup threads. Canned warmup-fixed drafts count as zero. */
+  private async distinctWarmupCount(ctx: StepContext): Promise<number> {
+    if (!ctx.account || !ctx.host) return 0;
+    const rows = await this.deps.prisma.lbDraft.findMany({
+      where: { projectId: ctx.project.id, threadCandidate: { hostId: ctx.host.id } },
+      select: {
+        modelId: true,
+        status: true,
+        qualityChecks: true,
+        threadCandidate: { select: { url: true } },
+      },
+    });
+    return distinctWarmupThreads(
+      rows.map((row) => ({
+        url: row.threadCandidate.url,
+        modelId: row.modelId,
+        status: row.status,
+        verified: verifiedFlag(row.qualityChecks),
+      })),
+    );
   }
 
   private async adminCheckDue(ctx: StepContext, hostId: string): Promise<boolean> {
@@ -783,6 +807,15 @@ export class LinkBuilderRealRunner {
         });
         if (fenced.count !== 1) throw new StaleState("Run lease was lost");
         await result.apply?.(tx);
+        const refused = dailyRefusal(result.outcome);
+        if (refused && result.hostId) {
+          const since = berlinDayStart(ctx.now, ctx.project.schedule?.timezone || "Europe/Berlin");
+          const prior = await tx.lbRunStep.findMany({
+            where: { runId: ctx.run.id, hostId: result.hostId, createdAt: { gte: since } },
+            select: { outcome: true },
+          });
+          if (prior.some((step) => dailyRefusal(step.outcome) === refused)) return;
+        }
         await tx.lbRunStep.create({
           data: {
             workspaceId: ctx.project.workspaceId,
@@ -989,6 +1022,9 @@ export class LinkBuilderRealRunner {
           size: bytes.byteLength,
           hash: createHash("sha256").update(bytes).digest("hex"),
           storageKey: stored.id,
+          ...(bytes.byteLength > 0 && bytes.byteLength <= 3_000_000
+            ? { content: Buffer.from(bytes) }
+            : {}),
         },
         select: { id: true },
       })

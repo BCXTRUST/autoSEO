@@ -14,6 +14,7 @@ import type {
 } from "./driver.js";
 import { holdSignupForm, releaseSignupForm } from "./driver.js";
 import { captchaRejected } from "./messages.js";
+import { readThreadMetaFromSession } from "./thread-meta.js";
 import { detectWidget } from "./widgets.js";
 
 /*
@@ -282,6 +283,10 @@ export class PhpbbDriver implements BoardDriver {
       `${root}search.php?keywords=${encodeURIComponent(keywords)}&sr=topics&sk=t&sd=d`,
     );
     return readTopicRows(session, 8);
+  }
+
+  async readThreadMeta(session: BrowserSession) {
+    return readThreadMetaFromSession(session, "phpbb");
   }
 
   async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {

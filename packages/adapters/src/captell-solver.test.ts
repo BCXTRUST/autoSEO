@@ -437,7 +437,9 @@ describe("CaptellHttpSolver", () => {
       expect(error).toBeInstanceOf(CaptchaSolverError);
       expect(error).toMatchObject({ code: entry.code, retryable: false });
       expect(emulator.requests).toHaveLength("requests" in entry ? entry.requests : 1);
-      expect(error instanceof Error ? error.message : "").not.toMatch(/not enough credits/i);
+      const message = error instanceof Error ? error.message : "";
+      expect(message).not.toMatch(/ct_live_|Bearer\s+\S+/);
+      if (entry.code !== "error") expect(message).toMatch(/^Captell /);
     }
   });
 
@@ -600,5 +602,29 @@ describe("CaptellHttpSolver", () => {
       solver(secret).answerQuestion({ question: "Enter the email code" }, context),
     ).resolves.toEqual({ couldNotAnswer: true });
     expect(secret.requests).toHaveLength(0);
+  });
+
+  it("keeps the Captell status and error code on an unsolvable 422", async () => {
+    const emulator = new CaptellEmulator([
+      {
+        op: "solve",
+        status: 422,
+        body: {
+          errorCode: "ERROR_CAPTCHA_UNSOLVABLE",
+          errorDescription: "Workers could not solve the captcha",
+        },
+      },
+    ]);
+    const error = await solver(emulator, { maxRetries: 0 })
+      .solve({ type: "ImageToText", imagePng: png }, context)
+      .then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+    expect(error).toBeInstanceOf(CaptchaSolverError);
+    expect(error).toMatchObject({ code: "invalid_request" });
+    expect(error instanceof Error ? error.message : "").toContain(
+      "Captell 422 ERROR_CAPTCHA_UNSOLVABLE",
+    );
   });
 });

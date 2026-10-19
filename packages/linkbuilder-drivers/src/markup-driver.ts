@@ -21,6 +21,7 @@ import {
   registrationClosed,
   relFromAttribute,
 } from "./messages.js";
+import { readThreadMetaFromSession } from "./thread-meta.js";
 import { detectWidget } from "./widgets.js";
 
 const LOGIN_FORM = "form#login, form#loginForm";
@@ -350,6 +351,10 @@ export class MarkupBoardDriver implements BoardDriver {
       });
     }
     return threads;
+  }
+
+  async readThreadMeta(session: BrowserSession) {
+    return readThreadMetaFromSession(session, "markup");
   }
 
   async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {

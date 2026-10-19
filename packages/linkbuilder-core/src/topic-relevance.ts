@@ -173,6 +173,91 @@ export function pageMatchesTopics(page: TopicPage, project: TopicProject): boole
   return terms.some((term) => hasTerm(blob, term));
 }
 
+/** Title or board section that is an introduction, a game, or off-topic chat. */
+const WARMUP_TITLE_BLOCK =
+  /hallo|vorstell|neu hier|willkommen|stelle mich|abc|a-z|a bis z|kette|wörter|this or that|filme|serie|musik|hört ihr|kocht ihr|news|wahl|plauder|café|cafe|off.?topic|laber|spiel|witz|geburtstag/i;
+
+export interface WarmupPost {
+  author: string;
+  at: string | null;
+}
+
+export interface WarmupThreadMeta {
+  lastActivityAt: string | null;
+  posts: WarmupPost[];
+  closed: boolean;
+  section: string | null;
+}
+
+export type WarmupRejectReason =
+  | "intro_or_game"
+  | "off_topic_thread"
+  | "stale"
+  | "no_other_users"
+  | "own_last"
+  | "closed";
+
+const DAY_MS = 86_400_000;
+
+function namesMatch(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+function ageDays(at: string, now: Date): number | null {
+  const parsed = Date.parse(at);
+  if (!Number.isFinite(parsed)) return null;
+  return (now.getTime() - parsed) / DAY_MS;
+}
+
+/**
+ * A warmup reply needs an active on-topic thread that someone else posted in recently.
+ * Tags on the host do not count as topic text.
+ */
+export function warmupThreadEligible(input: {
+  title: string;
+  section?: string | null;
+  firstPost?: string | null;
+  meta: WarmupThreadMeta;
+  username: string;
+  now: Date;
+  project: TopicProject;
+  activityDays?: number;
+}): { ok: true } | { ok: false; reason: WarmupRejectReason } {
+  const section = input.section ?? input.meta.section;
+  if (WARMUP_TITLE_BLOCK.test(`${input.title}\n${section ?? ""}`)) {
+    return { ok: false, reason: "intro_or_game" };
+  }
+  const terms = topicTerms(input.project);
+  if (terms.length > 0) {
+    const first = (input.firstPost ?? "").slice(0, 1_500);
+    const onTopic = terms.some((term) => hasTerm(input.title, term) || hasTerm(first, term));
+    if (!onTopic) return { ok: false, reason: "off_topic_thread" };
+  }
+  const windowDays = input.activityDays ?? 30;
+  const lastAge = input.meta.lastActivityAt ? ageDays(input.meta.lastActivityAt, input.now) : null;
+  if (lastAge === null || lastAge > windowDays) return { ok: false, reason: "stale" };
+  const foreignRecent = input.meta.posts.some((post) => {
+    if (!post.at || namesMatch(post.author, input.username)) return false;
+    const age = ageDays(post.at, input.now);
+    return age !== null && age >= 0 && age <= 14;
+  });
+  if (!foreignRecent) return { ok: false, reason: "no_other_users" };
+  let newest: WarmupPost | null = null;
+  let newestAt = Number.NEGATIVE_INFINITY;
+  for (const post of input.meta.posts) {
+    if (!post.at) continue;
+    const at = Date.parse(post.at);
+    if (!Number.isFinite(at) || at < newestAt) continue;
+    newestAt = at;
+    newest = post;
+  }
+  if (newest && namesMatch(newest.author, input.username)) {
+    return { ok: false, reason: "own_last" };
+  }
+  if (input.meta.closed) return { ok: false, reason: "closed" };
+  return { ok: true };
+}
+
 /** Qualification writes `off_topic` instead of `qualified` when the page misses every lane. */
 export function topicStatusForPage(status: string, page: TopicPage, project: TopicProject): string {
   if (status !== "qualified") return status;

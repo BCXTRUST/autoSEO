@@ -58,6 +58,39 @@ export function usablePageLinks(
   return links;
 }
 
+const DROPPED_QUERY = new Set(["action", "postid", "p", "start", "page", "sid", "view"]);
+
+/**
+ * One thread, whatever last-post anchor or session id the listing used.
+ * phpBB `t` and `f` stay. WoltLab and diabetes topic ids drop the slug.
+ */
+export function threadKey(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url.split("#")[0]?.toLowerCase() ?? url.toLowerCase();
+  }
+  parsed.hash = "";
+  parsed.hostname = parsed.hostname.toLowerCase();
+  for (const key of [...parsed.searchParams.keys()]) {
+    if (DROPPED_QUERY.has(key.toLowerCase())) parsed.searchParams.delete(key);
+  }
+  parsed.pathname = parsed.pathname
+    .replace(/\/page\/\d+\/?$/i, "/")
+    .replace(/\/seite-\d+\/?$/i, "/")
+    .replace(/\/forum\/thread\/(\d+)-[^/]+\/?$/i, "/forum/thread/$1/")
+    .replace(/\/forum\/topic\/(\d+)\/[^/]+\/?$/i, "/forum/topic/$1/");
+  const keys = [...parsed.searchParams.keys()].sort();
+  const search = new URLSearchParams();
+  for (const key of keys) {
+    const value = parsed.searchParams.get(key);
+    if (value !== null) search.set(key, value);
+  }
+  const query = search.toString();
+  return `${parsed.origin}${parsed.pathname}${query ? `?${query}` : ""}`;
+}
+
 function withoutFirstNew(url: string): string {
   try {
     const parsed = new URL(url);

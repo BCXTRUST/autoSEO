@@ -752,6 +752,8 @@ model Artifact {
   size        Int
   hash        String
   storageKey  String
+  /// Bytes kept on the row so a restart cannot turn a screenshot read into HTTP 500.
+  content     Bytes?
   createdAt   DateTime @default(now())
 
   @@index([workspaceId, botId])

@@ -442,6 +442,46 @@ describe("link builder routes", () => {
     });
     expect(unrelated.response.status).toBe(404);
     expect(get).toHaveBeenCalledTimes(1);
+
+    const stored = {
+      id: "cmvf42nrjdalw67o47se7lqa1",
+      workspaceId: actor.workspaceId,
+      botId: null,
+      groupId: null,
+      userId: actor.userId,
+      runId: null,
+      name: "step-4-posted.png",
+      mimeType: "image/png",
+      size: 4,
+      hash: "abc",
+      storageKey: "stored-live",
+      content: new Uint8Array([9, 8, 7, 6]),
+      createdAt: new Date("2026-10-19T19:21:06.000Z"),
+    };
+    (prisma.lbRunStep.findFirst as ReturnType<typeof vi.fn>).mockImplementation(
+      async (query: { where: { artifactIds: { has: string } } }) =>
+        query.where.artifactIds.has === stored.id ? { id: "step-live" } : null,
+    );
+    (prisma.artifact.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(stored);
+    const live = await call(routerDeps, actor, "linkBuilder/artifacts/get", {
+      projectId: "project-1",
+      artifactId: stored.id,
+    });
+    expect(live.response.status).toBe(200);
+    const liveBody = (await live.response.json()) as { json: { contentBase64: string } };
+    expect(Buffer.from(liveBody.json.contentBase64, "base64")).toEqual(Buffer.from([9, 8, 7, 6]));
+    expect(get).toHaveBeenCalledTimes(1);
+
+    (prisma.artifact.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...stored,
+      content: null,
+    });
+    get.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    const missing = await call(routerDeps, actor, "linkBuilder/artifacts/get", {
+      projectId: "project-1",
+      artifactId: stored.id,
+    });
+    expect(missing.response.status).toBe(404);
   });
 
   it("checks Captell balance through the HTTP solver and never returns the token", async () => {

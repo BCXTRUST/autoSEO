@@ -110,6 +110,7 @@ import {
   transitionRun,
   verifyDeadline,
   WORKABLE_HOST_ORDER,
+  warmupThreadEligible,
 } from "@rakazo/linkbuilder-core";
 import {
   acceptCookieWall,
@@ -121,6 +122,7 @@ import {
   clickResendMail,
   enrichCaptchaChallenge,
   formErrorFixable,
+  formErrorTextFromHtml,
   GenericFormDriver,
   instructionClickSelector,
   isLoginPath,
@@ -143,10 +145,21 @@ import {
   PAGE_LOOK_WAIT_MS,
   type PageLink,
   pageLookPrompt,
+  threadKey,
   threadsFromLinks,
   usablePageLinks,
 } from "./link-builder-page-move.js";
 import { ensureProxyLease } from "./link-builder-proxy.js";
+import {
+  berlinDayStart,
+  CAPTCHA_SOLVES_PER_HOST_DAY,
+  distinctWarmupThreads,
+  rejectionIsStored,
+  replyBodyBlocked,
+  replyVisibility,
+  verifiedFlag,
+  warmupPaceBlocked,
+} from "./link-builder-warmup.js";
 
 /** Bot id recorded on forum logins the link builder stores; logins are workspace-shared. */
 export const LINK_BUILDER_LOGIN_BOT = "link-builder";
@@ -1447,17 +1460,39 @@ async function registrationOutcome(
         apply: (tx) => moveHost(tx, host, "account_active"),
         afterCommit: settled,
       };
-    case "form_error":
+    case "form_error": {
+      const visible = result.messages.map((message) => message.trim()).filter(Boolean);
+      const extra: string[] = [];
+      let reason = redactAll(ctx, visible).join(" ").slice(0, 500);
+      if (!reason) {
+        const html = entry.session.pageHtml ? await entry.session.pageHtml().catch(() => "") : "";
+        reason = redactAll(ctx, [formErrorTextFromHtml(html)])
+          .join(" ")
+          .slice(0, 500);
+        if (!reason) reason = "form_error:no_text";
+        if (html) {
+          extra.push(
+            await ctx
+              .storeArtifact(
+                `step-${ctx.stepIndex}-form-error.html`,
+                "text/html",
+                new TextEncoder().encode(html),
+              )
+              .catch(() => ""),
+          );
+        }
+        extra.push(...(await screenshot(ctx, entry, "form-error")));
+      }
+      const shown = visible.length > 0 ? redactAll(ctx, visible) : [reason];
       return {
         ...base,
+        artifactIds: [...artifactIds, ...extra.filter(Boolean)],
         lastAction: "The board refused the registration",
-        outcome: { registration: result.kind, messages: redactAll(ctx, result.messages) },
-        apply: (tx) =>
-          moveHost(tx, host, "failed", {
-            statusReason: redactAll(ctx, result.messages).join(" ").slice(0, 500),
-          }),
+        outcome: { registration: result.kind, messages: shown },
+        apply: (tx) => moveHost(tx, host, "failed", { statusReason: reason }),
         afterCommit: settled,
       };
+    }
     case "unknown": {
       const plan = await desktopSkipPlan(ctx, host, "unknown_page_state");
       return {
@@ -1482,27 +1517,6 @@ export function selectsGenericRegistrationJourney(
 ): boolean {
   if (platform === "unknown") return true;
   return stockPage === "unknown" || stockPage === "unmapped";
-}
-
-function warmupReplyWithoutLink(language: string): string {
-  return language.split("-")[0] === "de"
-    ? "Danke für den Hinweis, das hatte ich ähnlich erlebt."
-    : "Thanks for laying that out. I had a similar experience.";
-}
-
-/** Link-free warmup. Brand relevance is for the later live post, not this one. */
-export function warmupReplyChoice(language: string): {
-  body: string;
-  linkSlot: "none";
-  targetUrl: null;
-  anchorText: null;
-} {
-  return {
-    body: warmupReplyWithoutLink(language),
-    linkSlot: "none",
-    targetUrl: null,
-    anchorText: null,
-  };
 }
 
 async function missedFormsThisRun(ctx: StepContext): Promise<number> {
@@ -1755,8 +1769,33 @@ function widgetRecord(
   };
 }
 
+async function captchaSolvesToday(ctx: StepContext, hostId: string): Promise<number> {
+  const since = berlinDayStart(ctx.now, ctx.project.schedule?.timezone || "Europe/Berlin");
+  return ctx.services.prisma.lbCaptchaEvent.count({
+    where: {
+      hostId,
+      door: "https_api",
+      outcome: { not: "credits" },
+      createdAt: { gte: since },
+    },
+  });
+}
+
+function captchaCapStep(hostId: string): StepResult {
+  return {
+    kind: "step",
+    hostId,
+    lastAction: "Captcha budget reached",
+    outcome: { refused: "captcha_cap" },
+    run: { currentHostId: null },
+  };
+}
+
 async function captcha(ctx: StepContext): Promise<StepResult> {
   const host = requireHost(ctx);
+  if ((await captchaSolvesToday(ctx, host.id)) >= CAPTCHA_SOLVES_PER_HOST_DAY) {
+    return captchaCapStep(host.id);
+  }
   const entry = requireSession(ctx, host);
   const driver = requireDriver(host, entry);
   const challenge = await enrichCaptchaChallenge(
@@ -2095,6 +2134,22 @@ async function finishRegistration(
   const artifactIds = await screenshot(ctx, entry, "submitted");
   const event = record ? captchaEvent(ctx, host, attempt, record) : async () => undefined;
   const credits = record?.credits ?? 0;
+  if (result.kind === "form_error" && result.messages.every((message) => !message.trim())) {
+    const html = entry.session.pageHtml ? await entry.session.pageHtml().catch(() => "") : "";
+    const text = formErrorTextFromHtml(html);
+    result = { kind: "form_error", messages: [text || "form_error:no_text"] };
+    if (html) {
+      const snapshot = await ctx
+        .storeArtifact(
+          `step-${ctx.stepIndex}-form-error.html`,
+          "text/html",
+          new TextEncoder().encode(html),
+        )
+        .catch(() => "");
+      if (snapshot) artifactIds.push(snapshot);
+    }
+    artifactIds.push(...(await screenshot(ctx, entry, "form-error")));
+  }
   if (result.kind === "captcha_rejected") {
     entry.captchaAttempts = attempt;
     // The board re-renders the form; refill it so a retry or the operator only has the captcha left.
@@ -2461,13 +2516,13 @@ async function threadsForReply(
         found = [];
       }
       const fresh = found.filter(
-        (thread) => !skip.has(thread.url) && !isMailSendFailure(thread.title),
+        (thread) => !skip.has(threadKey(thread.url)) && !isMailSendFailure(thread.title),
       );
       if (fresh.length > 0) return { threads: fresh, searched: true };
     }
   }
   const listed = (await driver.listThreads(session, homepageUrl)).filter(
-    (thread) => !skip.has(thread.url) && !isMailSendFailure(thread.title),
+    (thread) => !skip.has(threadKey(thread.url)) && !isMailSendFailure(thread.title),
   );
   return { threads: listed, searched: false };
 }
@@ -2608,7 +2663,7 @@ async function recoverOpenThreads(
     pageUrl,
     host.registrableDomain,
   );
-  const direct = threadsFromLinks(links).filter((thread) => !skip.has(thread.url));
+  const direct = threadsFromLinks(links).filter((thread) => !skip.has(threadKey(thread.url)));
   if (direct.length > 0) return direct;
   const picked = boardLink(links, topicWords(ctx.project)) ?? (await askPageMove(ctx, links));
   if (!picked) return [];
@@ -2624,11 +2679,13 @@ async function recoverOpenThreads(
     nextUrl,
     host.registrableDomain,
   );
-  const fromLinks = threadsFromLinks(nextLinks).filter((thread) => !skip.has(thread.url));
+  const fromLinks = threadsFromLinks(nextLinks).filter(
+    (thread) => !skip.has(threadKey(thread.url)),
+  );
   if (fromLinks.length > 0) return fromLinks;
   try {
     const listed = await driver.listThreads(entry.session, host.homepageUrl);
-    return listed.filter((thread) => !skip.has(thread.url));
+    return listed.filter((thread) => !skip.has(threadKey(thread.url)));
   } catch (error) {
     if (error instanceof UnmappedFormError) throw error;
     return [];
@@ -2664,9 +2721,45 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       run: { currentHostId: null },
     };
   }
+  const { prisma } = ctx.services;
+  const hostDrafts = await prisma.lbDraft.findMany({
+    where: { projectId: ctx.project.id, threadCandidate: { hostId: host.id } },
+    select: {
+      body: true,
+      status: true,
+      createdAt: true,
+      modelId: true,
+      qualityChecks: true,
+      threadCandidate: { select: { url: true } },
+    },
+  });
+  const warmupCount = distinctWarmupThreads(
+    hostDrafts.map((draft) => ({
+      url: draft.threadCandidate.url,
+      modelId: draft.modelId,
+      status: draft.status,
+      verified: verifiedFlag(draft.qualityChecks),
+    })),
+  );
+  if (
+    warmup &&
+    warmupPaceBlocked(
+      hostDrafts.filter((draft) => draft.status === "posted").map((draft) => draft.createdAt),
+      ctx.now,
+      timeZone,
+    )
+  ) {
+    return {
+      kind: "step",
+      hostId: host.id,
+      lastAction: "Next reply waits",
+      outcome: { refused: "warmup_pace" },
+      run: { currentHostId: null },
+    };
+  }
+  const earlierBodies = hostDrafts.map((draft) => draft.body);
   const entry = requireSession(ctx, host);
   const driver = requireDriver(host, entry);
-  const { prisma } = ctx.services;
   if (!account.siteLoginId) {
     const plan = await desktopSkipPlan(ctx, host, "missing_password");
     return {
@@ -2705,7 +2798,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   }
   if (!entry.profileSet) {
     const pastWarmup = isWarmupMet({
-      postCount: account.postCount,
+      postCount: warmupCount,
       accountCreatedAt: account.createdAt,
       now: ctx.now,
       minPostsBeforeLink: postsRequiredBeforeLink(
@@ -2732,7 +2825,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     where: { hostId: host.id, status: { in: ["posted", "rejected"] } },
     select: { url: true },
   });
-  const skip = new Set(known.map((thread) => thread.url));
+  const skip = new Set(known.map((thread) => threadKey(thread.url)));
   const found = await threadsForReply(driver, entry.session, host.homepageUrl, ctx.project, skip);
   let threads = found.threads;
   if (threads.length === 0) {
@@ -2755,7 +2848,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       apply: (tx) => moveHost(tx, host, "failed", { statusReason: "no_thread_after_look" }),
     };
   }
-  const selectionBudget = found.searched ? 4 : 1;
+  const selectionBudget = warmup || found.searched ? 4 : 1;
   const model = ctx.services.textModel;
   let chosen: {
     thread: (typeof threads)[number];
@@ -2774,7 +2867,13 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     refusal: boolean;
   } | null = null;
   let rule = driver.probeLinkRule("");
-  const rejections: Array<{ url: string; title: string; reason: string; relevance: number }> = [];
+  const rejections: Array<{
+    url: string;
+    title: string;
+    reason: string;
+    relevance: number;
+    store?: boolean;
+  }> = [];
   let drafted = 0;
   for (const thread of threads) {
     const approved = warmup
@@ -2783,23 +2882,60 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
           where: {
             projectId: ctx.project.id,
             status: "approved",
-            threadCandidate: { hostId: host.id, url: thread.url },
+            threadCandidate: {
+              hostId: host.id,
+              url: { in: [thread.url, threadKey(thread.url)] },
+            },
           },
         });
     let opened = false;
     let discussion = "";
+    let meta: Awaited<ReturnType<NonNullable<BoardDriver["readThreadMeta"]>>> | null = null;
+    const key = threadKey(thread.url);
     try {
       await entry.session.goto(thread.url);
-      const firstPost = await entry.session.text("div.postbody div.content").catch(() => null);
+      if (driver.readThreadMeta) meta = await driver.readThreadMeta(entry.session);
+      const firstPost =
+        meta?.firstPost || (await entry.session.text("div.postbody div.content").catch(() => null));
       discussion = firstPost || (await entry.session.pageText().catch(() => ""));
+      if (warmup) {
+        const facts = meta ?? {
+          lastActivityAt: null,
+          posts: [],
+          closed: false,
+          section: null,
+          firstPost: "",
+        };
+        const gate = warmupThreadEligible({
+          title: thread.title,
+          section: facts.section,
+          firstPost: facts.firstPost || discussion,
+          meta: facts,
+          username: account.username,
+          now: ctx.now,
+          project: ctx.project,
+          activityDays: ctx.project.warmup.activityDays,
+        });
+        if (!gate.ok) {
+          rejections.push({
+            url: key,
+            title: thread.title,
+            reason: gate.reason,
+            relevance: 0,
+            store: rejectionIsStored(gate.reason),
+          });
+          continue;
+        }
+      }
       opened = await driver.openReply(entry.session, thread);
     } catch (error) {
       if (error instanceof UnmappedFormError) return unmappedForm(ctx, host);
       rejections.push({
-        url: thread.url,
+        url: key,
         title: thread.title,
-        reason: "replies_closed",
+        reason: "open_failed",
         relevance: 0,
+        store: false,
       });
       continue;
     }
@@ -2815,33 +2951,15 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       }
     }
     if (!opened) {
+      const closed = meta?.closed === true;
       rejections.push({
-        url: thread.url,
+        url: key,
         title: thread.title,
-        reason: "replies_closed",
+        reason: closed ? "replies_closed" : "open_failed",
         relevance: 0,
+        store: closed,
       });
       continue;
-    }
-    if (warmup) {
-      const reply = warmupReplyChoice(host.language || marketOf(ctx.project, host).language);
-      chosen = {
-        thread,
-        body: reply.body,
-        linkSlot: reply.linkSlot,
-        targetUrl: reply.targetUrl,
-        anchorText: reply.anchorText,
-        modelLane: "draft",
-        modelId: "warmup-fixed",
-        confidence: null,
-        qualityChecks: {},
-        tokens: 0,
-        relevance: 0,
-        openQuestion: true,
-        queueOnly: false,
-        refusal: false,
-      };
-      break;
     }
     if (!model) throw new StepFailure("Draft model is not configured");
     const editorText = await entry.session.pageText().catch(() => "");
@@ -2876,14 +2994,14 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
         title: thread.title,
         excerpt: (discussion || pageText).replace(/\s+/g, " ").trim().slice(0, 700),
         pageText,
-        lastActivityAt: thread.lastActivityAt ?? null,
+        lastActivityAt: meta?.lastActivityAt ?? thread.lastActivityAt ?? null,
         citeSource: !warmup,
         signatureLinks: host.signatureLinks,
         allowEmoji: driver.allowEmoji === true,
         bodyFormat: driver.bodyFormat,
         hostCountry: host.country,
         hostLanguage: host.language,
-        postsOnHost: account.postCount,
+        postsOnHost: warmupCount,
         linkPostsOnHost: account.linkPostCount,
         now: ctx.now,
       },
@@ -2892,7 +3010,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     const openQuestion = composed.draft.relevance?.openQuestion ?? false;
     if (composed.draft.action === "refused") {
       rejections.push({
-        url: thread.url,
+        url: key,
         title: thread.title,
         reason: "model_refusal",
         relevance,
@@ -2918,10 +3036,22 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     drafted += 1;
     if (!composed.selection.selected) {
       rejections.push({
-        url: thread.url,
+        url: key,
         title: thread.title,
         reason: composed.selection.rejectReason ?? "rejected",
         relevance,
+      });
+      if (drafted >= selectionBudget) break;
+      continue;
+    }
+    const blocked = warmup ? replyBodyBlocked(composed.draft.body, earlierBodies) : null;
+    if (blocked) {
+      rejections.push({
+        url: key,
+        title: thread.title,
+        reason: blocked,
+        relevance,
+        store: false,
       });
       if (drafted >= selectionBudget) break;
       continue;
@@ -2930,7 +3060,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       composed.draft.action === "queue" ||
       (composed.draft.action === "post" && ctx.project.disclosureMode === "drafts_only");
     if (composed.draft.action === "discard") {
-      rejections.push({ url: thread.url, title: thread.title, reason: "discarded", relevance });
+      rejections.push({ url: key, title: thread.title, reason: "discarded", relevance });
       chosen = {
         thread,
         body: composed.draft.body,
@@ -2971,7 +3101,8 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   }
   const upsertRejected = async (tx: Tx) => {
     for (const rejection of rejections) {
-      if (chosen && rejection.url === chosen.thread.url && !chosen.refusal) continue;
+      if (rejection.store === false) continue;
+      if (chosen && rejection.url === threadKey(chosen.thread.url) && !chosen.refusal) continue;
       if (isMailSendFailure(rejection.title)) continue;
       await tx.lbThreadCandidate.upsert({
         where: { hostId_url: { hostId: host.id, url: rejection.url } },
@@ -3009,15 +3140,16 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   }
   const thread = chosen.thread;
   const body = chosen.body;
+  const canonicalUrl = threadKey(thread.url);
   const base = {
     workspaceId: ctx.project.workspaceId,
     projectId: ctx.project.id,
     hostId: host.id,
-    url: thread.url,
+    url: canonicalUrl,
   };
   const upsertThread = (tx: Tx, status: string, rejectReason?: string) =>
     tx.lbThreadCandidate.upsert({
-      where: { hostId_url: { hostId: host.id, url: thread.url } },
+      where: { hostId_url: { hostId: host.id, url: canonicalUrl } },
       create: {
         ...base,
         title: thread.title,
@@ -3056,7 +3188,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     };
   }
   const discarded = rejections.some(
-    (rejection) => rejection.url === thread.url && rejection.reason === "discarded",
+    (rejection) => rejection.url === canonicalUrl && rejection.reason === "discarded",
   );
   if (discarded) {
     return {
@@ -3115,7 +3247,16 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   }
   await driver.fillReply(entry.session, body);
   const challenge = await driver.detectCaptcha(entry.session);
+  let replySolve: {
+    type: Extract<CaptchaChallenge, { kind: "widget" }>["type"];
+    credits: number;
+    balance: number | null;
+    taskId: string | null;
+  } | null = null;
   if (challenge.kind === "widget") {
+    if ((await captchaSolvesToday(ctx, host.id)) >= CAPTCHA_SOLVES_PER_HOST_DAY) {
+      return captchaCapStep(host.id);
+    }
     const solved = await ctx.services.captcha.solve(
       {
         type: challenge.type,
@@ -3124,6 +3265,12 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       },
       ctx.adapter,
     );
+    replySolve = {
+      type: challenge.type,
+      credits: solved.credits,
+      balance: solved.balance ?? null,
+      taskId: solved.taskId ?? null,
+    };
     await placeCaptchaToken(entry.session, challenge.type, solved.answer);
   }
   const reply = await driver.submitReply(entry.session);
@@ -3157,17 +3304,84 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     };
   }
   const postedAt = ctx.now;
-  await entry.session.goto(reply.permalink);
+  const proofUrl = reply.permalink || thread.url;
+  try {
+    await entry.session.goto(proofUrl);
+  } catch {
+    // The visibility check uses whatever page is still open.
+  }
+  const proofText = await entry.session.pageText().catch(() => "");
+  const visibility = replyVisibility({
+    pageText: proofText,
+    username: account.username,
+    body,
+  });
   const threadShot = await screenshot(ctx, entry, "thread");
+  const recordSolve = async (tx: Tx) => {
+    if (!replySolve) return;
+    await tx.lbCaptchaEvent.create({
+      data: {
+        workspaceId: ctx.project.workspaceId,
+        projectId: ctx.project.id,
+        hostId: host.id,
+        runId: ctx.run.id,
+        type: replySolve.type,
+        door: "https_api",
+        outcome: "placed_submitted",
+        siteKeyFound: true,
+        attempt: 1,
+        creditsCharged: replySolve.credits,
+        balanceAfter: replySolve.balance,
+        taskId: replySolve.taskId,
+      },
+    });
+  };
+  if (visibility !== "posted") {
+    const waiting = visibility === "pending_moderation";
+    return {
+      kind: "step",
+      lastAction: waiting ? "Reply is waiting for moderation" : "Reply not visible",
+      hostId: host.id,
+      artifactIds: [...artifactIds, ...threadShot],
+      outcome: { thread: canonicalUrl, permalink: reply.permalink, visibility },
+      run: { currentUrl: proofUrl },
+      apply: async (tx) => {
+        await tx.lbHost.update({ where: { id: host.id }, data: ruleData });
+        await recordSolve(tx);
+        if (waiting) {
+          const candidate = await upsertThread(tx, "posted");
+          await tx.lbDraft.create({
+            data: {
+              workspaceId: ctx.project.workspaceId,
+              projectId: ctx.project.id,
+              threadCandidateId: candidate.id,
+              modelLane: chosen.modelLane,
+              modelId: chosen.modelId,
+              body,
+              linkSlot: chosen.linkSlot,
+              targetUrl: chosen.targetUrl,
+              anchorText: chosen.anchorText,
+              confidence: chosen.confidence,
+              status: "pending_moderation",
+              qualityChecks: chosen.qualityChecks,
+            },
+          });
+          return;
+        }
+        await upsertThread(tx, "rejected", "not_visible");
+      },
+    };
+  }
   return {
     kind: "step",
     lastAction: "Posted the reply",
     hostId: host.id,
     artifactIds: [...artifactIds, ...threadShot],
-    outcome: { thread: thread.url, permalink: reply.permalink },
+    outcome: { thread: canonicalUrl, permalink: reply.permalink, visibility },
     run: { currentUrl: reply.permalink },
     apply: async (tx) => {
       await tx.lbHost.update({ where: { id: host.id }, data: ruleData });
+      await recordSolve(tx);
       const candidate = await upsertThread(tx, "posted");
       const linked = chosen.linkSlot !== "none" && chosen.targetUrl && chosen.anchorText;
       const draft = await tx.lbDraft.create({
@@ -3194,7 +3408,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
             hostId: host.id,
             hostAccountId: account.id,
             draftId: draft.id,
-            threadUrl: thread.url,
+            threadUrl: canonicalUrl,
             postUrl: reply.permalink,
             targetUrl: chosen.targetUrl,
             anchorText: chosen.anchorText,

@@ -70,6 +70,28 @@ function recordingPrisma(calls: Recorded[]) {
     siteLogin: {
       count: async () => 1,
     },
+    lbRunStep: {
+      findMany: async () => [
+        {
+          createdAt: new Date("2026-10-19T12:00:00.000Z"),
+          kind: "warmup_post",
+          hostId: "host-1",
+          outcome: { lastAction: `Opened ${process.env.E2B_API_KEY ?? ""}` },
+          error: `${process.env.DATABASE_URL ?? ""} ${process.env.OPS_TOKEN ?? ""} ${process.env.RESEND_API_KEY ?? ""}`,
+        },
+      ],
+    },
+    lbCaptchaEvent: {
+      findMany: async () => [
+        {
+          hostId: "host-1",
+          type: "recaptcha_v2",
+          outcome: "placed_submitted",
+          creditsCharged: 1,
+          createdAt: new Date("2026-10-19T12:00:00.000Z"),
+        },
+      ],
+    },
   } as unknown as PrismaClient;
 }
 
@@ -221,6 +243,31 @@ describe("ops routes", () => {
         run: { id: string; lastAction: string | null; lastError: string | null } | null;
       };
       expect(json.revision).toBe("abc123def456");
+      const traced = json as {
+        recentSteps?: Array<{
+          domain: string | null;
+          error: string | null;
+          lastAction: string | null;
+        }>;
+        recentCaptcha?: Array<{
+          domain: string | null;
+          type: string;
+          outcome: string;
+          credits: number;
+          errorCode: string | null;
+        }>;
+      };
+      expect(traced.recentSteps?.[0]?.domain).toBe("forum.example");
+      expect(traced.recentSteps?.[0]?.error).not.toContain("postgres");
+      expect(traced.recentCaptcha).toEqual([
+        {
+          domain: "forum.example",
+          type: "recaptcha_v2",
+          outcome: "placed_submitted",
+          credits: 1,
+          errorCode: null,
+        },
+      ]);
       expect(json.config).toMatchObject({
         driver: "real",
         browser: "sandbox",

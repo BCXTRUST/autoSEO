@@ -1,6 +1,7 @@
 import type { BrowserSession, TokenCaptchaType } from "@rakazo/adapter-kit";
 import type { LbHostPlatform, LbHrefForNewMembers, LbRelDefault } from "@rakazo/contracts";
 import type { ReferenceFormat } from "@rakazo/linkbuilder-core";
+import type { ThreadMeta } from "./thread-meta.js";
 
 /*
  * One driver per forum platform. Drivers only know page structure: selectors, URLs and the
@@ -134,6 +135,11 @@ export interface BoardDriver {
   ): Promise<BoardThread[]>;
   /** Opens the reply editor for a thread; false when the thread is locked or replies are off. */
   openReply(session: BrowserSession, thread: BoardThread): Promise<boolean>;
+  /**
+   * Authors, dates, the board section, and whether the thread is closed.
+   * Omitted drivers leave the date unknown, which the warmup gate treats as stale.
+   */
+  readThreadMeta?(session: BrowserSession): Promise<ThreadMeta>;
   fillReply(session: BrowserSession, body: string): Promise<void>;
   submitReply(session: BrowserSession): Promise<ReplyResult>;
   /** Reads the board's rule for links by new members from rules, FAQ or editor text. */

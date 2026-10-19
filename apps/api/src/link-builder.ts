@@ -93,6 +93,7 @@ import {
   validateTargetUrl,
   webhookUrlAllowed,
 } from "@rakazo/linkbuilder-core";
+import { readArtifactBytes } from "./artifacts.js";
 import type { RouterDeps } from "./router.js";
 
 const DEFAULT_SCHEDULE = LbScheduleSchema.parse({ timezone: "Europe/Berlin" });
@@ -871,13 +872,20 @@ export async function getLbArtifact(
     where: { id: input.artifactId, workspaceId: actor.workspaceId },
   });
   if (!row) throw new ORPCError("NOT_FOUND");
-  const bytes = await deps.artifacts.get(row.storageKey, {
-    operationId: `lb-artifact:${row.id}`,
-    traceId: `lb-artifact:${row.id}`,
-    workspaceId: actor.workspaceId,
-    userId: actor.userId,
-    signal: new AbortController().signal,
-  });
+  let bytes: Uint8Array;
+  try {
+    bytes = await readArtifactBytes(deps.artifacts, row, {
+      operationId: `lb-artifact:${row.id}`,
+      traceId: `lb-artifact:${row.id}`,
+      workspaceId: actor.workspaceId,
+      userId: actor.userId,
+      signal: new AbortController().signal,
+    });
+  } catch (error) {
+    const code = error && typeof error === "object" ? (error as { code?: unknown }).code : null;
+    if (code === "ENOENT" || code === "EISDIR") throw new ORPCError("NOT_FOUND");
+    throw error;
+  }
   return {
     id: row.id,
     name: row.name,

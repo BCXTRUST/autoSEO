@@ -889,9 +889,10 @@ async function solveSearchCaptcha(
   }
 }
 
-function publicSolverFailure(error: unknown): { code: string; message: string } {
+export function publicSolverFailure(error: unknown): { code: string; message: string } {
   if (error instanceof CaptchaSolverError) {
-    return { code: error.code, message: scrubSolverText(error.message || error.code) };
+    const line = error.message.startsWith("Captell ") ? error.message : error.message || error.code;
+    return { code: error.code, message: scrubSolverText(line) };
   }
   const message = error instanceof Error ? error.message : "solver failed";
   return { code: "error", message: scrubSolverText(message) };

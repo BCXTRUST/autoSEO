@@ -1,0 +1,96 @@
+import { localDateKey, startOfZonedDay } from "@rakazo/linkbuilder-core";
+import { threadKey } from "./link-builder-page-move.js";
+
+/** Reasons that can change on the next visit, so they are not stored on the thread. */
+const EPHEMERAL_REJECTION = new Set(["open_failed", "stale", "no_other_users", "own_last"]);
+
+export function rejectionIsStored(reason: string): boolean {
+  return !EPHEMERAL_REJECTION.has(reason);
+}
+
+export function normalizeReplyBody(body: string): string {
+  return body.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** A warmup body must be new on this host and long enough to be a real reply. */
+export function replyBodyBlocked(
+  body: string,
+  earlier: readonly string[],
+): "short" | "duplicate" | null {
+  const normalized = normalizeReplyBody(body);
+  if ([...normalized].length < 120) return "short";
+  if (earlier.some((item) => normalizeReplyBody(item) === normalized)) return "duplicate";
+  return null;
+}
+
+/** Two posted replies per Berlin day, and never a second one inside three hours. */
+export function warmupPaceBlocked(postedAt: readonly Date[], now: Date, timeZone: string): boolean {
+  const day = localDateKey(now, timeZone);
+  let today = 0;
+  for (const at of postedAt) {
+    if (now.getTime() - at.getTime() >= 0 && now.getTime() - at.getTime() < 180 * 60_000) {
+      return true;
+    }
+    if (localDateKey(at, timeZone) === day) today += 1;
+  }
+  return today >= 2;
+}
+
+export interface WarmupCountRow {
+  url: string;
+  modelId: string;
+  status: string;
+  verified?: boolean | null;
+}
+
+/** Distinct threads with a real posted reply. Canned warmup-fixed rows count as zero. */
+export function distinctWarmupThreads(rows: readonly WarmupCountRow[]): number {
+  const keys = new Set<string>();
+  for (const row of rows) {
+    if (row.status !== "posted") continue;
+    if (row.modelId === "warmup-fixed") continue;
+    if (row.verified === false) continue;
+    keys.add(threadKey(row.url));
+  }
+  return keys.size;
+}
+
+const MODERATION = /wird nach prüfung|freigeschaltet|moderiert|awaiting approval/i;
+
+export function replyVisibility(input: {
+  pageText: string;
+  username: string;
+  body: string;
+}): "posted" | "pending_moderation" | "not_visible" {
+  if (MODERATION.test(input.pageText)) return "pending_moderation";
+  const page = input.pageText.toLowerCase().replace(/\s+/g, " ");
+  const snippet = normalizeReplyBody(input.body).slice(0, 40);
+  const named = input.username.trim().toLowerCase();
+  if (named && snippet.length >= 8 && page.includes(named) && page.includes(snippet)) {
+    return "posted";
+  }
+  return "not_visible";
+}
+
+const DAILY_REFUSAL = new Set(["link_day", "warmup_pace", "captcha_cap"]);
+
+export function dailyRefusal(outcome: unknown): string | null {
+  if (!outcome || typeof outcome !== "object") return null;
+  const refused = (outcome as { refused?: unknown }).refused;
+  return typeof refused === "string" && DAILY_REFUSAL.has(refused) ? refused : null;
+}
+
+export function berlinDayStart(now: Date, timeZone: string): Date {
+  return startOfZonedDay(now, timeZone);
+}
+
+/** `verified: false` on a draft means the reply was not on the public page. */
+export function verifiedFlag(checks: unknown): boolean | null {
+  if (!checks || typeof checks !== "object") return null;
+  const value = (checks as { verified?: unknown }).verified;
+  if (value === false) return false;
+  if (value === true) return true;
+  return null;
+}
+
+export const CAPTCHA_SOLVES_PER_HOST_DAY = 2;
