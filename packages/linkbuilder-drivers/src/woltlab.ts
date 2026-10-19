@@ -54,8 +54,13 @@ export const woltlabBoard = defineBoard({
 const TOPIC_LINK = "a.wbbTopicLink:not(.wbbBoardNode__lastPostLink)";
 const REPLY_LINK = "a[href*='action=reply'], a[href*='action=add']";
 const REPLY_FIELD = ["#text", "textarea[name='text']", "#message"] as const;
-const REPLY_SUBMIT =
-  "form .formSubmit input[type='submit'], form .formSubmit button[type='submit'], form button[type='submit']";
+const REPLY_SUBMIT = [
+  "form:has(#text) .formSubmit input[type='submit']",
+  "form:has(#text) .formSubmit button",
+  "form:has(textarea[name='text']) .formSubmit input[type='submit']",
+  "form:has(textarea[name='text']) .formSubmit button",
+  "form:has(#text) button[type='submit']",
+].join(", ");
 
 const SIGNED_IN =
   "a.logout, a[href*='logout'], a[href*='Logout'], a[href*='logoff'], a.userMenuItemLink, a[href*='account-management']";
