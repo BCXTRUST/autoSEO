@@ -697,9 +697,11 @@ export class LinkBuilderRealRunner {
       recent.length === MAX_CONSECUTIVE_ERRORS - 1 &&
       recent.every((step) => step.error && step.hostId === host?.id);
     const infra = isInfrastructureFailure(message);
+    const keepWarming = host?.status === "warming" && Boolean(ctx.account?.emailVerifiedAt);
     const giveUp =
       host !== null &&
       !infra &&
+      !keepWarming &&
       message !== "Vault login is missing" &&
       !isHostTerminal(host.status as LbHostStatus) &&
       (repeated || postFailures + 1 >= MAX_CONSECUTIVE_ERRORS);

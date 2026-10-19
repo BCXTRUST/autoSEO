@@ -447,7 +447,10 @@ async function desktopSkipPlan(
   reason: LbOperatorTicketReason,
 ): Promise<{ lastAction: string; apply?: (tx: Tx) => Promise<void> }> {
   const failures = await pageGiveUpCount(ctx, host.id);
-  if (!shouldSkipDesktopPage({ reason, failures })) {
+  if (
+    !shouldSkipDesktopPage({ reason, failures }) ||
+    (host.status === "warming" && ctx.account?.emailVerifiedAt)
+  ) {
     return { lastAction: "The page did not finish, trying again" };
   }
   return {
