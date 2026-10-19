@@ -646,6 +646,38 @@ function storedSignupTarget(
   );
 }
 
+/** A warming host whose latest step was a refused sign-in waits behind the others. */
+async function hostsStuckOnLogin(
+  ctx: StepContext,
+  hostIds: readonly string[],
+): Promise<Set<string>> {
+  const stuck = new Set<string>();
+  if (hostIds.length === 0) return stuck;
+  let steps: Array<{ hostId: string | null; error: string | null; outcome: unknown }> = [];
+  try {
+    steps = await ctx.services.prisma.lbRunStep.findMany({
+      where: { runId: ctx.run.id, hostId: { in: [...hostIds] } },
+      orderBy: { stepIndex: "desc" },
+      take: 12,
+      select: { hostId: true, error: true, outcome: true },
+    });
+  } catch {
+    return stuck;
+  }
+  const seen = new Set<string>();
+  for (const step of steps) {
+    if (!step.hostId || seen.has(step.hostId)) continue;
+    seen.add(step.hostId);
+    const outcome =
+      step.outcome && typeof step.outcome === "object"
+        ? (step.outcome as Record<string, unknown>)
+        : {};
+    const error = step.error ?? "";
+    if (outcome.login === false || /angaben sind ungültig/i.test(error)) stuck.add(step.hostId);
+  }
+  return stuck;
+}
+
 function hostSortRank(row: {
   status: string;
   statusReason: string | null;
@@ -729,6 +761,10 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     if (row.status === "qualified" && !(await registrationOpen(ctx, row.id))) continue;
     eligible.push(row);
   }
+  const loginStuck = await hostsStuckOnLogin(
+    ctx,
+    eligible.map((row) => row.id),
+  );
   eligible.sort((a, b) => {
     const aTarget = storedSignupTarget(a, deny);
     const bTarget = storedSignupTarget(b, deny);
@@ -749,6 +785,7 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     }
     if (aOpen && deniedForStoredSignup(b.registrableDomain, deny)) return -1;
     if (bOpen && deniedForStoredSignup(a.registrableDomain, deny)) return 1;
+    if (loginStuck.has(a.id) !== loginStuck.has(b.id)) return loginStuck.has(a.id) ? 1 : -1;
     const warmingPosts = (row: (typeof eligible)[number]) =>
       row.status === "warming" ? (row.accounts[0]?.postCount ?? 0) : null;
     const aPosts = warmingPosts(a);
