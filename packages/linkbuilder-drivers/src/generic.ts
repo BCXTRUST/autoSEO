@@ -1134,6 +1134,8 @@ export class GenericFormDriver implements BoardDriver {
       ...new Set([
         new URL("/login", homepageUrl).href,
         new URL("/login/", homepageUrl).href,
+        new URL("/profile/logon", homepageUrl).href,
+        new URL("/profile/login", homepageUrl).href,
         new URL("ucp.php?mode=login", homepageUrl).href,
       ]),
     ];
@@ -1153,7 +1155,7 @@ export class GenericFormDriver implements BoardDriver {
     }
     const followed = await followAnchor(
       session,
-      ["a[href*='mode=login']", "a[href*='/login']", "a[href*='login']"],
+      ["a[href*='mode=login']", "a[href*='logon']", "a[href*='/login']", "a[href*='login']"],
       LOGIN_TEXT,
       /logout|register|registrieren/i,
     );
