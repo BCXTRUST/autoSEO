@@ -278,8 +278,13 @@ export class MarkupBoardDriver implements BoardDriver {
     const fields = this.config.fields;
     await session.fill(`#${fields.username.id}`, account.username);
     await session.fill(`#${fields.password.id}`, account.password, { secret: true });
+    // WoltLab copies the XSRF cookie into the hidden field after the page scripts run.
+    await session.waitFor(".xsrfTokenInputHandled", { timeoutMs: 5_000 });
     await session.click(LOGIN_SUBMIT);
-    return session.waitFor(LOGGED_OUT_LINK, { timeoutMs: 10_000 });
+    if (await session.waitFor(LOGGED_OUT_LINK, { timeoutMs: 10_000 })) return true;
+    const detail = (await this.pageMessages(session)).find((message) => message.length > 0) ?? "";
+    if (detail) throw new Error(detail.slice(0, 240));
+    return false;
   }
 
   async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {
