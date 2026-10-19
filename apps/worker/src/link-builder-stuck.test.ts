@@ -42,7 +42,7 @@ describe("recoverStuckStep", () => {
     expect(result).toBeNull();
   });
 
-  it("waits when the sandbox is gone and has not been replaced", async () => {
+  it("waits when a running sandbox is older than the failure", async () => {
     const result = await recoverStuckStep(
       ctx({
         steps: [
@@ -52,9 +52,38 @@ describe("recoverStuckStep", () => {
             createdAt: new Date("2026-10-15T11:00:00Z"),
           },
         ],
+        computers: [
+          {
+            state: "running",
+            providerRef: "sb-old",
+            updatedAt: new Date("2026-10-15T10:00:00Z"),
+          },
+        ],
       }),
     );
     expect(result).toEqual({ kind: "wait", reason: "sandbox_gone" });
+  });
+
+  it("opens a new sandbox when none is running", async () => {
+    const result = await recoverStuckStep(
+      ctx({
+        steps: [
+          {
+            outcome: { lastAction: "Step failed, retrying" },
+            error: "Sandbox is probably not running anymore",
+            createdAt: new Date("2026-10-15T11:00:00Z"),
+          },
+        ],
+        computers: [
+          {
+            state: "stopped",
+            providerRef: null,
+            updatedAt: new Date("2026-10-15T11:05:00Z"),
+          },
+        ],
+      }),
+    );
+    expect(result).toBeNull();
   });
 
   it("continues after the viewer stores a new sandbox", async () => {

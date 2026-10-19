@@ -3212,8 +3212,8 @@ export async function recoverStuckStep(ctx: StepContext): Promise<StepResult | n
   const decision = decideStuckStep(rows.map(stuckRecordFromStep));
   if (decision === "continue") return null;
   if (decision === "yield") {
-    const replaced = await sandboxWasReplaced(ctx, rows[0]?.createdAt ?? ctx.now);
-    if (!replaced) return { kind: "wait", reason: "sandbox_gone" };
+    const yieldTo = await sandboxYield(ctx, rows[0]?.createdAt ?? ctx.now);
+    if (yieldTo === "wait") return { kind: "wait", reason: "sandbox_gone" };
     return null;
   }
   const latestKind = rows[0]?.kind ?? "";
@@ -3258,7 +3258,8 @@ function stuckRecordFromStep(step: { outcome: unknown; error: string | null }): 
   return { action, error, looked: outcome.looked === true };
 }
 
-async function sandboxWasReplaced(ctx: StepContext, failedAt: Date): Promise<boolean> {
+/** A stopped sandbox is opened again. A sandbox that is still running waits for the viewer. */
+async function sandboxYield(ctx: StepContext, failedAt: Date): Promise<"go" | "wait"> {
   try {
     const computers = await ctx.services.prisma.computer.findMany({
       where: { workspaceId: ctx.project.workspaceId },
@@ -3266,14 +3267,14 @@ async function sandboxWasReplaced(ctx: StepContext, failedAt: Date): Promise<boo
       take: 4,
       select: { state: true, providerRef: true, updatedAt: true },
     });
-    return computers.some(
-      (computer) =>
-        computer.state === "running" &&
-        Boolean(computer.providerRef) &&
-        computer.updatedAt.getTime() > failedAt.getTime(),
+    const running = computers.filter(
+      (computer) => computer.state === "running" && Boolean(computer.providerRef),
     );
+    if (running.length === 0) return "go";
+    if (running.some((computer) => computer.updatedAt.getTime() > failedAt.getTime())) return "go";
+    return "wait";
   } catch {
-    return false;
+    return "go";
   }
 }
 
