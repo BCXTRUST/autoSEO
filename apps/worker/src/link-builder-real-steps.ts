@@ -120,6 +120,7 @@ import {
   type BoardThread,
   boardDriverFor,
   type CaptchaChallenge,
+  clickAccountActivation,
   clickResendMail,
   enrichCaptchaChallenge,
   fitsOnOnePage,
@@ -541,10 +542,16 @@ async function hostsMailedRecently(
         kind: "email_verify",
         createdAt: { gte: new Date(since) },
       },
-      select: { hostId: true, kind: true, createdAt: true },
+      select: { hostId: true, kind: true, createdAt: true, outcome: true },
     });
     for (const step of steps) {
       if (step.kind !== "email_verify" || !step.hostId) continue;
+      const outcome = step.outcome;
+      const parked =
+        Boolean(outcome) &&
+        typeof outcome === "object" &&
+        (outcome as { mail?: unknown }).mail === "not_in_inbox";
+      if (!parked) continue;
       const created =
         step.createdAt instanceof Date
           ? step.createdAt.getTime()
@@ -2654,6 +2661,11 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
   }
   await entry.session.releaseForm?.();
   await entry.session.goto(link);
+  try {
+    await clickAccountActivation(entry.session);
+  } catch {
+    // The page can activate from the URL alone.
+  }
   const activation = await driver.activationResult(entry.session);
   const artifactIds = await screenshot(ctx, entry, "activated");
   const verifiedAt = ctx.now;

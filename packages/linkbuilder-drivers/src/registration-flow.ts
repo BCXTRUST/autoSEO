@@ -21,6 +21,13 @@ const SUBMIT_BUDGET = 3;
 const RESEND_CONTROL =
   /(?:e-?mail|mail|aktivierung|activation|verification).{0,48}(?:erneut|nochmals|resend|again)|(?:erneut|nochmals|resend|send again).{0,48}(?:e-?mail|mail|aktivierung|activation|verification)/i;
 
+/** Discourse shows the activation link as a button. Opening the URL is not enough. */
+export async function clickAccountActivation(session: BrowserSession): Promise<boolean> {
+  if (!(await session.exists("#activate-account-button"))) return false;
+  await session.click("#activate-account-button");
+  return true;
+}
+
 /** Clicks a resend control when the page offers one. Never clicks a generic send. */
 export async function clickResendMail(session: BrowserSession): Promise<boolean> {
   const controls = (await session.clickables?.()) ?? [];
