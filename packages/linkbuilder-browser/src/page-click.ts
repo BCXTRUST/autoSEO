@@ -13,6 +13,10 @@ export function clickControl(selector: string): boolean {
     return false;
   }
   if (!node || typeof node.click !== "function") return false;
+  if (challengeActivate(doc, node)) {
+    node.click();
+    return true;
+  }
   if (submitActivateForm(doc, node)) return true;
   const tag = (node.tagName ?? "").toUpperCase();
   const type = (node.getAttribute?.("type") ?? (tag === "BUTTON" ? "submit" : "")).toLowerCase();
@@ -43,6 +47,10 @@ export function clickControlHeld(selector: string): boolean {
     return false;
   }
   if (!node) return false;
+  if (challengeActivate(doc, node)) {
+    node.click?.();
+    return true;
+  }
   if (submitActivateForm(doc, node)) return true;
   const tag = (node.tagName ?? "").toUpperCase();
   const type = (node.getAttribute?.("type") ?? (tag === "BUTTON" ? "submit" : "")).toLowerCase();
@@ -75,13 +83,49 @@ export function clickControlHeld(selector: string): boolean {
   return true;
 }
 
+/**
+ * Discourse binds this button after load. The handler fetches a challenge, fills two
+ * hidden fields, and only then submits. Posting the form before that handler runs
+ * sends an empty challenge.
+ */
+function challengeActivate(doc: ClickDocument, node: ClickNode): boolean {
+  return (
+    node.getAttribute?.("id") === "activate-account-button" &&
+    doc.querySelector("#data-activate-account") !== null
+  );
+}
+
 /** The Discourse activate button sits outside its form, so a bare click does not POST. */
 function submitActivateForm(doc: ClickDocument, node: ClickNode): boolean {
   if (node.getAttribute?.("id") !== "activate-account-button") return false;
+  if (doc.querySelector("#data-activate-account")) return false;
   const form = doc.querySelector("#activate-account-form");
   if (!form || typeof form.requestSubmit !== "function") return false;
   form.requestSubmit();
   return true;
+}
+
+/**
+ * `null` when this page has no Discourse challenge. `false` until that page's script
+ * has bound the activate button. `true` once a click will run the challenge request.
+ */
+export function discourseActivateReady(): boolean | null {
+  const doc = (globalThis as { document?: ClickDocument }).document;
+  if (!doc?.querySelector("#data-activate-account")) return null;
+  const button = doc.querySelector("#activate-account-button");
+  if (!button) return false;
+  const jq = (
+    globalThis as {
+      jQuery?: { _data?: (node: ClickNode, key: string) => { click?: unknown[] } | undefined };
+    }
+  ).jQuery;
+  if (!jq || typeof jq._data !== "function") return false;
+  try {
+    const events = jq._data(button, "events");
+    return Boolean(events?.click && events.click.length > 0);
+  } catch {
+    return false;
+  }
 }
 
 interface ClickNode {

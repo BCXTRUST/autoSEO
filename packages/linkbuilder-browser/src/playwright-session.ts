@@ -10,7 +10,7 @@ import {
   rateLimitWaitMs,
 } from "@rakazo/linkbuilder-core";
 import type { BrowserContext, BrowserType, Page, Request } from "playwright";
-import { clickControl, clickControlHeld } from "./page-click.js";
+import { clickControl, clickControlHeld, discourseActivateReady } from "./page-click.js";
 import { writeWysiwygText } from "./wysiwyg.js";
 
 /** Playwright resets its own action timeout when a page navigates, so a reloading board can wait forever. */
@@ -408,13 +408,31 @@ export class PlaywrightBrowserSession implements BrowserSession {
       .catch(() => false);
   }
 
-  private watchNavigation(): Promise<Request | null> {
+  private watchNavigation(timeoutMs = NAVIGATION_DETECT_MS): Promise<Request | null> {
     return this.page
       .waitForRequest(
         (request) => request.isNavigationRequest() && request.frame() === this.page.mainFrame(),
-        { timeout: NAVIGATION_DETECT_MS },
+        { timeout: timeoutMs },
       )
       .catch(() => null);
+  }
+
+  /**
+   * The activate script is deferred and then waits 50ms before it binds the button.
+   * A click before that binding does not fetch the challenge.
+   */
+  private async waitForDiscourseActivate(): Promise<void> {
+    const deadlineAt = Date.now() + 8_000;
+    while (Date.now() < deadlineAt) {
+      let ready = false;
+      try {
+        ready = (await this.page.evaluate(discourseActivateReady)) !== false;
+      } catch {
+        ready = false;
+      }
+      if (ready) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   }
 
   private async settleNavigation(
@@ -433,7 +451,11 @@ export class PlaywrightBrowserSession implements BrowserSession {
 
   async click(selector: string, options?: { navigationMs?: number }): Promise<void> {
     await this.paceAction();
-    const navigation = this.watchNavigation();
+    const activate = selector === "#activate-account-button";
+    if (activate) await this.waitForDiscourseActivate();
+    const navigation = this.watchNavigation(
+      activate ? (options?.navigationMs ?? 12_000) : NAVIGATION_DETECT_MS,
+    );
     // Click in the page. Playwright's actionability check waits until a captcha iframe stops
     // moving, which it does not, so a submit that already landed is reported as a timeout.
     const clicked = this.page
