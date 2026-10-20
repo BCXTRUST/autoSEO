@@ -52,7 +52,7 @@ const STOP = new Set([
 const FOLDS: Record<string, readonly string[]> = {
   sleep: ["schlaf", "schlafen", "einschlafen"],
   pain: ["schmerz", "schmerzen"],
-  cramps: ["krampf", "kraempfe"],
+  cramps: ["krampf", "krämpfe"],
   sport: ["sport", "training", "fitness"],
   training: ["training", "fitness"],
   children: ["kind", "kinder", "familie", "familien"],
@@ -60,7 +60,7 @@ const FOLDS: Record<string, readonly string[]> = {
   pregnancy: ["schwanger", "schwangerschaft"],
   deficiency: ["mangel"],
   energy: ["energie"],
-  supplements: ["supplement", "nahrungsergaenzung"],
+  supplements: ["supplement", "nahrungsergänzung"],
   family: ["familie", "familien", "kinder"],
   health: ["gesundheit"],
 };
@@ -135,8 +135,8 @@ export function topicTerms(project: TopicProject): string[] {
   const terms = new Set<string>();
   for (const token of tokensOf(cleaned)) {
     if (STOP.has(token)) continue;
-    terms.add(token);
-    for (const folded of FOLDS[token] ?? []) terms.add(folded);
+    terms.add(foldText(token));
+    for (const folded of FOLDS[token] ?? []) terms.add(foldText(folded));
   }
   return [...terms];
 }
@@ -149,7 +149,7 @@ function hasWord(text: string, word: string): boolean {
   return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`).test(hay);
 }
 
-function hasTerm(text: string, term: string): boolean {
+export function hasTerm(text: string, term: string): boolean {
   if (hasWord(text, term)) return true;
   if (term.length < 6) return false;
   const hay = foldText(text);
@@ -169,8 +169,78 @@ export function pageMatchesTopics(page: TopicPage, project: TopicProject): boole
   if (terms.length === 0) return true;
   const title = page.title ?? "";
   if (titleIsOffTopic(title, terms)) return false;
-  const blob = [page.pageText ?? "", title, ...(page.topicTags ?? [])].join("\n");
+  const blob = [page.pageText ?? "", title].join("\n");
   return terms.some((term) => hasTerm(blob, term));
+}
+
+/**
+ * Patient threads on a health board often never say the lane word.
+ * The title has to name a condition, a symptom, or a treatment.
+ * Chat titles stay off-topic even when a reply mentions a doctor.
+ */
+/** German problem words for the lane themes. Harold may edit this list. */
+const WARMUP_HEALTH_TERMS = [
+  "müdigkeit",
+  "müde",
+  "erschöpfung",
+  "schlafstörung",
+  "verdauung",
+  "darm",
+  "verstopfung",
+  "durchfall",
+  "schilddrüse",
+  "hashimoto",
+  "immunsystem",
+  "erkältung",
+  "haut",
+  "haare",
+  "nägel",
+  "gelenke",
+  "knochen",
+  "muskel",
+  "muskelkater",
+  "regeneration",
+  "blutwerte",
+  "eisen",
+  "ferritin",
+  "vitamin d",
+  "b12",
+  "magnesium",
+  "zink",
+  "selen",
+  "jod",
+  "omega",
+  "ernährung",
+  "nährstoff",
+  "stoffwechsel",
+  "blutzucker",
+  "diabetes",
+  "metformin",
+  "schwangerschaft",
+  "stillen",
+  "kinderwunsch",
+  "wechseljahre",
+  "migräne",
+  "kopfschmerzen",
+  "wadenkrämpfe",
+  "stress",
+  "stimmung",
+  "depression",
+] as const;
+
+export function warmupHealthTitle(title: string): boolean {
+  return WARMUP_HEALTH_TERMS.some((term) => hasTerm(title, term));
+}
+
+/** Link posts need a lane word in the title or the opening post, not only on the last page. */
+export function laneTermInTitleOrOpener(
+  title: string,
+  opener: string,
+  project: TopicProject,
+): boolean {
+  const terms = topicTerms(project);
+  if (terms.length === 0) return true;
+  return terms.some((term) => hasTerm(title, term) || hasTerm(opener, term));
 }
 
 /** Title or board section that is an introduction, a game, or off-topic chat. */
@@ -230,7 +300,10 @@ export function warmupThreadEligible(input: {
   const terms = topicTerms(input.project);
   if (terms.length > 0) {
     const first = (input.firstPost ?? "").slice(0, 1_500);
-    const onTopic = terms.some((term) => hasTerm(input.title, term) || hasTerm(first, term));
+    const onTopic =
+      warmupHealthTitle(input.title) ||
+      warmupHealthTitle(first) ||
+      terms.some((term) => hasTerm(input.title, term) || hasTerm(first, term));
     if (!onTopic) return { ok: false, reason: "off_topic_thread" };
   }
   const windowDays = input.activityDays ?? 30;

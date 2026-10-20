@@ -94,6 +94,7 @@ import {
   webhookUrlAllowed,
 } from "@rakazo/linkbuilder-core";
 import { readArtifactBytes } from "./artifacts.js";
+import { redactOpsSecrets } from "./ops.js";
 import type { RouterDeps } from "./router.js";
 
 const DEFAULT_SCHEDULE = LbScheduleSchema.parse({ timezone: "Europe/Berlin" });
@@ -837,6 +838,7 @@ export async function listLbRunSteps(
         },
         artifactIds: step.artifactIds,
         createdAt: step.createdAt.toISOString(),
+        outcome: redactStepOutcome(step.outcome),
       },
     ];
   });
@@ -1818,6 +1820,13 @@ function scheduleState(
   liveMet: boolean,
 ): ScheduleState {
   return isWithinWindow(now, schedule, { liveMet });
+}
+
+function redactStepOutcome(outcome: unknown): string | null {
+  if (outcome == null) return null;
+  const text = typeof outcome === "string" ? outcome : JSON.stringify(outcome);
+  const redacted = redactOpsSecrets(text).slice(0, 300);
+  return redacted || null;
 }
 
 function outcomeAction(outcome: unknown): string | null {

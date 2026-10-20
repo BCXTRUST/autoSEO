@@ -113,9 +113,171 @@ function newestAt(posts: ThreadPostMeta[]): string | null {
   return best;
 }
 
-function closedFrom(html: string, text: string): boolean {
-  if (/jsThreadIsClosed|icon-lock|locked-icon|i\.icon\.fa-lock/i.test(html)) return true;
-  return /(?:^|[^a-zäöü])geschlossen(?:[^a-zäöü]|$)/i.test(text);
+type Loaded = ReturnType<typeof load>;
+
+/** Closed is a thread-header fact. Inline language packs say "Geschlossen" on every page. */
+function threadIsClosed($: Loaded, kind: "woltlab" | "phpbb" | "markup"): boolean {
+  if (kind === "woltlab") {
+    if ($(".contentHeader[data-is-closed='1'], .wbbThread[data-is-closed='1']").length > 0) {
+      return true;
+    }
+    if (
+      $(".contentHeader .jsIconClosed, .contentHeaderIcon .fa-lock, .wbbThreadClosed").length > 0
+    ) {
+      return true;
+    }
+    const loggedIn = $("a.logout, a[href*='logout'], a[href*='logoff']").length > 0;
+    const canReply =
+      $("a[href*='action=reply'], a[href*='action=add'], textarea[name='text']").length > 0;
+    return loggedIn && !canReply;
+  }
+  if (kind === "phpbb") {
+    if ($(".action-bar .fa-lock, .action-bar .icon-lock").length > 0) return true;
+    return /dieses thema ist gesperrt/i.test($(".action-bar").text());
+  }
+  const header = $(".topic-header, .contentHeader, h1").first();
+  return header.find(".locked, [title*='geschlossen' i]").length > 0;
+}
+
+const AUTHOR_LINK =
+  "a[href*='/user/'], a[href*='/profile/'], a[href*='/member'], a[href*='memberlist']";
+
+/** Posts on boards without a platform reader, including diabetes-forum.de `li[id^=m_]`. */
+export function genericPostsFromHtml(html: string, now = new Date()): ThreadPostMeta[] {
+  const $ = load(html);
+  $("script, style, template, noscript").remove();
+  return genericPosts($, now);
+}
+
+function genericPosts($: Loaded, now: Date): ThreadPostMeta[] {
+  const byId = $("[id]").filter((_, el) => /^(?:m_|p|post|msg)\d+$/i.test($(el).attr("id") ?? ""));
+  const nodes = byId.length > 0 ? byId : $("article, .post, .message");
+  const posts: ThreadPostMeta[] = [];
+  nodes.each((_, node) => {
+    const post = $(node);
+    const author = post.find(AUTHOR_LINK).first().text().replace(/\s+/g, " ").trim();
+    const at = parseGermanDate(post.text(), now);
+    if (!author && !at) return;
+    posts.push({ author, at });
+  });
+  return posts;
+}
+
+/** WoltLab jumps to the newest post. One-page threads still show the opener there. */
+export function woltlabLastPageUrl(threadUrl: string): string {
+  const url = new URL(threadUrl);
+  url.hash = "";
+  url.search = "";
+  url.searchParams.set("action", "lastPost");
+  return url.href;
+}
+
+/** Highest phpBB `start=` page, or null when the thread has no later page. */
+export function phpbbLastPageUrl(html: string, pageUrl: string): string | null {
+  const $ = load(html);
+  let best = 0;
+  let href: string | null = null;
+  $("a[href*='start=']").each((_, el) => {
+    const raw = $(el).attr("href");
+    if (!raw) return;
+    let absolute: URL;
+    try {
+      absolute = new URL(raw, pageUrl);
+    } catch {
+      return;
+    }
+    const start = Number(absolute.searchParams.get("start"));
+    if (!Number.isFinite(start) || start <= best) return;
+    best = start;
+    href = absolute.href;
+  });
+  return href;
+}
+
+/**
+ * Highest `page=` link. diabetes-forum.de offers `pagesize=100`, which puts the
+ * newest posts on one fetch.
+ */
+export function genericLastPageUrl(html: string, pageUrl: string): string | null {
+  const $ = load(html);
+  const wide = $("a[href*='pagesize=100']").first().attr("href");
+  if (wide) {
+    try {
+      return new URL(wide, pageUrl).href;
+    } catch {
+      // Fall through to numbered pages.
+    }
+  }
+  let best = 1;
+  let href: string | null = null;
+  $("a[href*='page=']").each((_, el) => {
+    const raw = $(el).attr("href");
+    if (!raw) return;
+    let absolute: URL;
+    try {
+      absolute = new URL(raw, pageUrl);
+    } catch {
+      return;
+    }
+    const page = Number(absolute.searchParams.get("page"));
+    if (!Number.isFinite(page) || page <= best) return;
+    best = page;
+    href = absolute.href;
+  });
+  return href;
+}
+
+function postIdFromPermalink(permalink: string | null | undefined): string | null {
+  if (!permalink) return null;
+  const hash = /#((?:post|m_|p|msg)\d+)/i.exec(permalink);
+  if (hash?.[1]) return hash[1];
+  const query = /[?&]postID=(\d+)/i.exec(permalink);
+  if (query?.[1]) return `post${query[1]}`;
+  return null;
+}
+
+/**
+ * Moderation text counts only inside our post, or in a flash shown right after submit.
+ * A public moderator log on the same page is not our post.
+ */
+export function moderationScope(
+  html: string,
+  username: string,
+  permalink?: string | null,
+): { ownPost: string; banner: string; pageText: string } {
+  const $ = load(html);
+  $("script, style, template, noscript").remove();
+  const id = postIdFromPermalink(permalink);
+  let own = "";
+  if (id) {
+    const node = $(`[id='${id.replace(/'/g, "")}']`);
+    if (node.length > 0) own = node.text();
+  }
+  if (!own && username.trim()) {
+    const named = username.trim().toLowerCase();
+    $("article, .post, .message, li[id]").each((_, node) => {
+      if (own) return;
+      const text = $(node).text();
+      if (text.toLowerCase().includes(named)) own = text;
+    });
+  }
+  const banner = $(
+    ".systemMessage, .innerSuccess, .flashMessage, .alert, [role='alert'], .success",
+  ).text();
+  return {
+    ownPost: own.replace(/\s+/g, " ").trim(),
+    banner: banner.replace(/\s+/g, " ").trim(),
+    pageText: $("body").text().replace(/\s+/g, " ").trim(),
+  };
+}
+
+/** True when the HTML has no link to a second page. */
+export function fitsOnOnePage(html: string): boolean {
+  if (/[?&]pageNo=([2-9]|\d{2,})/i.test(html)) return false;
+  if (/[?&](?:page|seite)=([2-9]|\d{2,})/i.test(html)) return false;
+  if (/[?&]start=[1-9]\d*/i.test(html)) return false;
+  if (/woltlab-core-pagination[^>]*\bcount="(?:[2-9]|\d{2,})"/i.test(html)) return false;
+  return true;
 }
 
 /** Reads posts, the board section, and whether replies are closed. */
@@ -125,6 +287,7 @@ export function threadMetaFromHtml(
   now = new Date(),
 ): ThreadMeta {
   const $ = load(html);
+  $("script, style, template, noscript").remove();
   const posts: ThreadPostMeta[] = [];
   if (kind === "woltlab") {
     $("article.message").each((_, node) => {
@@ -151,18 +314,7 @@ export function threadMetaFromHtml(
       posts.push({ author, at });
     });
   } else {
-    const times = $("time[datetime]")
-      .map((_, node) => $(node).attr("datetime") || "")
-      .get()
-      .filter(Boolean);
-    const authors = $(".username, .postprofile .username")
-      .map((_, node) => $(node).text().replace(/\s+/g, " ").trim())
-      .get()
-      .filter(Boolean);
-    const count = Math.max(times.length, authors.length);
-    for (let index = 0; index < count; index += 1) {
-      posts.push({ author: authors[index] ?? "", at: times[index] ?? null });
-    }
+    posts.push(...genericPosts($, now));
   }
   if (posts.length === 0) {
     const visible = parseGermanDate($("body").text(), now);
@@ -181,14 +333,14 @@ export function threadMetaFromHtml(
       ? $("article.message .messageText").first().text()
       : kind === "phpbb"
         ? $(".post .content").first().text()
-        : $(".messageText, .postbody .content, .post .content").first().text()
+        : $(".messageText, .postbody .content, .post .content, .forumcontent").first().text()
   )
     .replace(/\s+/g, " ")
     .trim();
   return {
     lastActivityAt: newestAt(posts),
     posts,
-    closed: closedFrom(html, $("body").text()),
+    closed: threadIsClosed($, kind),
     section,
     firstPost,
   };

@@ -248,6 +248,7 @@ describe("ops routes", () => {
           domain: string | null;
           error: string | null;
           lastAction: string | null;
+          outcome: string | null;
         }>;
         recentCaptcha?: Array<{
           domain: string | null;
@@ -259,6 +260,8 @@ describe("ops routes", () => {
       };
       expect(traced.recentSteps?.[0]?.domain).toBe("forum.example");
       expect(traced.recentSteps?.[0]?.error).not.toContain("postgres");
+      expect(traced.recentSteps?.[0]?.outcome).toContain("Opened");
+      expect(traced.recentSteps?.[0]?.outcome).not.toContain("e2b-secret");
       expect(traced.recentCaptcha).toEqual([
         {
           domain: "forum.example",

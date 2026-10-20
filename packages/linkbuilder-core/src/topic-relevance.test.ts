@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pageMatchesTopics, topicStatusForPage } from "./topic-relevance.js";
+import { hasTerm, pageMatchesTopics, topicStatusForPage, topicTerms } from "./topic-relevance.js";
 
 const project = {
   name: "Vitaminexpress",
@@ -39,6 +39,28 @@ describe("topic relevance", () => {
     expect(pageMatchesTopics(shop, project)).toBe(false);
     expect(pageMatchesTopics(health, project)).toBe(true);
     expect(topicStatusForPage("qualified", health, project)).toBe("qualified");
+  });
+
+  it("ignores topic tags that only repeat the search query", () => {
+    expect(
+      pageMatchesTopics(
+        {
+          title: "Gartenforum",
+          pageText: "Tomaten und Beete.",
+          topicTags: ["Kreatin Krafttraining Forum"],
+        },
+        project,
+      ),
+    ).toBe(false);
+  });
+
+  it("folds Nahrungsergänzung the same way on both sides", () => {
+    const terms = topicTerms({
+      topicLanes: [{ id: "sup", tag: "supplements", description: "", exampleQuestions: [] }],
+    });
+    const supplement = terms.find((term) => term.includes("nahrung"));
+    expect(supplement).toBeTruthy();
+    expect(hasTerm("Nahrungsergänzungsmittel", supplement ?? "")).toBe(true);
   });
 
   it("rejects a pickup title even when the body has a fitness section", () => {

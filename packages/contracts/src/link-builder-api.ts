@@ -292,6 +292,8 @@ export const LbRunStepViewSchema = z.object({
   /** Screenshots and snapshots of the step; read them with `linkBuilder.artifacts.get`. */
   artifactIds: z.array(Id),
   createdAt: IsoDate,
+  /** Redacted step outcome, at most 300 characters. Absent on older rows the client already stored. */
+  outcome: z.string().nullable().optional(),
 });
 export type LbRunStepView = z.infer<typeof LbRunStepViewSchema>;
 

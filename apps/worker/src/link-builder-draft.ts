@@ -12,10 +12,10 @@ import { type LbWhyNot, LbWhyNotSchema } from "@rakazo/contracts";
 import {
   type DraftContext,
   draftWithModel,
-  relevanceTopicFromProject,
   type ModelComplete,
   type PreparedDraft,
   type ReferenceFormat,
+  relevanceTopicFromProject,
   selectThreadCandidate,
   type ThreadSelection,
 } from "@rakazo/linkbuilder-core";
@@ -47,6 +47,8 @@ export interface ComposeInput {
   linkPostsOnHost: number;
   now: Date;
   lastActivityAt?: string | null;
+  /** Default true. Warmup passes false so an exchange thread can take a reply. */
+  requireOpenQuestion?: boolean;
 }
 
 export interface ComposeResult {
@@ -114,6 +116,7 @@ export async function composeReply(input: {
         allowedDomains: project.allowedDomains,
         laneId: thread.laneId ?? lane?.id ?? null,
         excludedLaneIds: project.content.excludedLaneIds,
+        requireOpenQuestion: thread.requireOpenQuestion,
       })
     : { selected: false, rejectReason: "model_relevance" };
   return { draft, selection };

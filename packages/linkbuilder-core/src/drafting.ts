@@ -121,9 +121,13 @@ export function selectThreadCandidate(input: {
   allowedDomains: readonly string[];
   laneId: string | null;
   excludedLaneIds: readonly string[];
+  /** Warmup replies may join an ongoing exchange. Link posts still need a question. */
+  requireOpenQuestion?: boolean;
 }): ThreadSelection {
   if (input.relevance < 0.7) return { selected: false, rejectReason: "low_relevance" };
-  if (!input.openQuestion) return { selected: false, rejectReason: "not_open" };
+  if (input.requireOpenQuestion !== false && !input.openQuestion) {
+    return { selected: false, rejectReason: "not_open" };
+  }
   if (input.laneId && input.excludedLaneIds.includes(input.laneId)) {
     return { selected: false, rejectReason: "lane_excluded" };
   }

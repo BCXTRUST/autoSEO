@@ -23,6 +23,7 @@ import {
   relFromAttribute,
   repliesClosed,
 } from "./messages.js";
+import { genericLastPageUrl, readThreadMetaFromSession } from "./thread-meta.js";
 import { detectWidget } from "./widgets.js";
 
 /**
@@ -189,7 +190,11 @@ function scoreConfirm(field: FormFieldInfo): number {
 function scoreBody(field: FormFieldInfo): number {
   if (field.tag !== "textarea" && field.role !== "textbox") return 0;
   if (isCaptchaField(field)) return 0;
-  if (/message|body|content|comment|\braw\b|reply|beitrag|nachricht|antwort|kommentar/.test(blob(field)))
+  if (
+    /message|body|content|comment|\braw\b|reply|beitrag|nachricht|antwort|kommentar/.test(
+      blob(field),
+    )
+  )
     return 4;
   return field.tag === "textarea" ? 2 : 0;
 }
@@ -965,6 +970,17 @@ export class GenericFormDriver implements BoardDriver {
     await session.fill(mapped.password.selector, account.password, { secret: true });
     await session.click(mapped.submit.selector);
     return session.waitFor(LOGGED_IN_SELECTOR, { timeoutMs: 10_000 });
+  }
+
+  async readThreadMeta(session: BrowserSession) {
+    return readThreadMetaFromSession(session, "markup");
+  }
+
+  async lastPageUrl(session: BrowserSession, _thread: BoardThread): Promise<string | null> {
+    const html = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
+    const current = await session.url().catch(() => "");
+    if (!html || !current) return null;
+    return genericLastPageUrl(html, current);
   }
 
   async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {

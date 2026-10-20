@@ -1,7 +1,7 @@
 import type { BrowserSession } from "@rakazo/adapter-kit";
 import type { BoardThread, ReplyResult } from "./driver.js";
-import { readThreadMetaFromSession } from "./thread-meta.js";
 import { commonFields, defineBoard, field, MarkupBoardDriver } from "./markup-driver.js";
+import { readThreadMetaFromSession, woltlabLastPageUrl } from "./thread-meta.js";
 
 /** Canonical WoltLab permalink `/forum/thread/<id>-slug/?postID=<id>#post<id>`. */
 export function woltlabPermalink(url: string): string | null {
@@ -141,6 +141,13 @@ export class WoltlabDriver extends MarkupBoardDriver {
 
   override async readThreadMeta(session: BrowserSession) {
     return readThreadMetaFromSession(session, "woltlab");
+  }
+
+  override async lastPageUrl(
+    _session: BrowserSession,
+    thread: BoardThread,
+  ): Promise<string | null> {
+    return woltlabLastPageUrl(thread.url);
   }
 
   override async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {

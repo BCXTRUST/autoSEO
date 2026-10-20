@@ -170,6 +170,7 @@ const RECORDED_WAIT_ACTION: Record<string, string> = {
   no_workable_host: "No forum left to work on",
   registration_cap: "Registration cap",
   research: "Reading the forum first",
+  nothing_today: "Nothing left today",
 };
 
 function sameStringList(left: unknown, right: readonly unknown[]): boolean {

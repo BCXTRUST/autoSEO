@@ -140,6 +140,11 @@ export interface BoardDriver {
    * Omitted drivers leave the date unknown, which the warmup gate treats as stale.
    */
   readThreadMeta?(session: BrowserSession): Promise<ThreadMeta>;
+  /**
+   * URL of the page that holds the newest posts. Page 1 of a long thread is the opener.
+   * Omitted drivers stay on the thread URL.
+   */
+  lastPageUrl?(session: BrowserSession, thread: BoardThread): Promise<string | null>;
   fillReply(session: BrowserSession, body: string): Promise<void>;
   submitReply(session: BrowserSession): Promise<ReplyResult>;
   /** Reads the board's rule for links by new members from rules, FAQ or editor text. */

@@ -14,7 +14,7 @@ import type {
 } from "./driver.js";
 import { holdSignupForm, releaseSignupForm } from "./driver.js";
 import { captchaRejected } from "./messages.js";
-import { readThreadMetaFromSession } from "./thread-meta.js";
+import { phpbbLastPageUrl, readThreadMetaFromSession } from "./thread-meta.js";
 import { detectWidget } from "./widgets.js";
 
 /*
@@ -287,6 +287,13 @@ export class PhpbbDriver implements BoardDriver {
 
   async readThreadMeta(session: BrowserSession) {
     return readThreadMetaFromSession(session, "phpbb");
+  }
+
+  async lastPageUrl(session: BrowserSession, _thread: BoardThread): Promise<string | null> {
+    const html = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
+    const current = await session.url().catch(() => "");
+    if (!html || !current) return null;
+    return phpbbLastPageUrl(html, current);
   }
 
   async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {

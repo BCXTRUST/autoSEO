@@ -1,4 +1,5 @@
 import { localDateKey, startOfZonedDay } from "@rakazo/linkbuilder-core";
+import { moderationScope } from "@rakazo/linkbuilder-drivers";
 import { threadKey } from "./link-builder-page-move.js";
 
 /** Reasons that can change on the next visit, so they are not stored on the thread. */
@@ -59,20 +60,34 @@ const MODERATION = /wird nach prüfung|freigeschaltet|moderiert|awaiting approva
 
 export function replyVisibility(input: {
   pageText: string;
+  html?: string;
   username: string;
   body: string;
+  permalink?: string | null;
 }): "posted" | "pending_moderation" | "not_visible" {
-  if (MODERATION.test(input.pageText)) return "pending_moderation";
-  const page = input.pageText.toLowerCase().replace(/\s+/g, " ");
   const snippet = normalizeReplyBody(input.body).slice(0, 40);
   const named = input.username.trim().toLowerCase();
-  if (named && snippet.length >= 8 && page.includes(named) && page.includes(snippet)) {
-    return "posted";
+  const visible = (text: string) => {
+    const page = text.toLowerCase().replace(/\s+/g, " ");
+    return (
+      named.length > 0 && snippet.length >= 8 && page.includes(named) && page.includes(snippet)
+    );
+  };
+  if (input.html) {
+    const scope = moderationScope(input.html, input.username, input.permalink);
+    const held =
+      MODERATION.test(scope.ownPost) || (scope.banner.length > 0 && MODERATION.test(scope.banner));
+    if (held && !visible(scope.pageText)) return "pending_moderation";
+    if (visible(scope.pageText) || visible(input.pageText)) return "posted";
+    if (held) return "pending_moderation";
+    return "not_visible";
   }
+  if (MODERATION.test(input.pageText) && !visible(input.pageText)) return "pending_moderation";
+  if (visible(input.pageText)) return "posted";
   return "not_visible";
 }
 
-const DAILY_REFUSAL = new Set(["link_day", "warmup_pace", "captcha_cap"]);
+const DAILY_REFUSAL = new Set(["link_day", "warmup_pace", "captcha_cap", "no_thread_today"]);
 
 export function dailyRefusal(outcome: unknown): string | null {
   if (!outcome || typeof outcome !== "object") return null;

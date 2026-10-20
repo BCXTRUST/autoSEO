@@ -54,6 +54,7 @@ export interface OpsState {
     domain: string | null;
     lastAction: string | null;
     error: string | null;
+    outcome: string | null;
   }>;
   recentCaptcha?: Array<{
     domain: string | null;
@@ -241,6 +242,7 @@ export async function opsState(
     domain: step.hostId ? (domainOf.get(step.hostId) ?? null) : null,
     lastAction: redactOpsSecrets(stepAction(step.outcome), deps.env).slice(0, 200) || null,
     error: step.error ? redactOpsSecrets(step.error, deps.env).slice(0, 200) : null,
+    outcome: redactOpsSecrets(JSON.stringify(step.outcome ?? null), deps.env).slice(0, 300),
   }));
   state.recentCaptcha = captcha.map((event) => ({
     domain: event.hostId ? (domainOf.get(event.hostId) ?? null) : null,
