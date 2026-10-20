@@ -140,7 +140,7 @@ import {
   usernameTaken,
   verifyPlacement,
 } from "@rakazo/linkbuilder-drivers";
-import { bumpModelRefusal, composeReply } from "./link-builder-draft.js";
+import { bumpModelRefusal, composeReply, threadDiscussionExcerpt } from "./link-builder-draft.js";
 import {
   boardLink,
   chosenLink,
@@ -2660,15 +2660,26 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
   }
   await entry.session.releaseForm?.();
   await entry.session.goto(link);
+  let activationClicked = false;
   try {
-    await clickAccountActivation(entry.session);
+    activationClicked = await clickAccountActivation(entry.session);
   } catch {
     // The page can activate from the URL alone.
   }
   const activation = await driver.activationResult(entry.session);
   const artifactIds = await screenshot(ctx, entry, "activated");
   const verifiedAt = ctx.now;
-  if (activation === "unknown") {
+  const buttonStillThere =
+    activation === "unknown"
+      ? await entry.session.exists("#activate-account-button").catch(() => true)
+      : false;
+  const pageText =
+    activation === "unknown"
+      ? (await entry.session.pageText().catch(() => "")).replace(/\s+/g, " ").trim()
+      : "";
+  const activationSpent =
+    activationClicked && !buttonStillThere && pageText.length >= 40 && account === null;
+  if (activation === "unknown" && !activationSpent) {
     return {
       kind: "step",
       hostId: host.id,
@@ -2678,13 +2689,17 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
       run: { currentHostId: null },
     };
   }
-  const verified = activation === "active";
+  const verified = activation === "active" || activationSpent;
   return {
     kind: "step",
-    lastAction: verified ? "Email verified" : "Email verified, waiting for the admin",
+    lastAction: activationSpent
+      ? "Activated, no login saved"
+      : verified
+        ? "Email verified"
+        : "Email verified, waiting for the admin",
     hostId: host.id,
     artifactIds,
-    outcome: { activation },
+    outcome: { activation: activationSpent ? "active" : activation },
     apply: async (tx) => {
       if (account) {
         await tx.lbHostAccount.update({
@@ -2699,7 +2714,10 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
         (typeof tx.lbHostAccount.findUnique === "function"
           ? await tx.lbHostAccount.findUnique({ where: { hostId: host.id } })
           : null);
-      if (!linked && !account) return;
+      if (!linked) {
+        await moveHost(tx, host, "parked", { statusReason: "no_login_saved" });
+        return;
+      }
       await moveHost(tx, host, verified ? "account_active" : "admin_pending");
     },
   };
@@ -2802,9 +2820,12 @@ async function threadsForReply(
       if (fresh.length > 0) return { threads: fresh, searched: true };
     }
   }
-  const listed = (await driver.listThreads(session, homepageUrl)).filter(
-    (thread) => !skip.has(threadKey(thread.url)) && !isMailSendFailure(thread.title),
-  );
+  const listed = (
+    await driver.listThreads(session, homepageUrl, {
+      terms: topicTerms(project),
+      activityDays: project.warmup?.activityDays,
+    })
+  ).filter((thread) => !skip.has(threadKey(thread.url)) && !isMailSendFailure(thread.title));
   return { threads: listed, searched: false };
 }
 
@@ -3050,14 +3071,36 @@ async function recheckHeldReplies(
   }
 }
 
-function warmupNoThread(hostId: string, rejected: string[] = []): StepResult {
+function warmupNoThread(
+  hostId: string,
+  rejected: string[] = [],
+  rejectedDetail: string[] = [],
+): Extract<StepResult, { kind: "step" }> {
   return {
     kind: "step",
     hostId,
     lastAction: "No thread passed selection",
-    outcome: { refused: "no_thread_today", rejected },
+    outcome: {
+      refused: "no_thread_today",
+      rejected,
+      ...(rejectedDetail.length > 0 ? { rejectedDetail } : {}),
+    },
     run: { currentHostId: null },
   };
+}
+
+function openFailureDetail(error: unknown, secrets: readonly string[]): string {
+  const name = error instanceof Error ? error.name : "Error";
+  const message = error instanceof Error ? error.message : String(error);
+  return redactSecrets(`${name}: ${message}`, secrets).replace(/\s+/g, " ").trim().slice(0, 160);
+}
+
+function openFailureDetails(
+  rejections: ReadonlyArray<{ reason: string; detail?: string }>,
+): string[] {
+  return rejections.flatMap((rejection) =>
+    rejection.reason === "open_failed" && rejection.detail ? [rejection.detail] : [],
+  );
 }
 
 async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
@@ -3252,6 +3295,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     reason: string;
     relevance: number;
     store?: boolean;
+    detail?: string;
   }> = [];
   let drafted = 0;
   for (const thread of threads) {
@@ -3303,6 +3347,16 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       const onePage = pageHtml ? fitsOnOnePage(pageHtml) : true;
       const topicBody = (onePage ? `${opener}\n${lastVisible}` : lastVisible).trim();
       discussion = [thread.title, topicBody].filter(Boolean).join("\n");
+      if (meta?.unreadable) {
+        rejections.push({
+          url: key,
+          title: thread.title,
+          reason: "meta_unreadable",
+          relevance: 0,
+          store: false,
+        });
+        continue;
+      }
       const facts = meta ?? {
         lastActivityAt: null,
         posts: [],
@@ -3349,6 +3403,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
         reason: "open_failed",
         relevance: 0,
         store: false,
+        detail: openFailureDetail(error, ctx.secrets),
       });
       continue;
     }
@@ -3371,6 +3426,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
         reason: closed ? "replies_closed" : "open_failed",
         relevance: 0,
         store: closed,
+        ...(closed ? {} : { detail: "Error: reply did not open" }),
       });
       continue;
     }
@@ -3401,13 +3457,20 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       };
       break;
     }
+    const discussionExcerpt = threadDiscussionExcerpt({
+      title: thread.title,
+      opener,
+      posts: meta?.posts ?? [],
+    });
     const composed = await composeReply({
       model,
       adapter: ctx.adapter,
       project: ctx.project,
       thread: {
         title: thread.title,
-        excerpt: (discussion || pageText).replace(/\s+/g, " ").trim().slice(0, 700),
+        excerpt: discussionExcerpt.excerpt,
+        replies: discussionExcerpt.replies,
+        minRelevance: warmup ? 0.6 : 0.7,
         pageText,
         lastActivityAt: meta?.lastActivityAt ?? thread.lastActivityAt ?? null,
         citeSource: !warmup,
@@ -3544,11 +3607,13 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     }
   };
   if (!chosen) {
+    const rejectedDetail = openFailureDetails(rejections);
     if (warmup) {
       return {
         ...warmupNoThread(
           host.id,
           rejections.map((rejection) => rejection.reason),
+          rejectedDetail,
         ),
         apply: upsertRejected,
       };
@@ -3557,7 +3622,10 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       kind: "step",
       lastAction: threads.length === 0 ? "No thread here, moving on" : "No thread passed selection",
       hostId: host.id,
-      outcome: { rejected: rejections.map((rejection) => rejection.reason) },
+      outcome: {
+        rejected: rejections.map((rejection) => rejection.reason),
+        ...(rejectedDetail.length > 0 ? { rejectedDetail } : {}),
+      },
       apply: async (tx) => {
         await upsertRejected(tx);
         if (threads.length === 0)

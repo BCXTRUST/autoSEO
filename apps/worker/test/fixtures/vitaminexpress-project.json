@@ -1,0 +1,512 @@
+{
+  "id": "cmuwjtyeg00005xo5zgz70ls2",
+  "name": "Vitaminexpress",
+  "slug": "vitaminexpress-3096",
+  "status": "paused",
+  "brandName": "Vitaminexpress",
+  "allowedDomains": [
+    "vitaminexpress.org"
+  ],
+  "persona": {
+    "displayName": "Sophie Braun",
+    "bio": "Antwortet ruhig und konkret. Kennt Vitaminexpress, vor allem die Seiten unter /de.",
+    "language": "de",
+    "register": "du"
+  },
+  "mailboxId": "project@example.com",
+  "mailboxAddress": "project@example.com",
+  "captchaConfigured": false,
+  "captchaLowBalanceCredits": 500,
+  "quotas": {
+    "newPerDay": 5,
+    "livePerDay": 1,
+    "liveWeekCap": 5,
+    "maxLivePerHost": 1
+  },
+  "schedule": {
+    "timezone": "Europe/Berlin",
+    "weekdaysOnly": true,
+    "window": {
+      "start": "09:00",
+      "end": "22:00"
+    },
+    "overtimeUntilLiveMet": false,
+    "hardStopHour": 24
+  },
+  "topicLanes": [
+    {
+      "id": "kw-01",
+      "tag": "Creatin EEM",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-02",
+      "tag": "folsäure kaufen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-03",
+      "tag": "k2 vitamin",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-04",
+      "tag": "Kreatin EEM",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-05",
+      "tag": "Kreatin Formel",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-06",
+      "tag": "Kreatin kaufen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-07",
+      "tag": "Kreatin Monohydrat",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-08",
+      "tag": "Kreatin Orotat",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-09",
+      "tag": "Magnesium",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-10",
+      "tag": "magnesium kaufen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-11",
+      "tag": "Magnesium Tagesbedarf",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-12",
+      "tag": "melatonin",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-13",
+      "tag": "Melatonin Dosierungen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-14",
+      "tag": "melatonin kaufen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-15",
+      "tag": "Melatonin Kinder",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-16",
+      "tag": "Sango",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-17",
+      "tag": "Sango Kaufen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-18",
+      "tag": "spirulina kaufen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-19",
+      "tag": "Stimmungsaufheller",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-20",
+      "tag": "Tipps zum Einschlafen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-21",
+      "tag": "vitamin b",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-22",
+      "tag": "vitamin b kaufen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-23",
+      "tag": "vitamin b12 kaufen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-24",
+      "tag": "Vitamin B12 Mangel",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-25",
+      "tag": "vitamin d",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-26",
+      "tag": "vitamin d kaufen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-27",
+      "tag": "vitamin K2",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-28",
+      "tag": "vitamin k2 kaufen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    },
+    {
+      "id": "kw-29",
+      "tag": "zink kaufen",
+      "description": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+      "exampleQuestions": []
+    }
+  ],
+  "markets": [
+    {
+      "country": "DE",
+      "language": "de",
+      "locale": "de-DE",
+      "timezoneId": "Europe/Berlin"
+    },
+    {
+      "country": "AT",
+      "language": "de",
+      "locale": "de-AT",
+      "timezoneId": "Europe/Vienna"
+    },
+    {
+      "country": "CH",
+      "language": "de",
+      "locale": "de-CH",
+      "timezoneId": "Europe/Zurich"
+    }
+  ],
+  "marketPolicy": "all_markets",
+  "disclosureMode": "undisclosed_persona",
+  "responsibilityAck": {
+    "acceptedAt": "2026-10-20T10:04:27.811Z",
+    "acceptedByUserId": "user",
+    "textVersion": "2026-10-05"
+  },
+  "linkRatio": {
+    "links": 1,
+    "posts": 3
+  },
+  "proxyPolicy": "static_isp_per_persona",
+  "countNofollow": true,
+  "targets": [
+    {
+      "url": "https://www.vitaminexpress.org/at/creatin",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Creatin EEM"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/folsaeure-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "folsäure kaufen"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/de/vitamin-k2",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "k2 vitamin"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/creatin",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Kreatin EEM"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/creatin",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Kreatin Formel"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/creatin-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Kreatin kaufen"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/creatin-monohydrat",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Kreatin Monohydrat"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/creatin",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Kreatin Orotat"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/magnesium-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Magnesium"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/magnesium-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "magnesium kaufen"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/magnesium-tagesbedarf",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Magnesium Tagesbedarf"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/melatonin",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "melatonin"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/melatonin-dosierung",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Melatonin Dosierungen"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/melatonin-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "melatonin kaufen"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/melatonin-fuer-kinder",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Melatonin Kinder"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/sango-meeres-koralle-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Sango"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/sango-meeres-koralle-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Sango Kaufen"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/spirulina-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "spirulina kaufen"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/vitamin-b-complex-vitamin-b-kapseln",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "vitamin b"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/vitamin-b-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "vitamin b kaufen"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/vitamin-b12-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "vitamin b12 kaufen"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/vitamin-b12-mangel",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "Vitamin B12 Mangel"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/de/vitamin-d",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "vitamin d"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/vitamin-d3",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "vitamin d kaufen"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/vitamin-k2-100-mcg-kapseln",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "vitamin K2"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/vitamin-k2-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "vitamin k2 kaufen"
+      ]
+    },
+    {
+      "url": "https://www.vitaminexpress.org/at/zink-kaufen",
+      "priority": 50,
+      "description": "",
+      "keywordClusters": [
+        "zink kaufen"
+      ]
+    }
+  ],
+  "facts": [
+    "Magnesium ist der Superstar unter den Mineralstoffen und wird als Nahrungsergänzungsmittel immer beliebter. Der Grund dafür ist, dass bis zu 75 Prozent der Bevölkerung an einem Magnesiummangel leidet. Hier erfahren Sie, worauf es wirklich ankommt, wenn Sie Magnesium kaufen möchten."
+  ],
+  "denyHosts": [
+    "bulli-forum.com",
+    "mindfactory.de",
+    "heise.de",
+    "win-10-forum.de",
+    "mtb-news.de",
+    "deskmodder.de",
+    "classic-camping-freunde.de",
+    "winfuture-forum.de",
+    "photovoltaikforum.com",
+    "windows-10-forum.de",
+    "computerbase.de",
+    "windows-7-forum.net",
+    "dosforum.de",
+    "rc-network.de",
+    "hardwareluxx.de",
+    "phpbb.de",
+    "macuser.de",
+    "mikrocontroller.net",
+    "strunz.com",
+    "allmystery.de",
+    "android-hilfe.de",
+    "medizin-forum.de",
+    "frauenselbsthilfe.de",
+    "psychic.de",
+    "lifters-lounge.com"
+  ],
+  "preferHosts": [
+    "diabetes-forum.de"
+  ],
+  "warmup": {
+    "minPostsBeforeLink": 2,
+    "minAccountAgeHours": 24
+  },
+  "content": {
+    "toneNotes": "Vitaminexpress sells supplements. A relevant forum is any real human problem those products touch: sleep, pain, cramps, sport and training, children, mood, pregnancy, deficiency, energy. Search the problem in German (DE/AT/CH), not the brand. The landing page is only the link placed later.",
+    "bannedClaims": [],
+    "maxReplyChars": 1200,
+    "mode": "discard",
+    "threadActivityDays": 30,
+    "excludedLaneIds": [],
+    "modelLanes": {}
+  },
+  "webhookConfigured": false,
+  "createdAt": "2026-10-06T10:41:48.136Z",
+  "updatedAt": "2026-10-20T10:08:54.964Z"
+}

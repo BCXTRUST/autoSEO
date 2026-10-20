@@ -1,5 +1,12 @@
 import type { BrowserSession, ClickableControl, FormFieldInfo } from "@rakazo/adapter-kit";
-import { isMailSendFailure } from "@rakazo/linkbuilder-core";
+import {
+  hasTerm,
+  isMailSendFailure,
+  WARMUP_BOARD_TERMS,
+  warmupBoardScore,
+  warmupHealthTitle,
+} from "@rakazo/linkbuilder-core";
+import { load } from "cheerio";
 import { detectKnowledgeQuestion, looksLikeKnowledgeQuestion } from "./captcha.js";
 import { acceptCookieWall } from "./cookie-wall.js";
 import type {
@@ -23,7 +30,11 @@ import {
   relFromAttribute,
   repliesClosed,
 } from "./messages.js";
-import { genericLastPageUrl, readThreadMetaFromSession } from "./thread-meta.js";
+import {
+  genericLastPageUrl,
+  parseGermanPostDate,
+  readThreadMetaFromSession,
+} from "./thread-meta.js";
 import { detectWidget } from "./widgets.js";
 
 /**
@@ -983,15 +994,34 @@ export class GenericFormDriver implements BoardDriver {
     return genericLastPageUrl(html, current);
   }
 
-  async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {
+  async listThreads(
+    session: BrowserSession,
+    homepageUrl: string,
+    topic?: { terms: string[]; activityDays?: number },
+  ): Promise<BoardThread[]> {
     await session.goto(homepageUrl);
-    let threads = await collectThreads(session);
-    if (threads.length > 0) return threads;
+    const home = await collectThreads(session);
+    const html = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
+    const base = await session.url().catch(() => homepageUrl);
+    const sections = html ? genericSections(html, base, topic?.terms ?? []) : [];
+    const found = [...home];
+    const activityDays = topic?.activityDays ?? 30;
+    for (const section of sections.slice(0, 3)) {
+      try {
+        await session.goto(section);
+      } catch {
+        continue;
+      }
+      const page = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
+      const pageUrl = await session.url().catch(() => section);
+      found.push(...genericSectionRows(page, pageUrl, activityDays));
+    }
+    const merged = orderListedThreads(dedupeThreads(found), topic?.terms ?? []);
+    if (merged.length > 0) return merged.slice(0, 25);
     const forum = await session.attribute("a.forumtitle, a[href*='viewforum']", "href");
     if (!forum) return [];
     await session.goto(new URL(forum, await session.url()).href);
-    threads = await collectThreads(session);
-    return threads;
+    return collectThreads(session);
   }
 
   async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {
@@ -1292,4 +1322,99 @@ async function collectThreads(session: BrowserSession): Promise<BoardThread[]> {
     });
   }
   return threads;
+}
+
+const SECTION_HREF = /\/forum\/topics\/\d+\/|viewforum\.php\?f=\d+|\/forum\/board\//i;
+
+function genericSections(html: string, base: string, terms: readonly string[]): string[] {
+  const $ = load(html);
+  const scored: Array<{ url: string; score: number; order: number }> = [];
+  const seen = new Set<string>();
+  $("a[href]").each((order, el) => {
+    const href = $(el).attr("href") ?? "";
+    if (!SECTION_HREF.test(href)) return;
+    const name = $(el).text().replace(/\s+/g, " ").trim();
+    const score = warmupBoardScore(name, terms);
+    if (score <= 0) return;
+    let url: string;
+    try {
+      url = new URL(href, base).href;
+    } catch {
+      return;
+    }
+    const key = url.replace(/\/$/, "").toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    scored.push({ url, score, order });
+  });
+  scored.sort((a, b) => b.score - a.score || a.order - b.order);
+  return scored.map((row) => row.url);
+}
+
+function genericSectionRows(html: string, base: string, activityDays: number): BoardThread[] {
+  const $ = load(html);
+  const now = new Date();
+  const threads: BoardThread[] = [];
+  $("tr").each((_, node) => {
+    const row = $(node);
+    const link = row.find("td.title a[href*='/forum/topic/']").first();
+    const href = link.attr("href");
+    const title = link.text().replace(/\s+/g, " ").trim();
+    if (!href || !title) return;
+    const dated = parseGermanPostDate(row.find("td.last").text(), now, "Europe/Berlin");
+    if (dated) {
+      const age = (now.getTime() - Date.parse(dated)) / 86_400_000;
+      if (Number.isFinite(age) && age > activityDays) return;
+    }
+    let url: string;
+    try {
+      url = new URL(href, base).href;
+    } catch {
+      return;
+    }
+    threads.push({ url, title, lastActivityAt: dated, openQuestion: /\?/.test(title) });
+  });
+  return threads;
+}
+
+function threadListKey(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`.replace(/\/$/, "").toLowerCase();
+  } catch {
+    return url;
+  }
+}
+
+function dedupeThreads(threads: BoardThread[]): BoardThread[] {
+  const byKey = new Map<string, BoardThread>();
+  const order: string[] = [];
+  for (const thread of threads) {
+    const key = threadListKey(thread.url);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, thread);
+      order.push(key);
+      continue;
+    }
+    if (!existing.lastActivityAt && thread.lastActivityAt) byKey.set(key, thread);
+  }
+  return order.flatMap((key) => {
+    const thread = byKey.get(key);
+    return thread ? [thread] : [];
+  });
+}
+
+function orderListedThreads(threads: BoardThread[], terms: readonly string[]): BoardThread[] {
+  const hit = (title: string) =>
+    warmupHealthTitle(title) ||
+    WARMUP_BOARD_TERMS.some((term) => hasTerm(title, term)) ||
+    terms.some((term) => hasTerm(title, term));
+  return [...threads].sort((a, b) => {
+    const delta = Number(hit(b.title)) - Number(hit(a.title));
+    if (delta !== 0) return delta;
+    const aAt = Date.parse(a.lastActivityAt ?? "") || 0;
+    const bAt = Date.parse(b.lastActivityAt ?? "") || 0;
+    return bAt - aAt;
+  });
 }

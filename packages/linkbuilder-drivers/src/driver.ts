@@ -123,7 +123,11 @@ export interface BoardDriver {
     homepageUrl: string,
     account: Pick<BoardAccount, "username" | "password">,
   ): Promise<boolean>;
-  listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]>;
+  listThreads(
+    session: BrowserSession,
+    homepageUrl: string,
+    topic?: { terms: string[]; activityDays?: number },
+  ): Promise<BoardThread[]>;
   /**
    * Board search for the human problem. Omitted drivers fall back to the index.
    * Results use a stable topic URL so a later search with a new session id is the same thread.

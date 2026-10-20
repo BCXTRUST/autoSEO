@@ -244,8 +244,42 @@ export function laneTermInTitleOrOpener(
 }
 
 /** Title or board section that is an introduction, a game, or off-topic chat. */
-const WARMUP_TITLE_BLOCK =
-  /hallo|vorstell|neu hier|willkommen|stelle mich|abc|a-z|a bis z|kette|wörter|this or that|filme|serie|musik|hört ihr|kocht ihr|news|wahl|plauder|café|cafe|off.?topic|laber|spiel|witz|geburtstag/i;
+export const WARMUP_TITLE_BLOCK =
+  /hallo|vorstell|neu hier|willkommen|stelle mich|\babc\b|a-z|a bis z|kette|wörter|this or that|filme|\bserie|\bmusik|hört ihr|kocht ihr|\bnews\b|\bwahl(en)?\b|plauder|café|cafe|off.?topic|laber|\bspiel\w*|witz|geburtstag/i;
+
+/** Board names that are worth opening, besides a direct health-term hit. */
+export const WARMUP_BOARD_TERMS = [
+  "medizin",
+  "orthopädie",
+  "innere",
+  "ernährung",
+  "fitness",
+  "immun",
+  "wechseljahre",
+  "kinderwunsch",
+  "schwanger",
+  "stoffwechsel",
+  "magen",
+  "darm",
+  "kopfschmerz",
+  "haut",
+  "wohlbefinden",
+  "alternativ",
+] as const;
+
+const BOARD_DROP =
+  /caf[eé]|plauder|spiel|vorstell|rund ums forum|tier|beziehung|sexualit|beruf|abschied|trauer|gesundheitswesen|sucht|krebs|pflege|behinderung|psycholog|ängste/i;
+
+/** Higher is a better board to open. Dropped boards score -1. */
+export function warmupBoardScore(name: string, terms: readonly string[] = []): number {
+  const title = name.replace(/\s+/g, " ").trim();
+  if (!title || BOARD_DROP.test(title)) return -1;
+  let score = 0;
+  if (WARMUP_HEALTH_TERMS.some((term) => hasTerm(title, term))) score += 2;
+  if (terms.some((term) => hasTerm(title, term))) score += 2;
+  if (WARMUP_BOARD_TERMS.some((term) => hasTerm(title, term))) score += 1;
+  return score;
+}
 
 export interface WarmupPost {
   author: string;
@@ -309,10 +343,11 @@ export function warmupThreadEligible(input: {
   const windowDays = input.activityDays ?? 30;
   const lastAge = input.meta.lastActivityAt ? ageDays(input.meta.lastActivityAt, input.now) : null;
   if (lastAge === null || lastAge > windowDays) return { ok: false, reason: "stale" };
+  const foreignDays = Math.min(windowDays, 21);
   const foreignRecent = input.meta.posts.some((post) => {
     if (!post.at || namesMatch(post.author, input.username)) return false;
     const age = ageDays(post.at, input.now);
-    return age !== null && age >= 0 && age <= 14;
+    return age !== null && age >= 0 && age <= foreignDays;
   });
   if (!foreignRecent) return { ok: false, reason: "no_other_users" };
   let newest: WarmupPost | null = null;

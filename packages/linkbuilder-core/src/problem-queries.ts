@@ -412,6 +412,57 @@ export function relevanceTopicFromProject(project: {
   };
 }
 
+/** Every use case, not only the first. Search queries still use `relevanceTopicFromProject`. */
+export function relevanceTopicsFromProject(project: {
+  name?: string | null;
+  brandName?: string | null;
+  topicLanes?: unknown;
+  targets?: unknown;
+}): { tag: string; description: string } {
+  const lanes = useCaseLanes(problemInputFromProject(project));
+  const nutrients: string[] = [];
+  const groups: string[][] = [];
+  let group: string[] = [];
+  let previousNutrient = "";
+  const seen = new Set<string>();
+  for (const lane of lanes) {
+    if (!nutrients.some((item) => item.toLowerCase() === lane.nutrient.toLowerCase())) {
+      nutrients.push(lane.nutrient);
+    }
+    const key = lane.useCase.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (lane.nutrient !== previousNutrient) {
+      if (group.length > 0) groups.push(group);
+      group = [];
+      previousNutrient = lane.nutrient;
+    }
+    group.push(lane.useCase);
+  }
+  if (group.length > 0) groups.push(group);
+  const listed: string[] = [];
+  for (let depth = 0; listed.length < 24; depth += 1) {
+    let added = false;
+    for (const uses of groups) {
+      const useCase = uses[depth];
+      if (!useCase) continue;
+      listed.push(useCase);
+      added = true;
+      if (listed.length >= 24) break;
+    }
+    if (!added) break;
+  }
+  const foods = nutrients.slice(0, 24);
+  if (listed.length === 0) return relevanceTopicFromProject(project);
+  const description = [
+    `Threads about any of these everyday problems are on topic: ${listed.join(", ")}.`,
+    `Helpful nutrients: ${foods.join(", ")}.`,
+    "Diet, blood values, deficiencies, and medication side effects that touch these nutrients also count.",
+    "The thread does not have to name a nutrient or a product.",
+  ].join(" ");
+  return { tag: listed.join(", "), description: description.slice(0, 1_500) };
+}
+
 export function problemInputFromProject(project: {
   name?: string | null;
   brandName?: string | null;

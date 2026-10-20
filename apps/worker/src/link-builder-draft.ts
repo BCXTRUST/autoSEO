@@ -15,7 +15,7 @@ import {
   type ModelComplete,
   type PreparedDraft,
   type ReferenceFormat,
-  relevanceTopicFromProject,
+  relevanceTopicsFromProject,
   selectThreadCandidate,
   type ThreadSelection,
 } from "@rakazo/linkbuilder-core";
@@ -49,6 +49,31 @@ export interface ComposeInput {
   lastActivityAt?: string | null;
   /** Default true. Warmup passes false so an exchange thread can take a reply. */
   requireOpenQuestion?: boolean;
+  /** Newest post texts. The relevance check reads these instead of the page menu. */
+  replies?: readonly string[];
+  /** Warmup passes 0.6. Link mode stays at 0.7. */
+  minRelevance?: number;
+}
+
+/** Title, opener, and the newest posts. Never the site navigation. */
+export function threadDiscussionExcerpt(input: {
+  title: string;
+  opener: string;
+  posts: ReadonlyArray<{ text?: string | null }>;
+}): { excerpt: string; replies: string[] } {
+  const replies = input.posts
+    .map((post) => (post.text ?? "").replace(/\s+/g, " ").trim())
+    .filter((text) => text.length > 0)
+    .slice(-3);
+  const excerpt = [
+    input.title,
+    input.opener.slice(0, 600),
+    ...replies.slice(-2).map((text) => text.slice(0, 300)),
+  ]
+    .filter((part) => part.trim().length > 0)
+    .join("\n")
+    .slice(0, 1_200);
+  return { excerpt, replies };
 }
 
 export interface ComposeResult {
@@ -65,7 +90,9 @@ export async function composeReply(input: {
 }): Promise<ComposeResult> {
   const { model, project, thread } = input;
   const lane = project.topicLanes[0];
-  const topic = relevanceTopicFromProject({
+  const topic = relevanceTopicsFromProject({
+    name: undefined,
+    brandName: undefined,
     topicLanes: project.topicLanes,
     targets: project.targets,
   });
@@ -87,6 +114,7 @@ export async function composeReply(input: {
     allowedDomains: project.allowedDomains,
     title: thread.title,
     excerpt: thread.excerpt,
+    replies: thread.replies,
     laneTag: topic.tag,
     laneDescription: topic.description,
     citeSource: thread.citeSource,
@@ -117,6 +145,7 @@ export async function composeReply(input: {
         laneId: thread.laneId ?? lane?.id ?? null,
         excludedLaneIds: project.content.excludedLaneIds,
         requireOpenQuestion: thread.requireOpenQuestion,
+        minRelevance: thread.minRelevance,
       })
     : { selected: false, rejectReason: "model_relevance" };
   return { draft, selection };

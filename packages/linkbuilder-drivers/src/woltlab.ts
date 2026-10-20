@@ -1,4 +1,11 @@
 import type { BrowserSession } from "@rakazo/adapter-kit";
+import {
+  hasTerm,
+  WARMUP_BOARD_TERMS,
+  warmupBoardScore,
+  warmupHealthTitle,
+} from "@rakazo/linkbuilder-core";
+import { load } from "cheerio";
 import type { BoardThread, ReplyResult } from "./driver.js";
 import { commonFields, defineBoard, field, MarkupBoardDriver } from "./markup-driver.js";
 import { readThreadMetaFromSession, woltlabLastPageUrl } from "./thread-meta.js";
@@ -116,27 +123,46 @@ export class WoltlabDriver extends MarkupBoardDriver {
     return SIGNED_IN;
   }
 
-  override async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {
+  override async listThreads(
+    session: BrowserSession,
+    homepageUrl: string,
+    topic?: { terms: string[]; activityDays?: number },
+  ): Promise<BoardThread[]> {
     const listed = await super.listThreads(session, homepageUrl);
-    if (listed.length > 0 || !session.listAnchors) return listed;
-    let anchors = await session.listAnchors(TOPIC_LINK);
-    if (anchors.length === 0) anchors = await session.listAnchors("a.wbbTopicLink");
-    const threads: BoardThread[] = [];
-    const seen = new Set<string>();
-    const base = await session.url();
-    for (const anchor of anchors) {
-      let url: string;
+    const html = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
+    const base = await session.url().catch(() => homepageUrl);
+    const terms = topic?.terms ?? [];
+    const discovered = html ? woltlabBoards(html, base, terms) : [];
+    if (discovered.length === 0) {
+      if (listed.length > 0 || !session.listAnchors) return listed;
+      return legacyTopicLinks(session, base);
+    }
+    const activityDays = topic?.activityDays ?? 30;
+    const now = Date.now();
+    const found: BoardThread[] = [...woltlabIndexThreads(html, base)];
+    for (const board of discovered.slice(0, 8)) {
       try {
-        url = new URL(anchor.href, base).href.replace(/\?action=firstNew$/, "");
+        await session.goto(board.url);
       } catch {
         continue;
       }
-      if (!/\/forum\/thread\//.test(url) || seen.has(url)) continue;
-      seen.add(url);
-      threads.push({ url, title: anchor.text, openQuestion: /\?/.test(anchor.text) });
-      if (threads.length >= 25) break;
+      const boardHtml = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
+      const pageUrl = await session.url().catch(() => board.url);
+      for (const row of woltlabBoardRows(boardHtml, pageUrl)) {
+        if (row.closed || row.sticky) continue;
+        if (row.lastActivityAt) {
+          const age = (now - Date.parse(row.lastActivityAt)) / 86_400_000;
+          if (Number.isFinite(age) && age > activityDays) continue;
+        }
+        found.push({
+          url: row.url,
+          title: row.title,
+          lastActivityAt: row.lastActivityAt,
+          openQuestion: /\?/.test(row.title),
+        });
+      }
     }
-    return threads;
+    return orderBoardThreads(found, terms).slice(0, 25);
   }
 
   override async readThreadMeta(session: BrowserSession) {
@@ -206,4 +232,157 @@ export class WoltlabDriver extends MarkupBoardDriver {
     }
     return null;
   }
+}
+
+function cleanThreadUrl(href: string, base: string): string | null {
+  try {
+    const url = new URL(href, base);
+    url.hash = "";
+    if (/\/forum\/thread\//.test(url.pathname)) {
+      url.search = "";
+      return url.href;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function threadIdentity(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`.replace(/\/$/, "").toLowerCase();
+  } catch {
+    return url;
+  }
+}
+
+async function legacyTopicLinks(session: BrowserSession, base: string): Promise<BoardThread[]> {
+  if (!session.listAnchors) return [];
+  let anchors = await session.listAnchors(TOPIC_LINK);
+  if (anchors.length === 0) anchors = await session.listAnchors("a.wbbTopicLink");
+  const threads: BoardThread[] = [];
+  const seen = new Set<string>();
+  for (const anchor of anchors) {
+    const url = cleanThreadUrl(anchor.href, base);
+    if (!url) continue;
+    const key = threadIdentity(url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const title = anchor.text.replace(/\s+/g, " ").trim();
+    threads.push({ url, title, openQuestion: /\?/.test(title) });
+    if (threads.length >= 25) break;
+  }
+  return threads;
+}
+
+function woltlabBoards(
+  html: string,
+  base: string,
+  terms: readonly string[],
+): Array<{ url: string; name: string; score: number }> {
+  const $ = load(html);
+  const boards: Array<{ url: string; name: string; score: number; order: number }> = [];
+  const seen = new Set<string>();
+  $("a.wbbBoardNode__link, a.wbbBoardNode__subBoardLink").each((order, el) => {
+    const href = $(el).attr("href");
+    const name = $(el).text().replace(/\s+/g, " ").trim();
+    if (!href || !name) return;
+    const id = /\/forum\/board\/(\d+)-/.exec(href)?.[1];
+    if (!id || seen.has(id)) return;
+    const score = warmupBoardScore(name, terms);
+    if (score < 0) return;
+    let url: string;
+    try {
+      url = new URL(href, base).href;
+    } catch {
+      return;
+    }
+    seen.add(id);
+    boards.push({ url, name, score, order });
+  });
+  boards.sort((a, b) => b.score - a.score || a.order - b.order);
+  return boards;
+}
+
+function woltlabIndexThreads(html: string, base: string): BoardThread[] {
+  const $ = load(html);
+  const threads: BoardThread[] = [];
+  const seen = new Set<string>();
+  $(".wbbBoardNode, .wbbBoardNode__subBoard").each((_, node) => {
+    const name = $(node).find("a.wbbBoardNode__link, a.wbbBoardNode__subBoardLink").first().text();
+    if (warmupBoardScore(name) < 0) return;
+    const link = $(node).find("a.wbbTopicLink").first();
+    const href = link.attr("href");
+    const title = link.text().replace(/\s+/g, " ").trim();
+    if (!href || !title) return;
+    const url = cleanThreadUrl(href, base);
+    if (!url) return;
+    const key = threadIdentity(url);
+    if (seen.has(key)) return;
+    seen.add(key);
+    const at = $(node).find("woltlab-core-date-time").last().attr("date") ?? null;
+    threads.push({ url, title, lastActivityAt: at, openQuestion: /\?/.test(title) });
+  });
+  return threads;
+}
+
+function woltlabBoardRows(
+  html: string,
+  base: string,
+): Array<{
+  url: string;
+  title: string;
+  lastActivityAt: string | null;
+  sticky: boolean;
+  closed: boolean;
+}> {
+  const $ = load(html);
+  const rows: Array<{
+    url: string;
+    title: string;
+    lastActivityAt: string | null;
+    sticky: boolean;
+    closed: boolean;
+  }> = [];
+  $("ol.wbbThread").each((_, node) => {
+    const row = $(node);
+    const link = row.find("a.wbbTopicLink").first();
+    const href = link.attr("href");
+    const title = link.text().replace(/\s+/g, " ").trim();
+    if (!href || !title) return;
+    const url = cleanThreadUrl(href, base);
+    if (!url) return;
+    rows.push({
+      url,
+      title,
+      lastActivityAt: row.find(".columnLastPost woltlab-core-date-time").attr("date") ?? null,
+      sticky: row.attr("data-is-sticky") === "1",
+      closed: row.attr("data-is-closed") === "1",
+    });
+  });
+  return rows;
+}
+
+function orderBoardThreads(threads: BoardThread[], terms: readonly string[]): BoardThread[] {
+  const seen = new Set<string>();
+  const unique: BoardThread[] = [];
+  for (const thread of threads) {
+    const key = threadIdentity(thread.url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(thread);
+  }
+  const hit = (title: string) =>
+    warmupHealthTitle(title) ||
+    WARMUP_BOARD_TERMS.some((term) => hasTerm(title, term)) ||
+    terms.some((term) => hasTerm(title, term));
+  unique.sort((a, b) => {
+    const delta = Number(hit(b.title)) - Number(hit(a.title));
+    if (delta !== 0) return delta;
+    const aAt = Date.parse(a.lastActivityAt ?? "") || 0;
+    const bAt = Date.parse(b.lastActivityAt ?? "") || 0;
+    return bAt - aAt;
+  });
+  return unique;
 }

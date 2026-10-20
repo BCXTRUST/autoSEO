@@ -3,7 +3,13 @@ import { moderationScope } from "@rakazo/linkbuilder-drivers";
 import { threadKey } from "./link-builder-page-move.js";
 
 /** Reasons that can change on the next visit, so they are not stored on the thread. */
-const EPHEMERAL_REJECTION = new Set(["open_failed", "stale", "no_other_users", "own_last"]);
+const EPHEMERAL_REJECTION = new Set([
+  "open_failed",
+  "stale",
+  "no_other_users",
+  "own_last",
+  "meta_unreadable",
+]);
 
 export function rejectionIsStored(reason: string): boolean {
   return !EPHEMERAL_REJECTION.has(reason);

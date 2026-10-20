@@ -4,6 +4,8 @@ import { load } from "cheerio";
 export interface ThreadPostMeta {
   author: string;
   at: string | null;
+  /** First 400 characters of the post body, without the author sidebar. */
+  text?: string;
 }
 
 export interface ThreadMeta {
@@ -13,6 +15,8 @@ export interface ThreadMeta {
   section: string | null;
   /** Visible text of the opening post, used by the topic gate. */
   firstPost: string;
+  /** The page HTML could not be read, so an empty date is not a stale thread. */
+  unreadable?: boolean;
 }
 
 const MONTHS: Record<string, number> = {
@@ -100,6 +104,165 @@ export function parseGermanDate(text: string, now: Date): string | null {
   return null;
 }
 
+function zoneOffsetMs(timeZone: string, date: Date): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value ?? "0");
+  let hour = value("hour");
+  if (hour === 24) hour = 0;
+  const asUtc = Date.UTC(
+    value("year"),
+    value("month") - 1,
+    value("day"),
+    hour,
+    value("minute"),
+    value("second"),
+  );
+  return asUtc - date.getTime();
+}
+
+function zonedIso(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  timeZone?: string,
+): string | null {
+  if (!timeZone) return iso(year, month, day, hour, minute, second);
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+    return null;
+  }
+  const wall = Date.UTC(year, month - 1, day, hour, minute, second);
+  const first = zoneOffsetMs(timeZone, new Date(wall));
+  const secondOffset = zoneOffsetMs(timeZone, new Date(wall - first));
+  const at = new Date(wall - secondOffset);
+  if (Number.isNaN(at.getTime())) return null;
+  return at.toISOString();
+}
+
+function zonedParts(now: Date, timeZone: string): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value ?? "0");
+  return { year: value("year"), month: value("month"), day: value("day") };
+}
+
+function skippedDate(text: string, index: number): boolean {
+  for (const match of text.matchAll(/mitglied seit|registriert|dabei seit|beigetreten|joined/gi)) {
+    const start = match.index ?? 0;
+    if (index >= start && index < start + match[0].length + 24) return true;
+  }
+  return false;
+}
+
+/**
+ * The post time, not the author's join date. A date with a clock wins.
+ * diabetes-forum.de shows "Mitglied seit" before "am DD.MM.YYYY HH:MM:SS".
+ */
+export function parseGermanPostDate(text: string, now: Date, timeZone?: string): string | null {
+  const timed: string[] = [];
+  const plain: string[] = [];
+  const push = (index: number, value: string | null, hasTime: boolean) => {
+    if (!value || skippedDate(text, index)) return;
+    (hasTime ? timed : plain).push(value);
+  };
+  for (const match of text.matchAll(/heute,?\s*(\d{1,2}):(\d{2})/gi)) {
+    const parts = timeZone ? zonedParts(now, timeZone) : null;
+    const at = parts
+      ? zonedIso(
+          parts.year,
+          parts.month,
+          parts.day,
+          Number(match[1]),
+          Number(match[2]),
+          0,
+          timeZone,
+        )
+      : (() => {
+          const date = new Date(now.getTime());
+          date.setUTCHours(Number(match[1]), Number(match[2]), 0, 0);
+          return date.toISOString();
+        })();
+    push(match.index ?? 0, at, true);
+  }
+  for (const match of text.matchAll(/gestern,?\s*(\d{1,2}):(\d{2})/gi)) {
+    const base = new Date(now.getTime() - 86_400_000);
+    const parts = timeZone ? zonedParts(base, timeZone) : null;
+    const at = parts
+      ? zonedIso(
+          parts.year,
+          parts.month,
+          parts.day,
+          Number(match[1]),
+          Number(match[2]),
+          0,
+          timeZone,
+        )
+      : (() => {
+          base.setUTCHours(Number(match[1]), Number(match[2]), 0, 0);
+          return base.toISOString();
+        })();
+    push(match.index ?? 0, at, true);
+  }
+  for (const match of text.matchAll(
+    /(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/g,
+  )) {
+    const hasTime = match[4] !== undefined;
+    push(
+      match.index ?? 0,
+      zonedIso(
+        Number(match[3]),
+        Number(match[2]),
+        Number(match[1]),
+        hasTime ? Number(match[4]) : 0,
+        hasTime ? Number(match[5]) : 0,
+        hasTime && match[6] ? Number(match[6]) : 0,
+        timeZone,
+      ),
+      hasTime,
+    );
+  }
+  for (const match of text.matchAll(
+    /(\d{1,2})\.?\s+([A-Za-zäöüÄÖÜß]+)\s+(\d{4})(?:\s+um\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/g,
+  )) {
+    const month = MONTHS[foldMonth(match[2] ?? "")];
+    if (!month) continue;
+    const hasTime = match[4] !== undefined;
+    push(
+      match.index ?? 0,
+      zonedIso(
+        Number(match[3]),
+        month,
+        Number(match[1]),
+        hasTime ? Number(match[4]) : 0,
+        hasTime && match[5] ? Number(match[5]) : 0,
+        hasTime && match[6] ? Number(match[6]) : 0,
+        timeZone,
+      ),
+      hasTime,
+    );
+  }
+  if (timed[0]) return timed[0];
+  if (plain[0]) return plain[0];
+  return parseGermanDate(text, now);
+}
+
 function newestAt(posts: ThreadPostMeta[]): string | null {
   let best: string | null = null;
   let bestMs = Number.NEGATIVE_INFINITY;
@@ -142,23 +305,45 @@ function threadIsClosed($: Loaded, kind: "woltlab" | "phpbb" | "markup"): boolea
 const AUTHOR_LINK =
   "a[href*='/user/'], a[href*='/profile/'], a[href*='/member'], a[href*='memberlist']";
 
-/** Posts on boards without a platform reader, including diabetes-forum.de `li[id^=m_]`. */
-export function genericPostsFromHtml(html: string, now = new Date()): ThreadPostMeta[] {
-  const $ = load(html);
-  $("script, style, template, noscript").remove();
-  return genericPosts($, now);
+const SIDEBAR =
+  ".forum-user, .member, .postprofile, .userinfo, .user-info, .messageSidebar, .author-info";
+
+function postBodyText(post: ReturnType<Loaded>, selector: string): string {
+  const body = post.clone();
+  body.find(SIDEBAR).remove();
+  const node = selector ? body.find(selector).first() : body;
+  const source = node.length > 0 ? node : body;
+  return source.text().replace(/\s+/g, " ").trim().slice(0, 400);
 }
 
-function genericPosts($: Loaded, now: Date): ThreadPostMeta[] {
+/** Posts on boards without a platform reader, including diabetes-forum.de `li[id^=m_]`. */
+export function genericPostsFromHtml(
+  html: string,
+  now = new Date(),
+  timeZone?: string,
+): ThreadPostMeta[] {
+  const $ = load(html);
+  $("script, style, template, noscript").remove();
+  return genericPosts($, now, timeZone);
+}
+
+function genericPosts($: Loaded, now: Date, timeZone?: string): ThreadPostMeta[] {
   const byId = $("[id]").filter((_, el) => /^(?:m_|p|post|msg)\d+$/i.test($(el).attr("id") ?? ""));
   const nodes = byId.length > 0 ? byId : $("article, .post, .message");
   const posts: ThreadPostMeta[] = [];
   nodes.each((_, node) => {
     const post = $(node);
     const author = post.find(AUTHOR_LINK).first().text().replace(/\s+/g, " ").trim();
-    const at = parseGermanDate(post.text(), now);
+    const body = post.clone();
+    body.find(SIDEBAR).remove();
+    const text = body.text().replace(/\s+/g, " ").trim();
+    const at = parseGermanPostDate(text, now, timeZone);
     if (!author && !at) return;
-    posts.push({ author, at });
+    posts.push({
+      author,
+      at,
+      text: postBodyText(post, ".forumcontent, .messageText, .postbody .content, .post .content"),
+    });
   });
   return posts;
 }
@@ -285,6 +470,7 @@ export function threadMetaFromHtml(
   html: string,
   kind: "woltlab" | "phpbb" | "markup",
   now = new Date(),
+  timeZone?: string,
 ): ThreadMeta {
   const $ = load(html);
   $("script, style, template, noscript").remove();
@@ -303,7 +489,7 @@ export function threadMetaFromHtml(
         post.find("time[datetime]").attr("datetime") ||
         null;
       if (!author && !at) return;
-      posts.push({ author, at });
+      posts.push({ author, at, text: postBodyText(post, ".messageText") });
     });
   } else if (kind === "phpbb") {
     $(".post").each((_, node) => {
@@ -311,10 +497,10 @@ export function threadMetaFromHtml(
       const author = post.find(".postprofile .username").first().text().replace(/\s+/g, " ").trim();
       const at = post.find(".author time[datetime]").attr("datetime") || null;
       if (!author && !at) return;
-      posts.push({ author, at });
+      posts.push({ author, at, text: postBodyText(post, ".content") });
     });
   } else {
-    posts.push(...genericPosts($, now));
+    posts.push(...genericPosts($, now, timeZone));
   }
   if (posts.length === 0) {
     const visible = parseGermanDate($("body").text(), now);
@@ -346,13 +532,27 @@ export function threadMetaFromHtml(
   };
 }
 
+function unreadableMeta(): ThreadMeta {
+  return {
+    lastActivityAt: null,
+    posts: [],
+    closed: false,
+    section: null,
+    firstPost: "",
+    unreadable: true,
+  };
+}
+
 export async function readThreadMetaFromSession(
   session: BrowserSession,
   kind: "woltlab" | "phpbb" | "markup",
 ): Promise<ThreadMeta> {
   const html = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
-  if (!html) {
-    return { lastActivityAt: null, posts: [], closed: false, section: null, firstPost: "" };
+  if (!html) return unreadableMeta();
+  let timeZone: string | undefined;
+  if (kind === "markup" && session.url) {
+    const url = await session.url().catch(() => "");
+    if (/diabetes-forum\.de/i.test(url)) timeZone = "Europe/Berlin";
   }
-  return threadMetaFromHtml(html, kind);
+  return threadMetaFromHtml(html, kind, new Date(), timeZone);
 }
