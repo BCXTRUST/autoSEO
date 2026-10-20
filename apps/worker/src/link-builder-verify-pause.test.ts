@@ -310,4 +310,83 @@ describe("email verification", () => {
     expect(result.outcome).not.toHaveProperty("paused");
     expect(updates).toEqual([]);
   });
+
+  it("opens a confirmation when the host row has no account", async () => {
+    const link = "https://www.amsel.de/multiple-sklerose-forum/confirm/abc";
+    const persona = {
+      projectId: "p1",
+      profileKey: "p1",
+      locale: "de-DE",
+      timezoneId: "Europe/Berlin",
+    } as BrowserPersona;
+    const session = new FakeBrowserSession("session-1", persona, {
+      [link]: {
+        text: "",
+        elements: { "div#message": { text: "Your account has been activated" } },
+      },
+    });
+    const ctx = {
+      now: new Date("2026-10-20T09:30:00.000Z"),
+      run: {
+        id: "run-1",
+        status: "running",
+        counters: { newToday: 0, liveToday: 0, liveWeek: 0, uniqueHosts: 0 },
+      },
+      project: {
+        id: "p1",
+        workspaceId: "w1",
+        mailboxId: "lb-project@sideinbox.email",
+        mailboxAddress: "lb-project@sideinbox.email",
+      },
+      host: {
+        id: "h1",
+        status: "pending_email",
+        platform: "phpbb",
+        homepageUrl: "https://amsel.de/",
+        registrableDomain: "amsel.de",
+        parkedFrom: null,
+      },
+      account: null,
+      adapter: {
+        operationId: "t",
+        traceId: "t",
+        workspaceId: "w1",
+        userId: "u",
+        signal: new AbortController().signal,
+      },
+      secrets: [],
+      pool: () => ({
+        session,
+        hostId: "h1",
+        helperConnected: true,
+        cookieChecked: true,
+        registerFormReady: false,
+        captchaAttempts: 0,
+        registrationRetried: false,
+        spamRetries: 0,
+        profileSet: false,
+        engine: "chromium",
+        marketKey: "DE:de",
+        helperVersion: null,
+      }),
+      storeArtifact: async () => "art-1",
+      services: {
+        prisma: { lbHostAccount: { count: async () => 0 } },
+        mailbox: {
+          listMessages: async () => [
+            {
+              subject: "AMSEL Multiple Sklerose Forum",
+              textBody: link,
+              htmlBody: `<a href="${link}">open</a>`,
+            },
+          ],
+        },
+      },
+    } as unknown as StepContext;
+    const result = await REAL_STEP_HANDLERS.email_verify(ctx);
+    expect(result).toMatchObject({ kind: "step", lastAction: "Email verified" });
+    expect(session.actions.some((action) => action.kind === "goto" && action.url === link)).toBe(
+      true,
+    );
+  });
 });

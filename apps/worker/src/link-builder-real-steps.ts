@@ -2584,8 +2584,12 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
     };
   }
   const account = ctx.account;
-  if (!account) throw new StepFailure("Host has no account");
-  const since = { since: new Date(account.createdAt.getTime() - 5 * 60_000) };
+  const since = {
+    since: account
+      ? new Date(account.createdAt.getTime() - 5 * 60_000)
+      : new Date(ctx.now.getTime() - 14 * 24 * 60 * 60_000),
+  };
+  const waited = account ? ctx.now.getTime() - account.createdAt.getTime() : 0;
   const priorSignups = await ctx.services.prisma.lbHostAccount.count({
     where: { projectId: ctx.project.id },
   });
@@ -2625,7 +2629,6 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
   }
   let resent = false;
   if (!link) {
-    const waited = ctx.now.getTime() - account.createdAt.getTime();
     if (waited >= MAIL_RESEND_MS && !(await mailAlreadyResent(ctx, host.id))) {
       try {
         resent = await clickResendMail(entry.session);
@@ -2640,7 +2643,6 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
     }
   }
   if (!link) {
-    const waited = ctx.now.getTime() - account.createdAt.getTime();
     if (waited >= MAIL_DEAD_MS) return mailNeverArrived(ctx, host);
     return {
       kind: "step",
@@ -2673,13 +2675,57 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
     artifactIds,
     outcome: { activation },
     apply: async (tx) => {
-      await tx.lbHostAccount.update({
-        where: { id: account.id },
-        data: { emailVerifiedAt: verifiedAt },
-      });
+      if (account) {
+        await tx.lbHostAccount.update({
+          where: { id: account.id },
+          data: { emailVerifiedAt: verifiedAt },
+        });
+      } else {
+        await rememberVerifiedLogin(tx, ctx, host, verifiedAt);
+      }
+      const linked =
+        account ??
+        (typeof tx.lbHostAccount.findUnique === "function"
+          ? await tx.lbHostAccount.findUnique({ where: { hostId: host.id } })
+          : null);
+      if (!linked && !account) return;
       await moveHost(tx, host, verified ? "account_active" : "admin_pending");
     },
   };
+}
+
+/** A revived host may have mail and a vault login, but no account row yet. */
+async function rememberVerifiedLogin(
+  tx: Tx,
+  ctx: StepContext,
+  host: HostRow,
+  verifiedAt: Date,
+): Promise<void> {
+  const findMany = tx.siteLogin?.findMany;
+  const create = tx.lbHostAccount?.create;
+  if (typeof findMany !== "function" || typeof create !== "function") return;
+  const domain = registrableKey(host.registrableDomain);
+  try {
+    const rows = await findMany({
+      where: { workspaceId: ctx.project.workspaceId, host: { contains: domain } },
+      select: { id: true, username: true, host: true },
+      take: 5,
+    });
+    const login = rows.find((row) => registrableKey(row.host).endsWith(domain));
+    if (!login) return;
+    await create({
+      data: {
+        workspaceId: ctx.project.workspaceId,
+        projectId: ctx.project.id,
+        hostId: host.id,
+        username: login.username,
+        siteLoginId: login.id,
+        emailVerifiedAt: verifiedAt,
+      },
+    });
+  } catch {
+    return;
+  }
 }
 
 async function warmup(ctx: StepContext): Promise<StepResult> {
