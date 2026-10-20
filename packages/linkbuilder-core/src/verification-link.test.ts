@@ -40,6 +40,28 @@ describe("verification link", () => {
     expect(extractVerificationLink(mail, origin)).toBe(`${origin}/konto/aktivieren?code=9`);
   });
 
+  it("follows a confirmation on a subdomain and skips a password reset", () => {
+    const origin = "https://amsel.de/";
+    expect(
+      extractVerificationLink(
+        {
+          subject: "AMSEL Multiple Sklerose Forum",
+          textBody: "https://www.amsel.de/multiple-sklerose-forum/confirm/abc",
+        },
+        origin,
+      ),
+    ).toBe("https://www.amsel.de/multiple-sklerose-forum/confirm/abc");
+    expect(
+      extractVerificationLink(
+        {
+          subject: "Kennwort vergessen",
+          textBody: "https://www.med2-forum.de/lost-password/?k=1",
+        },
+        "https://www.med2-forum.de/",
+      ),
+    ).toBeNull();
+  });
+
   it("tells whether a mail references the board", () => {
     expect(mailMentionsOrigin({ subject: "", textBody: `see ${origin}/x` }, origin)).toBe(true);
     expect(

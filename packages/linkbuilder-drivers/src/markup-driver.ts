@@ -21,6 +21,7 @@ import {
   registrationClosed,
   relFromAttribute,
 } from "./messages.js";
+import { isPasswordResetTarget } from "./password-reset.js";
 import { readThreadMetaFromSession } from "./thread-meta.js";
 import { detectWidget } from "./widgets.js";
 
@@ -281,7 +282,9 @@ export class MarkupBoardDriver implements BoardDriver {
       await session.goto(homepageUrl);
     }
     if (await this.isLoggedIn(session)) return true;
+    if (await this.passwordResetForm(session)) return false;
     if (!(await session.waitFor(LOGIN_FORM, { timeoutMs: 10_000 }))) return false;
+    if (await this.passwordResetForm(session)) return false;
     await this.submitLogin(session, account);
     if (await session.waitFor(this.signedInSelector(), { timeoutMs: 10_000 })) return true;
     // The question is missing on the first paint and the board asks for it after submit.
@@ -294,13 +297,27 @@ export class MarkupBoardDriver implements BoardDriver {
     return false;
   }
 
+  /** Lost-password forms share the username field and must never be submitted. */
+  private async passwordResetForm(session: BrowserSession): Promise<boolean> {
+    const url = await session.url().catch(() => "");
+    if (isPasswordResetTarget(url)) return true;
+    const action =
+      (await session.attribute(`${LOGIN_FORM}, form#lostPassword`, "action").catch(() => null)) ??
+      "";
+    if (isPasswordResetTarget(action)) return true;
+    return false;
+  }
+
   private async submitLogin(
     session: BrowserSession,
     account: Pick<BoardAccount, "username" | "password">,
   ): Promise<void> {
+    if (await this.passwordResetForm(session)) return;
     const fields = this.config.fields;
+    const passwordField = `#${fields.password.id}`;
+    if (!(await session.exists(passwordField))) return;
     await session.fill(`#${fields.username.id}`, account.username);
-    await session.fill(`#${fields.password.id}`, account.password, { secret: true });
+    await session.fill(passwordField, account.password, { secret: true });
     // WoltLab copies the XSRF cookie into the hidden field after the page scripts run.
     await session.waitFor(".xsrfTokenInputHandled", { timeoutMs: 5_000 });
     await this.fillLoginQuestion(session);

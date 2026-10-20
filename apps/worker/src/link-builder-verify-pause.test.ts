@@ -236,4 +236,78 @@ describe("email verification", () => {
       session.actions.filter((action) => action.kind === "goto" && action.url === link),
     ).toHaveLength(1);
   });
+
+  it("leaves the project active when the confirmation is still missing after three minutes", async () => {
+    const now = new Date("2026-10-16T12:04:00.000Z");
+    const updates: string[] = [];
+    const ctx = {
+      now,
+      run: {
+        id: "run-1",
+        status: "running",
+        counters: { newToday: 0, liveToday: 0, liveWeek: 0, uniqueHosts: 0 },
+      },
+      project: {
+        id: "p1",
+        workspaceId: "w1",
+        mailboxId: "lena.hoffmann@sideinbox.email",
+        mailboxAddress: "lena.hoffmann@sideinbox.email",
+      },
+      host: {
+        id: "h1",
+        status: "pending_email",
+        platform: "phpbb",
+        homepageUrl: "https://forum.example/",
+        registrableDomain: "forum.example",
+        parkedFrom: null,
+      },
+      account: { id: "acct-1", createdAt: new Date("2026-10-16T12:00:00.000Z") },
+      adapter: {
+        operationId: "t",
+        traceId: "t",
+        workspaceId: "w1",
+        userId: "u",
+        signal: new AbortController().signal,
+      },
+      secrets: [],
+      pool: () => ({
+        session: { releaseForm: async () => undefined, goto: async () => undefined },
+        hostId: "h1",
+        helperConnected: true,
+        cookieChecked: true,
+        registerFormReady: false,
+        captchaAttempts: 0,
+        registrationRetried: false,
+        spamRetries: 0,
+        profileSet: false,
+        engine: "chromium",
+        marketKey: "DE:de",
+        helperVersion: null,
+      }),
+      storeArtifact: async () => "art-1",
+      services: {
+        prisma: {
+          lbHostAccount: { count: async () => 0 },
+          lbProject: {
+            updateMany: async (args: { data: { status: string } }) => {
+              updates.push(args.data.status);
+              return { count: 1 };
+            },
+          },
+        },
+        mailbox: { listMessages: async () => [] },
+      },
+    } as unknown as StepContext;
+    const result = await REAL_STEP_HANDLERS.email_verify(ctx);
+    expect(result).toMatchObject({
+      kind: "step",
+      lastAction: "Confirmation not in inbox",
+      outcome: { mail: "not_in_inbox" },
+      run: { currentHostId: null },
+    });
+    if (result.kind !== "step") return;
+    expect(result.run?.status).toBeUndefined();
+    expect(result.outcome).not.toHaveProperty("paused");
+    expect(updates).toEqual([]);
+  });
 });

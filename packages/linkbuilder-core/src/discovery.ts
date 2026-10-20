@@ -1,5 +1,6 @@
 import type { LbMarket, LbMarketPolicy, LbTopicLane } from "@rakazo/contracts";
 import { marketKey, selectMarkets } from "./market.js";
+import { detectLanguage } from "./page-language.js";
 import { registrableDomain } from "./policy.js";
 import { type ProbeFacts, type ProbePage, probePages, settleProbe } from "./probe.js";
 import { useCaseLanes } from "./problem-queries.js";
@@ -67,6 +68,24 @@ export function planFootprintQueries(input: {
         laneTag: lane.tag,
         query: footprintQuery(lane.tag),
       });
+    }
+  }
+  return queries;
+}
+
+/** Up to eight problem queries for one DataForSEO pass. The shop name is never added here. */
+export function planDiscoveryQueries(problems: readonly string[], limit = 8): string[] {
+  const queries: string[] = [];
+  for (const problem of problems) {
+    const cleaned = problem.replace(/"/g, "").trim();
+    if (!cleaned) continue;
+    for (const query of [
+      `${cleaned} Forum`,
+      `${cleaned} (inurl:viewtopic OR inurl:showthread OR inurl:forum/thread)`,
+      `"Registrieren" ${cleaned}`,
+    ]) {
+      if (queries.length >= limit) return queries;
+      queries.push(query);
     }
   }
   return queries;
@@ -149,7 +168,7 @@ export async function discoverHosts(input: {
       query: planned.query,
       country: planned.market.country,
       language: planned.market.language,
-      depth: input.depth ?? 100,
+      depth: input.depth ?? 20,
     });
     for (const result of results) {
       hits.push({
@@ -185,18 +204,53 @@ export async function discoverHosts(input: {
     }
     const facts = probePages({ homepageUrl, sampleUrl: hit.url, pages });
     const settled = settleProbe(facts, home !== null);
+    const detected = detectLanguage(pages.map((page) => page.html).join("\n"), homepageUrl);
+    const language = detected.language ?? hit.market.language;
+    const country = detected.country ?? hit.market.country;
+    const offLanguage = Boolean(detected.language) && detected.language !== "de";
+    const forum =
+      facts.platform !== "unknown" || (facts.threads.length >= 5 && Boolean(facts.registerUrl));
+    let status: FunnelHost["status"] = offLanguage ? "off_topic" : settled.status;
+    let reason = offLanguage ? `language:${language}` : settled.reason;
+    if (!offLanguage && !forum) {
+      status = "off_topic";
+      reason = "not_forum";
+    } else if (
+      !offLanguage &&
+      forum &&
+      facts.platform === "unknown" &&
+      settled.reason === "unknown_platform"
+    ) {
+      status = "qualified";
+      reason = null;
+    }
+    const locale =
+      language === "de" && country === "AT"
+        ? "de-AT"
+        : language === "de" && country === "CH"
+          ? "de-CH"
+          : language === "de"
+            ? "de-DE"
+            : language && country
+              ? `${language}-${country}`
+              : hit.market.locale;
     hosts.push({
       registrableDomain: domain,
       homepageUrl,
       sampleUrl: hit.url,
       title: hit.title,
-      market: hit.market,
+      market: {
+        ...hit.market,
+        language: language as LbMarket["language"],
+        country: country as LbMarket["country"],
+        locale: locale as LbMarket["locale"],
+      },
       topicTags: [hit.laneTag],
       laneIds: [hit.laneId],
       pageText: pages.map((page) => visibleText(page.html)).join("\n"),
       facts,
-      status: settled.status,
-      reason: settled.reason,
+      status,
+      reason,
       score: settled.score,
     });
   }

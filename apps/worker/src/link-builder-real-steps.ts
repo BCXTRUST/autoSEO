@@ -128,6 +128,7 @@ import {
   GenericFormDriver,
   instructionClickSelector,
   isLoginPath,
+  isPasswordResetTarget,
   placeCaptchaToken,
   type RegistrationPage,
   type RegistrationResult,
@@ -505,6 +506,116 @@ function hostOrder(status: string): number {
   return (WORKABLE_HOST_ORDER as readonly string[]).indexOf(status);
 }
 
+/** Warming first, then a host waiting on its confirmation, then a ready board. */
+function hostWorkPhase(status: string): number {
+  if (status === "warming") return 0;
+  if (status === "pending_email") return 1;
+  if (status === "ready") return 2;
+  return 3;
+}
+
+function waitingForMail(row: { status: string }): boolean {
+  return row.status === "pending_email";
+}
+
+function fieldBlob(field: FormFieldInfo): string {
+  return [field.name, field.id, field.label, field.placeholder, field.autocomplete]
+    .filter((part) => part)
+    .join(" ");
+}
+
+/** A pending-email host already read in the last ten minutes stays parked. */
+async function hostsMailedRecently(
+  ctx: StepContext,
+  hostIds: readonly string[],
+): Promise<Set<string>> {
+  const recent = new Set<string>();
+  if (hostIds.length === 0) return recent;
+  const findMany = ctx.services.prisma.lbRunStep?.findMany;
+  if (typeof findMany !== "function") return recent;
+  const since = ctx.now.getTime() - MAIL_REREAD_MS;
+  try {
+    const steps = await findMany({
+      where: {
+        hostId: { in: [...hostIds] },
+        kind: "email_verify",
+        createdAt: { gte: new Date(since) },
+      },
+      select: { hostId: true, kind: true, createdAt: true },
+    });
+    for (const step of steps) {
+      if (step.kind !== "email_verify" || !step.hostId) continue;
+      const created =
+        step.createdAt instanceof Date
+          ? step.createdAt.getTime()
+          : Date.parse(String(step.createdAt));
+      if (Number.isFinite(created) && created >= since) recent.add(step.hostId);
+    }
+  } catch {
+    return recent;
+  }
+  return recent;
+}
+
+async function mailAlreadyResent(ctx: StepContext, hostId: string): Promise<boolean> {
+  const findMany = ctx.services.prisma.lbRunStep?.findMany;
+  if (typeof findMany !== "function") return false;
+  try {
+    const steps = await findMany({
+      where: { hostId, kind: "email_verify" },
+      select: { outcome: true },
+    });
+    return steps.some((step) => {
+      const outcome = step.outcome;
+      return Boolean(
+        outcome && typeof outcome === "object" && (outcome as { resent?: unknown }).resent === true,
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function mailNeverArrived(ctx: StepContext, host: HostRow): Promise<StepResult> {
+  let prior = 0;
+  try {
+    const count = ctx.services.prisma.lbHost?.count;
+    if (typeof count === "function") {
+      prior = await count({
+        where: {
+          projectId: ctx.project.id,
+          statusReason: "mail_never_arrived",
+          id: { not: host.id },
+        },
+      });
+    }
+  } catch {
+    prior = 0;
+  }
+  const pause = prior + 1 >= MAIL_DEAD_PAUSE;
+  return {
+    kind: "step",
+    hostId: host.id,
+    lastAction: "Confirmation never arrived",
+    outcome: {
+      mail: "not_in_inbox",
+      dead: "mail_never_arrived",
+      ...(pause ? { paused: true } : {}),
+    },
+    run: pause
+      ? { status: transitionRun(ctx.run.status, "paused"), currentHostId: null }
+      : { currentHostId: null },
+    apply: async (tx) => {
+      await moveHost(tx, host, "failed", { statusReason: "mail_never_arrived" });
+      if (!pause) return;
+      await tx.lbProject.updateMany({
+        where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
+        data: { status: transitionProject("active", "paused") },
+      });
+    },
+  };
+}
+
 /** A forum this discovery tick just probed. Older stored rows wait for a later run. */
 const JUST_FOUND_MS = 15 * 60 * 1000;
 
@@ -530,7 +641,10 @@ const STORED_SIGNUP_DENY = [
 ] as const;
 
 const FORM_MISS_CAP = 3;
-const MAIL_WAIT_MS = 3 * 60_000;
+const MAIL_REREAD_MS = 10 * 60_000;
+const MAIL_RESEND_MS = 30 * 60_000;
+const MAIL_DEAD_MS = 48 * 60 * 60_000;
+const MAIL_DEAD_PAUSE = 3;
 
 /** Stored forums for this signup, in the only order the run may open them. */
 const STORED_SIGNUP_ORDER = ["aquacomputer.de", "edubily.de", "science-fitness.de"] as const;
@@ -911,6 +1025,16 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
   for (let index = eligible.length - 1; index >= 0; index -= 1) {
     if (exhaustedWarmup.has(eligible[index]?.id ?? "")) eligible.splice(index, 1);
   }
+  const recentMail = await hostsMailedRecently(
+    ctx,
+    eligible.filter((row) => row.status === "pending_email").map((row) => row.id),
+  );
+  let skippedRecentMail = 0;
+  for (let index = eligible.length - 1; index >= 0; index -= 1) {
+    if (!recentMail.has(eligible[index]?.id ?? "")) continue;
+    eligible.splice(index, 1);
+    skippedRecentMail += 1;
+  }
   const loginStuck = await hostsStuckOnLogin(
     ctx,
     eligible.map((row) => row.id),
@@ -928,6 +1052,13 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
       return storedSignupIndex(a.registrableDomain) - storedSignupIndex(b.registrableDomain);
     }
     if (aTarget !== bTarget) return aTarget ? -1 : 1;
+    if (
+      waitingForMail(a) !== waitingForMail(b) &&
+      a.status !== "warming" &&
+      b.status !== "warming"
+    ) {
+      return waitingForMail(a) ? -1 : 1;
+    }
     const aOpen = unusedQualifiedHost(a, deny);
     const bOpen = unusedQualifiedHost(b, deny);
     if (aOpen && bOpen) {
@@ -952,6 +1083,8 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     const aThreads = warmingThreads(a);
     const bThreads = warmingThreads(b);
     if (aThreads !== null && bThreads !== null && aThreads !== bThreads) return aThreads - bThreads;
+    const phaseDelta = hostWorkPhase(a.status) - hostWorkPhase(b.status);
+    if (phaseDelta !== 0) return phaseDelta;
     return (
       hostSortRank(a) - hostSortRank(b) ||
       Number(prefer.has(b.registrableDomain)) - Number(prefer.has(a.registrableDomain)) ||
@@ -959,6 +1092,9 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     );
   });
   const picked = eligible[0];
+  if (!picked && skippedRecentMail > 0 && eligible.length === 0) {
+    return { kind: "wait", reason: "mail_pending" };
+  }
   if (!picked && exhaustedWarmup.size > 0 && !hadWorkBesidesRefusal) {
     return { kind: "wait", reason: "nothing_today" };
   }
@@ -2487,37 +2623,31 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
     await ctx.services.sleep(1_000);
     link = linkFrom(await readInbox());
   }
+  let resent = false;
   if (!link) {
-    const resent = await clickResendMail(entry.session);
-    if (resent) await new Promise((resolve) => setTimeout(resolve, 1500));
-    link = linkFrom(await readInbox());
+    const waited = ctx.now.getTime() - account.createdAt.getTime();
+    if (waited >= MAIL_RESEND_MS && !(await mailAlreadyResent(ctx, host.id))) {
+      try {
+        resent = await clickResendMail(entry.session);
+      } catch {
+        resent = false;
+      }
+      if (resent) {
+        if (ctx.services.sleep) await ctx.services.sleep(1_500);
+        else await new Promise((resolve) => setTimeout(resolve, 1_500));
+        link = linkFrom(await readInbox());
+      }
+    }
   }
   if (!link) {
     const waited = ctx.now.getTime() - account.createdAt.getTime();
-    if (waited >= MAIL_WAIT_MS) {
-      const domain = (process.env.RESEND_INBOUND_DOMAIN ?? "")
-        .trim()
-        .toLowerCase()
-        .replace(/^@/, "");
-      return {
-        kind: "step",
-        hostId: host.id,
-        lastAction: domain ? `No confirmation mail on ${domain}` : "No confirmation mail",
-        outcome: { mail: "not_in_inbox", paused: true },
-        run: { status: transitionRun(ctx.run.status, "paused") },
-        apply: async (tx) => {
-          await tx.lbProject.updateMany({
-            where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
-            data: { status: transitionProject("active", "paused") },
-          });
-        },
-      };
-    }
+    if (waited >= MAIL_DEAD_MS) return mailNeverArrived(ctx, host);
     return {
       kind: "step",
       hostId: host.id,
       lastAction: "Confirmation not in inbox",
-      outcome: { mail: "not_in_inbox" },
+      outcome: { mail: "not_in_inbox", ...(resent ? { resent: true } : {}) },
+      run: { currentHostId: null },
     };
   }
   await entry.session.releaseForm?.();
@@ -4099,7 +4229,11 @@ async function fillEmptyAccountFields(
 ): Promise<void> {
   const host = ctx.host;
   if (!host) return;
-  const empty = fields.filter(isEmptyFillable);
+  const pageUrl = typeof session.url === "function" ? await session.url().catch(() => "") : "";
+  if (isPasswordResetTarget(pageUrl)) return;
+  const empty = fields.filter(
+    (field) => isEmptyFillable(field) && !isPasswordResetTarget(fieldBlob(field)),
+  );
   if (empty.length === 0) return;
   const credentials = await ensureCredentials(ctx, host);
   for (const field of empty) {

@@ -23,6 +23,7 @@ export * from "./ips.js";
 export * from "./messages.js";
 export * from "./mybb.js";
 export * from "./nodebb.js";
+export * from "./password-reset.js";
 export * from "./phpbb.js";
 export * from "./registration-flow.js";
 export * from "./thread-meta.js";

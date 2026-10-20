@@ -2,7 +2,7 @@ import type { BrowserSession, SearchProvider } from "@rakazo/adapter-kit";
 import { CaptchaSolverError } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
 import { sampleForumHtml, startRunCounters } from "@rakazo/linkbuilder-core";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverDueProjects, reprobeDeadHosts } from "./link-builder-discovery.js";
 import { REAL_STEP_HANDLERS, type StepContext } from "./link-builder-real-steps.js";
 
@@ -21,6 +21,16 @@ function browserWith(links: Array<{ text: string; href: string }>): () => Promis
 }
 
 describe("discoverDueProjects", () => {
+  const browserSearch = "LINK_BUILDER_BROWSER_SEARCH";
+  const previousBrowser = process.env[browserSearch];
+  beforeEach(() => {
+    process.env[browserSearch] = "on";
+  });
+  afterEach(() => {
+    if (previousBrowser === undefined) delete process.env[browserSearch];
+    else process.env[browserSearch] = previousBrowser;
+  });
+
   it("records one failed search and does not search again within 15 minutes", async () => {
     const lastDiscoveredAt = new Date("2026-10-15T09:10:11.995Z");
     const now = new Date("2026-10-16T10:00:00.000Z");
@@ -1256,7 +1266,8 @@ describe("discoverDueProjects", () => {
     let paused = 0;
     const steps: Array<{ outcome: { lastAction?: string; restored?: unknown } }> = [];
     const pages: Record<string, string> = {
-      "https://hardwareluxx.de/": '<a href="/register/">Registrieren</a>',
+      "https://hardwareluxx.de/":
+        '<html lang="de"><head><meta name="generator" content="phpBB 3.3"></head><body><a href="/viewtopic.php?t=1">Magnesium und Schlaf ist das Thema</a><a href="/register/">Registrieren</a></body></html>',
       "https://hardwareluxx.de/register/":
         '<h1>Forumregeln</h1><a href="/register/form">Weiter</a>',
       "https://hardwareluxx.de/register/form":
@@ -1436,3 +1447,220 @@ function discoveryPrisma(
     },
   } as unknown as PrismaClient;
 }
+
+describe("dataforseo primary search", () => {
+  const browserSearch = "LINK_BUILDER_BROWSER_SEARCH";
+  beforeEach(() => {
+    delete process.env[browserSearch];
+  });
+
+  it("does not open a browser and asks for depth 20", async () => {
+    const now = new Date("2026-10-20T08:00:00.000Z");
+    let opened = false;
+    const depths: number[] = [];
+    const steps: Array<{ outcome: { lastAction?: string }; error: string | null }> = [];
+    const prisma = {
+      lbProject: {
+        findMany: async () => [
+          {
+            id: "p1",
+            workspaceId: "w1",
+            name: "Nordlicht",
+            brandName: "Nordlicht",
+            status: "active",
+            archivedAt: null,
+            lastDiscoveredAt: new Date("2026-10-15T09:10:11.995Z"),
+            schedule: { timezone: "Europe/Berlin" },
+            markets: [
+              { country: "DE", language: "de", locale: "de-DE", timezoneId: "Europe/Berlin" },
+            ],
+            topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
+            marketPolicy: "primary_first",
+            quotas: { livePerDay: 1 },
+            denyHosts: [],
+          },
+        ],
+        update: async () => ({}),
+        updateMany: async () => ({ count: 1 }),
+      },
+      lbHost: { findMany: async () => [], findUnique: async () => null, create: async () => ({}) },
+      lbCostEntry: { create: async () => ({}), count: async () => 0 },
+      lbRun: {
+        findFirst: async () => ({
+          id: "run-1",
+          status: "running",
+          projectId: "p1",
+          workspaceId: "w1",
+        }),
+        update: async () => ({}),
+      },
+      lbRunStep: {
+        findFirst: async () => null,
+        findMany: async () => [],
+        count: async () => steps.length,
+        create: async (args: { data: (typeof steps)[number] }) => {
+          steps.push(args.data);
+          return args.data;
+        },
+      },
+    } as unknown as PrismaClient;
+    await discoverDueProjects({
+      prisma,
+      now,
+      retryDelayMs: 0,
+      openBrowser: async () => {
+        opened = true;
+        throw new Error("browser should stay closed");
+      },
+      prepareComputer: async () => {
+        opened = true;
+      },
+      search: {
+        describe: () => ({
+          id: "fake-search",
+          contractVersion: "1",
+          adapterVersion: "0",
+          capabilities: { maxDepth: 20, operators: true },
+        }),
+        search: async (request: { depth: number; query: string }) => {
+          depths.push(request.depth);
+          expect(request.query.toLowerCase()).not.toContain("vitaminexpress");
+          return [];
+        },
+      },
+    });
+    expect(opened).toBe(false);
+    expect(depths.length).toBeGreaterThan(0);
+    expect(depths.length).toBeLessThanOrEqual(8);
+    expect(depths.every((depth) => depth === 20)).toBe(true);
+    expect(steps.some((step) => step.outcome.lastAction?.startsWith("Searched the browser"))).toBe(
+      false,
+    );
+  });
+
+  it("retries a 40101 once and then records the failure", async () => {
+    const now = new Date("2026-10-20T08:00:00.000Z");
+    let searches = 0;
+    const steps: Array<{ error: string | null; outcome: { lastAction?: string } }> = [];
+    const prisma = {
+      lbProject: {
+        findMany: async () => [
+          {
+            id: "p1",
+            workspaceId: "w1",
+            name: "Nordlicht",
+            brandName: "Nordlicht",
+            status: "active",
+            archivedAt: null,
+            lastDiscoveredAt: new Date("2026-10-15T09:10:11.995Z"),
+            schedule: { timezone: "Europe/Berlin" },
+            markets: [
+              { country: "DE", language: "de", locale: "de-DE", timezoneId: "Europe/Berlin" },
+            ],
+            topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
+            marketPolicy: "primary_first",
+            quotas: { livePerDay: 1 },
+            denyHosts: [],
+          },
+        ],
+        update: async () => ({}),
+        updateMany: async () => ({ count: 1 }),
+      },
+      lbHost: { findMany: async () => [] },
+      lbCostEntry: { create: async () => ({}), count: async () => 0 },
+      lbRun: {
+        findFirst: async () => ({ id: "run-1", status: "running", projectId: "p1" }),
+        update: async () => ({}),
+      },
+      lbRunStep: {
+        findFirst: async () => null,
+        count: async () => steps.length,
+        create: async (args: { data: (typeof steps)[number] }) => {
+          steps.push(args.data);
+          return args.data;
+        },
+      },
+    } as unknown as PrismaClient;
+    await discoverDueProjects({
+      prisma,
+      now,
+      retryDelayMs: 0,
+      search: {
+        describe: () => ({
+          id: "fake-search",
+          contractVersion: "1",
+          adapterVersion: "0",
+          capabilities: { maxDepth: 20, operators: true },
+        }),
+        search: async () => {
+          searches += 1;
+          throw new Error("status 20000/40101 Internal SE Server Error.");
+        },
+      },
+    });
+    expect(searches).toBe(2);
+    expect(steps.filter((step) => step.error?.includes("40101"))).toHaveLength(1);
+  });
+
+  it("refuses the 41st search of the Berlin day", async () => {
+    const now = new Date("2026-10-20T08:00:00.000Z");
+    let searches = 0;
+    const steps: Array<{ outcome: { lastAction?: string } }> = [];
+    const prisma = {
+      lbProject: {
+        findMany: async () => [
+          {
+            id: "p1",
+            workspaceId: "w1",
+            name: "Nordlicht",
+            brandName: "Nordlicht",
+            status: "active",
+            archivedAt: null,
+            lastDiscoveredAt: new Date("2026-10-15T09:10:11.995Z"),
+            schedule: { timezone: "Europe/Berlin" },
+            markets: [
+              { country: "DE", language: "de", locale: "de-DE", timezoneId: "Europe/Berlin" },
+            ],
+            topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
+            marketPolicy: "primary_first",
+            quotas: { livePerDay: 1 },
+            denyHosts: [],
+          },
+        ],
+        update: async () => ({}),
+      },
+      lbHost: { findMany: async () => [] },
+      lbCostEntry: { count: async () => 40, create: async () => ({}) },
+      lbRun: {
+        findFirst: async () => ({ id: "run-1", status: "running", projectId: "p1" }),
+        update: async () => ({}),
+      },
+      lbRunStep: {
+        findFirst: async () => null,
+        count: async () => steps.length,
+        create: async (args: { data: (typeof steps)[number] }) => {
+          steps.push(args.data);
+          return args.data;
+        },
+      },
+    } as unknown as PrismaClient;
+    await discoverDueProjects({
+      prisma,
+      now,
+      search: {
+        describe: () => ({
+          id: "fake-search",
+          contractVersion: "1",
+          adapterVersion: "0",
+          capabilities: { maxDepth: 20, operators: true },
+        }),
+        search: async () => {
+          searches += 1;
+          return [];
+        },
+      },
+    });
+    expect(searches).toBe(0);
+    expect(steps.some((step) => step.outcome.lastAction === "Search budget reached")).toBe(true);
+  });
+});

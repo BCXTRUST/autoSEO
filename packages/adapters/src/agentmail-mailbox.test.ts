@@ -1,6 +1,7 @@
 import type { AdapterContext } from "@rakazo/adapter-kit";
 import { describe, expect, it } from "vitest";
 import { AgentMailEmulator, parseAgentMailWebhook } from "./agentmail-mailbox.js";
+import { personMailboxAddress } from "./person-mailbox.js";
 import { EncryptedSecretStore } from "./secrets.js";
 
 const context: AdapterContext = {
@@ -73,7 +74,8 @@ describe("AgentMail mailbox", () => {
   it("creates a stable inbox per project", async () => {
     const mailbox = new AgentMailEmulator();
     const first = await mailbox.ensureInbox("Proj_1", context);
-    expect(first.address).toBe("lb-proj-1@inbox.example");
+    expect(first.address).toBe(personMailboxAddress("Proj_1:0", "inbox.example"));
+    expect(first.address.startsWith("lb-")).toBe(false);
     expect(await mailbox.ensureInbox("Proj_1", context)).toBe(first);
   });
 

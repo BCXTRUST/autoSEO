@@ -171,6 +171,7 @@ const RECORDED_WAIT_ACTION: Record<string, string> = {
   registration_cap: "Registration cap",
   research: "Reading the forum first",
   nothing_today: "Nothing left today",
+  mail_pending: "Waiting for the confirmation mail",
 };
 
 function sameStringList(left: unknown, right: readonly unknown[]): boolean {

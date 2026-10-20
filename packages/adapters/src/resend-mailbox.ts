@@ -52,53 +52,71 @@ export class ResendMailbox implements MailboxProvider {
       ...(row.htmlBody ? { htmlBody: row.htmlBody } : {}),
       receivedAt: row.receivedAt.toISOString(),
     }));
-    const remote = await this.pullInbox(inboxId);
+    const remote = await this.pullInbox(inboxId, options.since);
     return [...stored, ...remote]
       .filter((mail) => since === undefined || Date.parse(mail.receivedAt) >= since)
       .sort((a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt));
   }
 
-  /** Reads the receiving API directly. An empty webhook list still delivers mail. */
-  private async pullInbox(inboxId: string): Promise<InboundMail[]> {
+  /**
+   * Pages `GET /emails/receiving` with `limit` and `after` until `has_more` is false
+   * or the oldest row is already older than `since`.
+   */
+  private async pullInbox(inboxId: string, since?: Date): Promise<InboundMail[]> {
     const fetchImpl = this.options.fetch ?? fetch;
     const headers = {
       Authorization: `Bearer ${this.options.apiKey}`,
       Accept: "application/json",
       "User-Agent": "autoSEO-mail",
     };
-    let listed = await fetchImpl("https://api.resend.com/emails/receiving", { headers });
-    if (!listed.ok) {
-      listed = await fetchImpl("https://api.resend.com/emails/receiving", { headers });
-    }
-    if (!listed.ok) return [];
-    const body = (await listed.json()) as { data?: Array<{ id?: string; to?: string[] }> };
-    const ids = (body.data ?? [])
-      .filter((row) =>
-        (row.to ?? []).some((address) => address.toLowerCase() === inboxId.toLowerCase()),
-      )
-      .map((row) => row.id)
-      .filter((id): id is string => Boolean(id));
+    const want = inboxId.trim().toLowerCase();
     const mails: InboundMail[] = [];
-    for (const id of ids) {
-      const response = await fetchImpl(`https://api.resend.com/emails/receiving/${id}`, {
-        headers,
-      });
-      if (!response.ok) continue;
-      const message = (await response.json()) as {
-        from?: string;
-        subject?: string;
-        text?: string;
-        html?: string;
-        created_at?: string;
+    let after: string | null = null;
+    const sinceMs = since?.getTime();
+    for (let page = 0; page < 20; page += 1) {
+      const url = new URL("https://api.resend.com/emails/receiving");
+      url.searchParams.set("limit", "100");
+      if (after) url.searchParams.set("after", after);
+      let listed = await fetchImpl(url, { headers });
+      if (!listed.ok) listed = await fetchImpl(url, { headers });
+      if (!listed.ok) break;
+      const body = (await listed.json()) as {
+        has_more?: boolean;
+        data?: Array<{ id?: string; to?: string[]; created_at?: string }>;
       };
-      mails.push({
-        inboxId,
-        from: message.from ?? "unknown",
-        subject: message.subject ?? "",
-        textBody: message.text ?? "",
-        ...(message.html ? { htmlBody: message.html } : {}),
-        receivedAt: message.created_at ?? new Date().toISOString(),
-      });
+      const rows = body.data ?? [];
+      if (rows.length === 0) break;
+      let oldest = Number.POSITIVE_INFINITY;
+      for (const row of rows) {
+        const created = Date.parse(row.created_at ?? "");
+        if (Number.isFinite(created)) oldest = Math.min(oldest, created);
+        const matched = (row.to ?? []).some((address) => address.trim().toLowerCase() === want);
+        if (!matched || !row.id) continue;
+        if (sinceMs !== undefined && Number.isFinite(created) && created < sinceMs) continue;
+        const response = await fetchImpl(`https://api.resend.com/emails/receiving/${row.id}`, {
+          headers,
+        });
+        if (!response.ok) continue;
+        const message = (await response.json()) as {
+          from?: string;
+          subject?: string;
+          text?: string;
+          html?: string;
+          created_at?: string;
+        };
+        mails.push({
+          inboxId,
+          from: message.from ?? "unknown",
+          subject: message.subject ?? "",
+          textBody: message.text ?? "",
+          ...(message.html ? { htmlBody: message.html } : {}),
+          receivedAt: message.created_at ?? row.created_at ?? new Date().toISOString(),
+        });
+      }
+      const cursor = rows[rows.length - 1]?.id;
+      if (!body.has_more || !cursor || cursor === after) break;
+      if (sinceMs !== undefined && oldest < sinceMs) break;
+      after = cursor;
     }
     return mails;
   }

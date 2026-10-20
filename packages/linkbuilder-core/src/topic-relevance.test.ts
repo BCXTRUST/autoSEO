@@ -42,16 +42,13 @@ describe("topic relevance", () => {
   });
 
   it("ignores topic tags that only repeat the search query", () => {
-    expect(
-      pageMatchesTopics(
-        {
-          title: "Gartenforum",
-          pageText: "Tomaten und Beete.",
-          topicTags: ["Kreatin Krafttraining Forum"],
-        },
-        project,
-      ),
-    ).toBe(false);
+    const page = {
+      title: "Gartenforum",
+      pageText: "Tomaten und Beete.",
+      topicTags: ["Kreatin Krafttraining Forum"],
+    };
+    expect(pageMatchesTopics(page, project)).toBe(false);
+    expect(topicStatusForPage("qualified", page, project)).toBe("off_topic");
   });
 
   it("folds Nahrungsergänzung the same way on both sides", () => {

@@ -33,6 +33,43 @@ describe("answerBoardQuestion", () => {
 });
 
 describe("woltlab login", () => {
+  it("does not post a lost-password form", async () => {
+    const form = `<!DOCTYPE html><html><body>
+<form id="loginForm" method="post" action="/lost-password/">
+<input id="username" name="username" type="text">
+<input id="captchaAnswer" name="captchaAnswer" type="text">
+<input type="submit" value="Absenden">
+</form>
+</body></html>`;
+    let posts = 0;
+    const server = createServer((request, response) => {
+      if (request.method === "POST") posts += 1;
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(form);
+    });
+    const origin = await new Promise<string>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        resolve(`http://127.0.0.1:${port}/`);
+      });
+    });
+    const session = new HtmlBrowserSession();
+    try {
+      expect(
+        await new WoltlabDriver().login(session, origin, {
+          username: "member",
+          password: "secret-value",
+        }),
+      ).toBe(false);
+      expect(posts).toBe(0);
+    } finally {
+      await new Promise((doneClose, reject) =>
+        server.close((error) => (error ? reject(error) : doneClose())),
+      );
+    }
+  });
+
   it("signs in when the form id is loginForm", async () => {
     const form = `<!DOCTYPE html><html><body>
 <form id="loginForm" method="post" action="/login/">

@@ -35,6 +35,18 @@ describe("page move when rules find no thread", () => {
     expect(boardLink(links, ["excel", "office"])?.text).toBe("Excel");
   });
 
+  it("drops a lost-password link", () => {
+    const links = usablePageLinks(
+      [
+        { text: "Kennwort vergessen", href: "/lost-password/" },
+        { text: "Verstopfung", href: "/forum/board/12-verstopfung/" },
+      ],
+      "https://www.med2-forum.de/login/",
+      "med2-forum.de",
+    );
+    expect(links.map((link) => link.text)).toEqual(["Verstopfung"]);
+  });
+
   it("reads the thread and board links this forum actually uses", () => {
     const links = usablePageLinks(
       [

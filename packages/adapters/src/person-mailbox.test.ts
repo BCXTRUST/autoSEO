@@ -33,12 +33,21 @@ describe("person mailbox", () => {
     expect(
       signupMailboxAddress({
         existingAccount: true,
-        storedAddress: "lb-cmuwjtyeg00005xo5zgz70ls2@agentmail.to",
+        storedAddress: "lena.hoffmann@sideinbox.email",
         seed: "project-1",
         domain: "sideinbox.email",
         priorSignups: 4,
       }),
-    ).toBe("lb-cmuwjtyeg00005xo5zgz70ls2@agentmail.to");
+    ).toBe("lena.hoffmann@sideinbox.email");
+    expect(
+      signupMailboxAddress({
+        existingAccount: true,
+        storedAddress: "lb-cmuwjtyeg00005xo5zgz70ls2@sideinbox.email",
+        seed: "project-1",
+        domain: "sideinbox.email",
+        priorSignups: 4,
+      }),
+    ).toMatch(/^[a-z]+\.[a-z]+@sideinbox\.email$/);
   });
 
   it("keeps reading older person addresses and the stored AgentMail inbox", () => {

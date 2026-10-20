@@ -20,6 +20,7 @@ export * from "./mail-delivery.js";
 export * from "./market.js";
 export * from "./operator-ticket.js";
 export * from "./pacing.js";
+export * from "./page-language.js";
 export * from "./page-suggestion.js";
 export * from "./persona-computer.js";
 export * from "./personal-name.js";

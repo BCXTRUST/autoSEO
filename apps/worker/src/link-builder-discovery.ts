@@ -16,6 +16,7 @@ import {
 import type { PrismaClient } from "@rakazo/db";
 import {
   type DeadHostReprobeStatus,
+  detectLanguage,
   discoverHosts,
   discoveryDue,
   forumSearchUrl,
@@ -25,11 +26,14 @@ import {
   isNewSignupBannedHost,
   isRestoredSignupHost,
   localDateKey,
+  planDiscoveryQueries,
   primaryProblemQuery,
+  probePages,
   problemInputFromProject,
   queryOmitsShop,
   registrableDomain,
   shopNames,
+  startOfZonedDay,
   topicStatusForPage,
   transitionProject,
   useCaseLanes,
@@ -94,6 +98,8 @@ export async function discoverDueProjects(input: {
   /** Destroy the persona desktop when this tick pauses with no new forum. */
   releaseSearchDesktop?: (projectId: string) => Promise<void>;
   resolveCaptcha?: (project: { id: string; workspaceId: string }) => Promise<CaptchaSolver | null>;
+  /** Test hook. Live retries wait five seconds. */
+  retryDelayMs?: number;
 }): Promise<number> {
   const projects = await input.prisma.lbProject.findMany({
     where: { status: "active", archivedAt: null },
@@ -111,7 +117,17 @@ export async function discoverDueProjects(input: {
           accounts: { some: { emailVerifiedAt: { not: null }, postCount: { lt: 4 } } },
         },
       });
-      if (warmingShort > 0) continue;
+      if (
+        warmingShort > 0 &&
+        (await warmingHostsStillOpen(
+          input.prisma,
+          project.id,
+          (project.schedule as { timezone?: string } | null)?.timezone || "Europe/Berlin",
+          input.now,
+        ))
+      ) {
+        continue;
+      }
     }
     const schedule = project.schedule as { timezone?: string } | null;
     const timeZone = schedule?.timezone || "Europe/Berlin";
@@ -173,6 +189,19 @@ export async function discoverDueProjects(input: {
         fetchImpl: input.fetchImpl ?? fetch,
         allowPrivate: input.allowPrivate ?? false,
       });
+    if (process.env.LINK_BUILDER_BROWSER_SEARCH !== "on") {
+      found += await discoverByDataForSeo({
+        input,
+        project,
+        market,
+        lanes: lanes.data,
+        denyHosts,
+        usedHosts,
+        fetchText,
+        timeZone,
+      });
+      continue;
+    }
     const queries = problemQueries(project);
     const browserQuery = queries[0] ?? null;
     const paidQuery = queries.find((query) => query !== browserQuery) ?? null;
@@ -219,7 +248,7 @@ export async function discoverDueProjects(input: {
             query: paidQuery,
             country: market.country,
             language: market.language,
-            depth: 100,
+            depth: 20,
           },
           context,
         );
@@ -328,16 +357,45 @@ export async function reprobeDeadHosts(
         }),
     });
     if (verdict === "dead") return;
+    let status: string = verdict;
+    let statusReason: string | null = verdict === "form_not_found" ? "no_signup_form" : null;
+    let language: string | undefined;
+    let country: string | null | undefined;
+    if (verdict === "qualified") {
+      const home = await fetchSignupPage(row.homepageUrl, {
+        fetchImpl: input.fetchImpl ?? fetch,
+        allowPrivate: input.allowPrivate ?? false,
+      });
+      const detected = detectLanguage(home?.html ?? "", row.homepageUrl);
+      if (detected.language && detected.language !== "de") {
+        status = "off_topic";
+        statusReason = `language:${detected.language}`;
+        language = detected.language;
+        country = detected.country;
+      } else if (home?.html) {
+        const facts = probePages({
+          homepageUrl: row.homepageUrl,
+          pages: [{ url: row.homepageUrl, html: home.html }],
+        });
+        const forum =
+          facts.platform !== "unknown" || (facts.threads.length >= 5 && Boolean(facts.registerUrl));
+        if (!forum) {
+          status = "off_topic";
+          statusReason = "not_forum";
+        }
+      }
+    }
     await input.prisma.lbHost.updateMany({
       where: { id: row.id, status: "dead" },
       data: {
-        status: verdict,
+        status,
         parkedFrom: null,
-        statusReason: verdict === "form_not_found" ? "no_signup_form" : null,
+        statusReason,
         lastProbeAt: input.now,
+        ...(language ? { language, country } : {}),
       },
     });
-    restored.push({ domain: row.registrableDomain, status: verdict });
+    restored.push({ domain: row.registrableDomain, status });
   };
   const workers = Array.from({ length: Math.min(4, eligible.length) }, async () => {
     while (cursor < eligible.length) {
@@ -466,6 +524,191 @@ async function pauseAfterEmptySearch(
     });
   }
   await input.releaseSearchDesktop?.(project.id).catch(() => undefined);
+}
+
+const SEARCHES_PER_DAY = 40;
+
+async function searchesToday(
+  prisma: PrismaClient,
+  projectId: string,
+  timeZone: string,
+  now: Date,
+): Promise<number> {
+  const count = (
+    prisma as PrismaClient & {
+      lbCostEntry?: { count?: (args: unknown) => Promise<number> };
+    }
+  ).lbCostEntry?.count;
+  if (typeof count !== "function") return 0;
+  try {
+    return await count({
+      where: {
+        projectId,
+        kind: "search_query",
+        occurredAt: { gte: startOfZonedDay(now, timeZone) },
+      },
+    });
+  } catch {
+    return 0;
+  }
+}
+
+async function warmingHostsStillOpen(
+  prisma: PrismaClient,
+  projectId: string,
+  timeZone: string,
+  now: Date,
+): Promise<boolean> {
+  const findHosts = prisma.lbHost.findMany;
+  if (typeof findHosts !== "function") return true;
+  let rows: Array<{ id: string }> = [];
+  try {
+    rows = await findHosts({
+      where: {
+        projectId,
+        status: "warming",
+        accounts: { some: { emailVerifiedAt: { not: null }, postCount: { lt: 4 } } },
+      },
+      select: { id: true },
+    });
+  } catch {
+    return true;
+  }
+  if (rows.length === 0) return false;
+  const findSteps = prisma.lbRunStep?.findMany;
+  if (typeof findSteps !== "function") return true;
+  let steps: Array<{ hostId: string | null; outcome: unknown }> = [];
+  try {
+    steps = await findSteps({
+      where: {
+        hostId: { in: rows.map((row) => row.id) },
+        kind: "warmup_post",
+        createdAt: { gte: startOfZonedDay(now, timeZone) },
+      },
+      select: { hostId: true, outcome: true },
+    });
+  } catch {
+    return true;
+  }
+  const passed = new Set(
+    steps
+      .filter((step) => {
+        const refused =
+          step.outcome && typeof step.outcome === "object"
+            ? (step.outcome as { refused?: unknown }).refused
+            : null;
+        return refused === "no_thread_today" && step.hostId;
+      })
+      .map((step) => step.hostId),
+  );
+  return rows.some((row) => !passed.has(row.id));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function searchWithRetry(
+  input: { search: SearchProvider; retryDelayMs?: number },
+  request: { query: string; country: string; language: string; depth: number },
+  context: AdapterContext,
+): Promise<Array<{ url: string; title: string; snippet: string }>> {
+  const run = () => input.search.search(request, context);
+  try {
+    const results = await run();
+    const notice = partialNoticeOf(input.search);
+    if (results.length === 0 && notice?.includes("40106")) {
+      await delay(input.retryDelayMs ?? 5_000);
+      return run();
+    }
+    return results;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!message.includes("40101")) throw error;
+    await delay(input.retryDelayMs ?? 5_000);
+    return run();
+  }
+}
+
+async function discoverByDataForSeo(args: {
+  input: {
+    prisma: PrismaClient;
+    search: SearchProvider;
+    now: Date;
+    retryDelayMs?: number;
+  };
+  project: {
+    id: string;
+    workspaceId: string;
+    name?: string | null;
+    brandName?: string | null;
+    topicLanes?: unknown;
+    targets?: unknown;
+  };
+  market: LbMarket;
+  lanes: Parameters<typeof discoverHosts>[0]["lanes"];
+  denyHosts: string[];
+  usedHosts: string[];
+  fetchText: (url: string) => Promise<string | null>;
+  timeZone: string;
+}): Promise<number> {
+  const { input, project, market, timeZone } = args;
+  const used = await searchesToday(input.prisma, project.id, timeZone, input.now);
+  if (used >= SEARCHES_PER_DAY) {
+    await recordDiscoveryStep(input.prisma, project, input.now, "Search budget reached", null);
+    await input.prisma.lbProject.update({
+      where: { id: project.id },
+      data: { lastDiscoveredAt: input.now },
+    });
+    return 0;
+  }
+  const queries = planDiscoveryQueries(
+    problemQueries(project),
+    Math.min(8, SEARCHES_PER_DAY - used),
+  ).filter((query) => !/vitaminexpress/i.test(query));
+  const context = { ...adapter, workspaceId: project.workspaceId };
+  const urls: string[] = [];
+  try {
+    for (const query of queries) {
+      const results = await searchWithRetry(
+        input,
+        { query, country: market.country, language: market.language, depth: 20 },
+        context,
+      );
+      await recordSearchCost(input, project, timeZone, query);
+      const notice = partialNoticeOf(input.search);
+      if (notice) await recordPartialResults(input.prisma, project, input.now, notice);
+      urls.push(...results.map((result) => result.url));
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "search failed";
+    await recordDiscoveryFailure(
+      input.prisma,
+      project,
+      input.now,
+      message,
+      `Search failed: ${message}`,
+    );
+    await pauseAfterEmptySearch(input, project);
+    return 0;
+  }
+  const paid = (
+    await probeResultUrls({
+      urls,
+      lanes: args.lanes,
+      market,
+      denyHosts: args.denyHosts,
+      usedHosts: args.usedHosts,
+      fetchText: args.fetchText,
+    })
+  ).map((host) => gateHostTopic(host, project));
+  const added = await persistDiscovered(input.prisma, project, paid, input.now);
+  await input.prisma.lbProject.update({
+    where: { id: project.id },
+    data: { lastDiscoveredAt: input.now },
+  });
+  if (added === 0) await pauseAfterEmptySearch(input, project);
+  return added;
 }
 
 async function searchBrowserFirst(args: {
@@ -677,7 +920,9 @@ async function confirmedWarmupReady(prisma: PrismaClient, projectId: string): Pr
     select: { id: true },
   });
   if (!run) return false;
-  const steps = await prisma.lbRunStep.findMany({
+  const findSteps = prisma.lbRunStep?.findMany;
+  if (typeof findSteps !== "function") return false;
+  const steps = await findSteps({
     where: { runId: run.id },
     select: { kind: true, hostId: true, error: true, outcome: true },
   });
@@ -1065,7 +1310,7 @@ async function probeResultUrls(args: {
     need: 1,
     denyHosts: args.denyHosts,
     usedHosts: args.usedHosts,
-    depth: 100,
+    depth: 20,
     search: async () => {
       if (served) return [];
       served = true;

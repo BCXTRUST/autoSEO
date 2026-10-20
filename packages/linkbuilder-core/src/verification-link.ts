@@ -8,6 +8,10 @@ const URL_IN_TEXT = /https?:\/\/[^\s<>"'()[\]]+/gi;
 const HREF = /href\s*=\s*["']([^"']+)["']/gi;
 const ACTIVATION_HINT =
   /mode=activate|activat|confirm|verif|aktivier|bestätig|bestaetig|freischalt|validate/i;
+const RESET_MAIL =
+  /kennwort vergessen|passwort vergessen|forgot your password|reset your password|password reset|benutzerkonto abgelehnt/i;
+const RESET_URL =
+  /lost-?password|forgot-?password|new-?password|reset-?password|mode=sendpassword/i;
 
 function decodeEntities(value: string): string {
   return value
@@ -30,11 +34,18 @@ function candidates(mail: MailForLinkExtraction): string[] {
  * The account activation link in a board's verification mail. Only links on `origin` count, so a
  * tracking redirect or a link to another site in the same mail is never opened.
  */
+function sameBoard(linkHost: string, originHost: string): boolean {
+  const link = linkHost.replace(/^www\./i, "").toLowerCase();
+  const board = originHost.replace(/^www\./i, "").toLowerCase();
+  return link === board || link.endsWith(`.${board}`);
+}
+
 export function extractVerificationLink(
   mail: MailForLinkExtraction,
   origin: string,
 ): string | null {
-  const expected = new URL(origin).origin;
+  if (RESET_MAIL.test(mail.subject)) return null;
+  const expected = new URL(origin).hostname;
   const sameOrigin: string[] = [];
   for (const candidate of candidates(mail)) {
     let url: URL;
@@ -44,7 +55,8 @@ export function extractVerificationLink(
       continue;
     }
     if (url.username || url.password) continue;
-    if (url.origin !== expected) continue;
+    if (RESET_URL.test(`${url.pathname}${url.search}`)) continue;
+    if (!sameBoard(url.hostname, expected)) continue;
     sameOrigin.push(url.href);
   }
   return sameOrigin.find((url) => ACTIVATION_HINT.test(url)) ?? null;

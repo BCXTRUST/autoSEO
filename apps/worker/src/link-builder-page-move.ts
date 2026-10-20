@@ -1,4 +1,4 @@
-import type { BoardThread } from "@rakazo/linkbuilder-drivers";
+import { type BoardThread, isPasswordResetTarget } from "@rakazo/linkbuilder-drivers";
 
 /**
  * One look when the forum rules find no thread on a page that is already open.
@@ -49,6 +49,7 @@ export function usablePageLinks(
   for (const item of anchors) {
     const text = item.text.replace(/\s+/g, " ").trim();
     if (!text || text.length > 120 || UTILITY_TEXT.test(text)) continue;
+    if (isPasswordResetTarget(text) || isPasswordResetTarget(item.href)) continue;
     const url = sameSiteUrl(item.href, pageUrl, domain);
     if (!url || url === current || seen.has(url)) continue;
     seen.add(url);
@@ -145,7 +146,7 @@ export function pageLookPrompt(links: readonly PageLink[]): string {
   return [
     "The page is already open. The rules found no thread.",
     "Pick one link that opens a forum board or a discussion, or skip.",
-    "Do not pick logout, login, search, or the page that is already open.",
+    "Do not pick logout, login, search, a password reset, or the page that is already open.",
     "Links:",
     ...lines,
     'Reply JSON only: {"action":"open","index":0} or {"action":"skip"}',
