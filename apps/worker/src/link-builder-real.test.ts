@@ -1,17 +1,30 @@
-import type { AdapterContext, ProxyEndpoint } from "@rakazo/adapter-kit";
-import { FakeSandboxProvider } from "@rakazo/adapters";
+import type {
+  AdapterContext,
+  BrowserSessionFactory,
+  ProxyEndpoint,
+  SearchProvider,
+} from "@rakazo/adapter-kit";
+import { FakeBrowserSessionProvider, FakeCaptchaSolver } from "@rakazo/adapter-kit";
+import { EncryptedSecretStore, FakeSandboxProvider, StaticPlanProvider } from "@rakazo/adapters";
+import {
+  createLbProject,
+  grantExplicitProjectAllowance,
+  startLbProject,
+  updateLbProject,
+} from "@rakazo/api/link-builder";
+import { type Actor, LbProjectPatchSchema } from "@rakazo/contracts";
 import type { PrismaClient } from "@rakazo/db";
+import { createPgliteDb, type TestDatabase } from "@rakazo/db/pglite";
 import { LocalBrowserRefused } from "@rakazo/linkbuilder-browser";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isLinkBuilderFakeEnabled } from "./link-builder-fake.js";
-import { isLinkBuilderRealEnabled } from "./link-builder-real.js";
+import { isLinkBuilderRealEnabled, LinkBuilderRealRunner } from "./link-builder-real.js";
 import {
   countsAsRegistration,
   helperConnectionPlan,
   observedPageHelper,
   selectsGenericRegistrationJourney,
   templateReply,
-  warmupReplyChoice,
 } from "./link-builder-real-steps.js";
 import {
   browserFactoryFromEnv,
@@ -23,16 +36,6 @@ const prisma = {} as PrismaClient;
 const sandbox = new FakeSandboxProvider();
 
 describe("link builder real driver wiring", () => {
-  it("writes a link-free warmup reply without a relevance score", () => {
-    const reply = warmupReplyChoice("de");
-    expect(reply.linkSlot).toBe("none");
-    expect(reply.targetUrl).toBeNull();
-    expect(reply.anchorText).toBeNull();
-    expect(reply.body).not.toMatch(/https?:\/\//);
-    expect(reply.body.length).toBeGreaterThan(10);
-    expect(warmupReplyChoice("en").body).not.toBe(reply.body);
-  });
-
   it("uses the Captell API door when the Page Helper is missing", () => {
     expect(helperConnectionPlan(null)).toBe("api");
     expect(helperConnectionPlan("")).toBe("api");
@@ -180,6 +183,105 @@ describe("link builder real driver wiring", () => {
     expect(ref.providerRef).toBe("sb-old");
     expect(updates).toEqual([{ state: "running", providerRef: "sb-old", kind: "e2b" }]);
   });
+
+  it("creates one team computer when the workspace list is empty", async () => {
+    const rows: Array<{
+      id: string;
+      scope: string;
+      scopeKey: string;
+      state: string;
+      providerRef: string | null;
+      kind: string;
+      homeKey: string;
+    }> = [];
+    let upserts = 0;
+    let provisions = 0;
+    const prisma = {
+      lbProject: {
+        findUnique: async () => ({ workspaceId: "ws", createdByUserId: "user-1" }),
+      },
+      computer: {
+        findMany: async () => rows.map((row) => ({ ...row })),
+        upsert: async (args: {
+          where: { scopeKey: string };
+          create: {
+            userId: string;
+            kind: string;
+            homeKey: string;
+            scope: string;
+            scopeKey: string;
+          };
+        }) => {
+          upserts += 1;
+          const found = rows.find((row) => row.scopeKey === args.where.scopeKey);
+          if (found) return { ...found };
+          const created = {
+            id: "comp-new",
+            scope: args.create.scope,
+            scopeKey: args.create.scopeKey,
+            state: "stopped",
+            providerRef: null,
+            kind: args.create.kind,
+            homeKey: args.create.homeKey,
+          };
+          rows.push(created);
+          expect(args.create.userId).toBe("user-1");
+          expect(args.create.scope).toBe("team");
+          expect(args.create.kind).toBe(process.env.SANDBOX_PROVIDER?.trim() || "e2b");
+          return { ...created };
+        },
+        update: async (args: {
+          where: { id: string };
+          data: { state: string; providerRef: string; kind: string };
+        }) => {
+          const row = rows.find((item) => item.id === args.where.id);
+          if (!row) throw new Error("missing computer");
+          row.state = args.data.state;
+          row.providerRef = args.data.providerRef;
+          row.kind = args.data.kind;
+          return { ...row };
+        },
+      },
+    } as unknown as PrismaClient;
+    const sandbox = {
+      provision: async (request: { botId: string; providerKind?: string }) => {
+        provisions += 1;
+        return {
+          id: "sb-new",
+          botId: request.botId,
+          kind: "e2b" as const,
+          providerRef: "sb-new",
+          fresh: true,
+        };
+      },
+    } as unknown as FakeSandboxProvider;
+    const context = {
+      operationId: "op",
+      traceId: "tr",
+      workspaceId: "ws",
+      userId: "user",
+      signal: new AbortController().signal,
+    } satisfies AdapterContext;
+    const first = await resolvePersonaComputer({
+      prisma,
+      sandbox,
+      projectId: "project-1",
+      context,
+      dataDir: "/tmp/data",
+    });
+    const second = await resolvePersonaComputer({
+      prisma,
+      sandbox,
+      projectId: "project-1",
+      context,
+      dataDir: "/tmp/data",
+    });
+    expect(rows).toHaveLength(1);
+    expect(upserts).toBe(1);
+    expect(provisions).toBe(1);
+    expect(first.providerRef).toBe("sb-new");
+    expect(second.providerRef).toBe("sb-new");
+  });
 });
 
 describe("proxy resolver", () => {
@@ -269,5 +371,295 @@ describe("template reply", () => {
       format: "markdown",
     });
     expect(body).toContain("[Planner](https://planner.example/)");
+  });
+});
+
+describe("recorded host skips", () => {
+  let db: TestDatabase;
+  const clock = new Date("2026-10-16T12:00:00.000Z");
+  const actor: Actor = {
+    userId: "user_skip",
+    workspaceId: "org_skip",
+    email: "owner@example.test",
+    isDeploymentOwner: false,
+  };
+  const secrets = new EncryptedSecretStore("skip-placeholder-encryption-key");
+
+  beforeAll(async () => {
+    db = await createPgliteDb();
+    await db.prisma.organization.create({
+      data: { id: actor.workspaceId, name: "Skip", slug: "skip", createdAt: new Date() },
+    });
+    await db.prisma.user.create({ data: { id: actor.userId, name: "Owner", email: actor.email } });
+    await grantExplicitProjectAllowance(db.prisma, actor.workspaceId);
+  });
+
+  afterAll(async () => {
+    await db?.close();
+  });
+
+  function runner(browsers: BrowserSessionFactory, search?: SearchProvider) {
+    return new LinkBuilderRealRunner({
+      prisma: db.prisma,
+      secrets,
+      artifacts: { put: async () => ({ id: "art" }), remove: async () => undefined } as never,
+      browsers,
+      captcha: new FakeCaptchaSolver({ balance: 5_000 }),
+      mailbox: {
+        describe: () => ({
+          id: "unused",
+          contractVersion: "1",
+          adapterVersion: "0",
+          capabilities: { inbound: "webhook" },
+        }),
+        ensureInbox: async () => ({ inboxId: "mbx", address: "a@inbox.example" }),
+      },
+      now: () => clock,
+      workerId: `skip-${Math.random()}`,
+      search,
+    });
+  }
+
+  async function startedProject(name: string, denyHosts: string[]) {
+    const deps = {
+      prisma: db.prisma,
+      secrets,
+      plan: new StaticPlanProvider({
+        name: "starter",
+        caps: { projects: 8, live_per_day: 10, personas: 8 },
+      }),
+    };
+    const created = await createLbProject(deps as never, actor, {
+      name,
+      brandName: "Nordlicht",
+      allowedDomains: ["nordlicht.example"],
+    });
+    await updateLbProject(deps as never, actor, {
+      projectId: created.id,
+      ...LbProjectPatchSchema.parse({
+        persona: { displayName: "Mira Sol", register: "du" },
+        quotas: { newPerDay: 2, livePerDay: 1 },
+        schedule: {
+          timezone: "UTC",
+          weekdaysOnly: false,
+          window: { start: "00:00", end: "23:59" },
+        },
+        topicLanes: [{ id: "lane", tag: "Magnesium", description: "Magnesium Schlaf" }],
+        targets: [{ url: "https://nordlicht.example/guide", priority: 50 }],
+        captchaToken: "ct_live_placeholder",
+        provisionMailbox: true,
+        denyHosts,
+      }),
+    });
+    await startLbProject(deps as never, actor, created.id);
+    return created;
+  }
+
+  async function host(projectId: string, domain: string, status: "pending_admin" | "ready") {
+    return db.prisma.lbHost.create({
+      data: {
+        workspaceId: actor.workspaceId,
+        projectId,
+        registrableDomain: domain,
+        homepageUrl: `https://${domain}/`,
+        platform: "phpbb",
+        language: "de",
+        country: "DE",
+        locale: "de-DE",
+        timezoneId: "Europe/Berlin",
+        status,
+      },
+    });
+  }
+
+  function skipSteps(projectId: string) {
+    return db.prisma.lbRunStep.findMany({
+      where: { run: { projectId } },
+      orderBy: { stepIndex: "asc" },
+    });
+  }
+
+  it("records one skip for denied forums and does not open a browser", async () => {
+    const project = await startedProject("Denied", ["macuser.de", "medizin-forum.de"]);
+    await host(project.id, "macuser.de", "pending_admin");
+    await host(project.id, "medizin-forum.de", "ready");
+    const browsers = new FakeBrowserSessionProvider({});
+    const real = runner(Object.assign(browsers, { mode: "local" as const }));
+    await real.tick();
+    await real.tick();
+    const steps = await skipSteps(project.id);
+    const skips = steps.filter((step) => step.kind === "select_host" && step.hostId === null);
+    expect(skips).toHaveLength(1);
+    expect(skips[0]?.outcome).toMatchObject({
+      lastAction: "Skipped 2 denied forums",
+      skipped: ["macuser.de", "medizin-forum.de"],
+    });
+    const run = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
+    expect(run.lastAction).toBe("Skipped 2 denied forums");
+    expect(browsers.sessions).toHaveLength(0);
+    await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
+    await db.prisma.lbRun.updateMany({
+      where: { projectId: project.id },
+      data: { status: "paused" },
+    });
+  });
+
+  it("records one admin wait for an allowed pending forum", async () => {
+    const project = await startedProject("Admin", []);
+    const pending = await host(project.id, "gartentipps.de", "pending_admin");
+    const run = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
+    await db.prisma.lbRunStep.create({
+      data: {
+        workspaceId: actor.workspaceId,
+        runId: run.id,
+        stepIndex: 0,
+        kind: "admin_check",
+        hostId: pending.id,
+        createdAt: new Date(clock.getTime() - 60 * 60 * 1000),
+        finishedAt: new Date(clock.getTime() - 60 * 60 * 1000),
+      },
+    });
+    const browsers = new FakeBrowserSessionProvider({});
+    const real = runner(Object.assign(browsers, { mode: "local" as const }));
+    await real.tick();
+    await real.tick();
+    const steps = await skipSteps(project.id);
+    const waits = steps.filter((step) => {
+      const outcome = step.outcome as { lastAction?: string };
+      return outcome.lastAction === "Waiting for a site admin";
+    });
+    expect(waits).toHaveLength(1);
+    expect(waits[0]?.outcome).toMatchObject({
+      reason: "admin_approval",
+      domains: ["gartentipps.de"],
+    });
+    const updated = await db.prisma.lbRun.findFirstOrThrow({ where: { id: run.id } });
+    expect(updated.lastAction).toBe("Waiting for a site admin");
+    expect(browsers.sessions).toHaveLength(0);
+  });
+
+  it("does not let a skip replace a browser search line", async () => {
+    const project = await startedProject("Browser line", ["macuser.de", "medizin-forum.de"]);
+    await host(project.id, "macuser.de", "pending_admin");
+    await host(project.id, "medizin-forum.de", "ready");
+    const run = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
+    await db.prisma.lbRun.update({
+      where: { id: run.id },
+      data: { lastAction: "Searched the browser: Magnesium Krämpfe Forum" },
+    });
+    const browsers = new FakeBrowserSessionProvider({});
+    const real = runner(Object.assign(browsers, { mode: "local" as const }));
+    await real.tick();
+    const kept = await db.prisma.lbRun.findFirstOrThrow({ where: { id: run.id } });
+    expect(kept.lastAction?.startsWith("Searched the browser")).toBe(true);
+    await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
+    await db.prisma.lbRun.updateMany({
+      where: { projectId: project.id },
+      data: { status: "paused" },
+    });
+
+    const second = await startedProject("Browser miss", ["macuser.de", "medizin-forum.de"]);
+    await host(second.id, "macuser.de", "pending_admin");
+    await host(second.id, "medizin-forum.de", "ready");
+    const secondRun = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: second.id } });
+    await db.prisma.lbRun.update({
+      where: { id: secondRun.id },
+      data: { lastAction: "Browser search found no forum." },
+    });
+    const again = runner(
+      Object.assign(new FakeBrowserSessionProvider({}), { mode: "local" as const }),
+    );
+    await again.tick();
+    const missed = await db.prisma.lbRun.findFirstOrThrow({ where: { id: secondRun.id } });
+    expect(missed.lastAction?.startsWith("Browser search")).toBe(true);
+    await db.prisma.lbProject.update({ where: { id: second.id }, data: { status: "paused" } });
+    await db.prisma.lbRun.updateMany({
+      where: { projectId: second.id },
+      data: { status: "paused" },
+    });
+  });
+
+  it("keeps a failed search line when the tick then skips denied forums", async () => {
+    const project = await startedProject("Search line", ["macuser.de", "medizin-forum.de"]);
+    await host(project.id, "macuser.de", "pending_admin");
+    await host(project.id, "medizin-forum.de", "ready");
+    const browsers = new FakeBrowserSessionProvider({});
+    const search: SearchProvider = {
+      describe: () => ({
+        id: "fake-search",
+        contractVersion: "1",
+        adapterVersion: "0",
+        capabilities: { maxDepth: 10, operators: false },
+      }),
+      search: async () => {
+        throw new Error("status 20000/40501 Invalid Field");
+      },
+    };
+    const real = runner(Object.assign(browsers, { mode: "local" as const }), search);
+    await real.tick();
+    const run = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
+    expect(run.lastAction?.startsWith("Search failed: status ")).toBe(true);
+    const steps = await skipSteps(project.id);
+    expect(steps.some((step) => step.kind === "discover")).toBe(true);
+    expect(
+      steps.some((step) => {
+        const outcome = step.outcome as { lastAction?: string };
+        return outcome.lastAction?.startsWith("Skipped");
+      }),
+    ).toBe(false);
+    const paused = await db.prisma.lbProject.findFirstOrThrow({ where: { id: project.id } });
+    expect(paused.status).toBe("paused");
+    await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
+    await db.prisma.lbRun.updateMany({
+      where: { projectId: project.id },
+      data: { status: "paused" },
+    });
+  });
+
+  it("keeps a partial search line when the tick then skips denied forums", async () => {
+    const project = await startedProject("Partial line", ["macuser.de", "medizin-forum.de"]);
+    await host(project.id, "macuser.de", "pending_admin");
+    await host(project.id, "medizin-forum.de", "ready");
+    const browsers = new FakeBrowserSessionProvider({});
+    const search = {
+      partialNotice: null as string | null,
+      describe: () => ({
+        id: "fake-search",
+        contractVersion: "1",
+        adapterVersion: "0",
+        capabilities: { maxDepth: 10, operators: false },
+      }),
+      search: async () => {
+        search.partialNotice = "status 20000/40106 Task completed with partial results.";
+        return [
+          {
+            url: "https://macuser.de/viewtopic.php?t=1",
+            title: "Mac",
+            snippet: "",
+            domain: "macuser.de",
+          },
+        ];
+      },
+    } satisfies SearchProvider & { partialNotice: string | null };
+    const real = runner(Object.assign(browsers, { mode: "local" as const }), search);
+    await real.tick();
+    const run = await db.prisma.lbRun.findFirstOrThrow({ where: { projectId: project.id } });
+    expect(run.lastAction?.startsWith("Search used partial results")).toBe(true);
+    expect(run.lastAction).toContain("status ");
+    const steps = await skipSteps(project.id);
+    expect(steps.some((step) => step.kind === "discover" && step.error === null)).toBe(true);
+    expect(
+      steps.some((step) => {
+        const outcome = step.outcome as { lastAction?: string };
+        return outcome.lastAction?.startsWith("Skipped");
+      }),
+    ).toBe(false);
+    const paused = await db.prisma.lbProject.findFirstOrThrow({ where: { id: project.id } });
+    expect(paused.status).toBe("paused");
+    await db.prisma.lbProject.update({ where: { id: project.id }, data: { status: "paused" } });
+    await db.prisma.lbRun.updateMany({
+      where: { projectId: project.id },
+      data: { status: "paused" },
+    });
   });
 });

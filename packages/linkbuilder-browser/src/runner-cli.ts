@@ -72,13 +72,19 @@ function stateArg(argv: readonly string[]): string {
 }
 
 export interface RunnerIo {
-  stdout(line: string): void;
-  stderr(line: string): void;
+  stdout(line: string): void | Promise<void>;
+  stderr(line: string): void | Promise<void>;
+}
+
+function writeLine(stream: NodeJS.WriteStream, line: string): Promise<void> {
+  return new Promise((resolve) => {
+    stream.write(`${line}\n`, () => resolve());
+  });
 }
 
 const processIo: RunnerIo = {
-  stdout: (line) => process.stdout.write(`${line}\n`),
-  stderr: (line) => process.stderr.write(`${line}\n`),
+  stdout: (line) => writeLine(process.stdout, line),
+  stderr: (line) => writeLine(process.stderr, line),
 };
 
 export function describeCall(
@@ -165,11 +171,11 @@ async function call(statePath: string, env: NodeJS.ProcessEnv, io: RunnerIo): Pr
   try {
     state = RunnerStateSchema.parse(JSON.parse(await readFile(statePath, "utf8")));
   } catch {
-    io.stdout(JSON.stringify({ ok: false, error: "runner not running" }));
+    await io.stdout(JSON.stringify({ ok: false, error: "runner not running" }));
     return 3;
   }
   const response = await postRpc(state, decodeEnvJson(env[REQUEST_ENV]));
-  io.stdout(JSON.stringify(response));
+  await io.stdout(JSON.stringify(response));
   return 0;
 }
 
@@ -190,9 +196,26 @@ export async function runRunnerCli(
   return 2;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+const cliEntry = process.argv[1];
+if (
+  cliEntry &&
+  (cliEntry.endsWith("rakazo-lb-browser.cjs") || import.meta.url === pathToFileURL(cliEntry).href)
+) {
   runRunnerCli(process.argv.slice(2)).then(
-    (code) => process.exit(code),
-    () => process.exit(1),
+    (code) => {
+      // `call` must let stdout drain. `process.exit` drops a pipe buffer.
+      if (process.argv[2] === "call") {
+        process.exitCode = code;
+        return;
+      }
+      process.exit(code);
+    },
+    () => {
+      if (process.argv[2] === "call") {
+        process.exitCode = 1;
+        return;
+      }
+      process.exit(1);
+    },
   );
 }

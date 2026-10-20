@@ -492,6 +492,98 @@ describe("generic form driver", () => {
     }
   });
 
+  it("logs in when a button-only register form sits beside the password form", async () => {
+    const page = `<!DOCTYPE html><html><body>
+<form id="search" action="/home/search"><input name="term" type="text"><button type="submit">Suche</button></form>
+<form action="/profile/logon" method="post">
+<label for="UserName">Benutzername</label><input id="UserName" name="UserName" type="text">
+<label for="Password">Kennwort</label><input id="Password" name="Password" type="password">
+<button type="submit">Anmelden</button>
+</form>
+<form action="/profile/register" method="post"><button type="submit">Registrieren</button></form>
+</body></html>`;
+    const loggedIn = `<!DOCTYPE html><html><body><a class="logout" href="/logout">Abmelden</a></body></html>`;
+    const server = createServer((request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(request.method === "POST" ? loggedIn : page);
+    });
+    const origin = await new Promise<string>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        resolve(`http://127.0.0.1:${port}/`);
+      });
+    });
+    const session = new HtmlBrowserSession();
+    const driver = new GenericFormDriver();
+    try {
+      expect(
+        await driver.login(session, origin, { username: "member", password: "secret-value" }),
+      ).toBe(true);
+      expect(await session.url()).toContain("/profile/logon");
+    } finally {
+      await new Promise((done, reject) =>
+        server.close((error) => (error ? reject(error) : done())),
+      );
+    }
+  });
+
+  it("treats a logoff link as signed in and lists forum topic links", async () => {
+    const home = `<!DOCTYPE html><html><body>
+<a href="/forum/topic/20559/Hallo">Hallo erst mal</a>
+<a href="/forum/post/20559?forumid=1">Antwort erstellen</a>
+</body></html>`;
+    const reply = `<!DOCTYPE html><html><body>
+<form action="/forum/post/20559" method="post">
+<textarea id="Text" name="Text"></textarea>
+<button type="submit">Absenden</button>
+</form>
+</body></html>`;
+    const topic = `<!DOCTYPE html><html><body>
+<a href="/profile/logoff">Abmelden</a>
+<a href="/forum/post/20559?forumid=1">Antwort erstellen</a>
+<h1>Hallo erst mal</h1>
+</body></html>`;
+    const login = `<!DOCTYPE html><html><body>
+<form action="/profile/logon" method="post">
+<input id="UserName" name="UserName" type="text">
+<input id="Password" name="Password" type="password">
+<button type="submit">Anmelden</button>
+</form>
+</body></html>`;
+    const server = createServer((request, response) => {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      let body = home;
+      if (request.method === "POST" && url.pathname === "/profile/logon") body = topic;
+      else if (url.pathname === "/profile/logon" || url.pathname === "/profile/login") body = login;
+      else if (url.pathname.startsWith("/forum/post/")) body = reply;
+      else if (url.pathname.startsWith("/forum/topic/")) body = topic;
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(body);
+    });
+    const origin = await new Promise<string>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        resolve(`http://127.0.0.1:${port}/`);
+      });
+    });
+    const session = new HtmlBrowserSession();
+    const driver = new GenericFormDriver();
+    try {
+      expect(
+        await driver.login(session, origin, { username: "member", password: "secret-value" }),
+      ).toBe(true);
+      const threads = await driver.listThreads(session, origin);
+      expect(threads.some((thread) => thread.url.includes("/forum/topic/20559"))).toBe(true);
+      expect(await driver.openReply(session, threads[0]!)).toBe(true);
+    } finally {
+      await new Promise((done, reject) =>
+        server.close((error) => (error ? reject(error) : done())),
+      );
+    }
+  });
+
   it("clicks the header register link and only then reads the form", async () => {
     const board = await startHeaderRegisterLinkBoard();
     const driver = new GenericFormDriver();

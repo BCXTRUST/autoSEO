@@ -13,12 +13,15 @@
       "types": "./src/testing.ts",
       "development": "./src/testing.ts",
       "default": "./src/testing.ts"
-    }
+    },
+    "./dist/rakazo-lb-browser.cjs": "./dist/rakazo-lb-browser.cjs"
   },
   "bin": {
     "rakazo-lb-browser": "./src/runner-cli.ts"
   },
   "scripts": {
+    "build": "pnpm run bundle:runner",
+    "bundle:runner": "node scripts/bundle-runner.mjs",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --root ../.. packages/linkbuilder-browser/src"
   },
@@ -31,6 +34,7 @@
   },
   "devDependencies": {
     "@rakazo/adapters": "workspace:*",
+    "esbuild": "0.28.2",
     "typescript": "^5.9.2",
     "vitest": "^4.1.10"
   }

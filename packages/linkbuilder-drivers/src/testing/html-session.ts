@@ -104,6 +104,11 @@ export class HtmlBrowserSession {
     return this.$("body").text().replace(/\s+/g, " ").trim();
   }
 
+  async pageHtml(): Promise<string> {
+    this.assertOpen();
+    return this.raw;
+  }
+
   async waitFor(selector: string): Promise<boolean> {
     return this.exists(selector);
   }
@@ -153,11 +158,11 @@ export class HtmlBrowserSession {
     this.assertOpen();
     const anchors: Array<{ text: string; href: string }> = [];
     this.$(selector).each((_, node) => {
-      if (anchors.length >= 20) return;
+      if (anchors.length >= 120) return;
       const el = this.$(node);
       const href = el.attr("href");
       const text = el.text().replace(/\s+/g, " ").trim();
-      if (!href || !text) return;
+      if (!href) return;
       anchors.push({ text, href });
     });
     return anchors;
@@ -170,11 +175,10 @@ export class HtmlBrowserSession {
     this.$("a, button, [role='link'], [role='button'], [role='menuitem']").each((_, node) => {
       if (node.type !== "tag") return;
       const el = this.$(node);
-      const text = (
+      const text =
         el.text().replace(/\s+/g, " ").trim() ||
         (el.attr("aria-label") ?? "").replace(/\s+/g, " ").trim() ||
-        (el.attr("title") ?? "").replace(/\s+/g, " ").trim()
-      );
+        (el.attr("title") ?? "").replace(/\s+/g, " ").trim();
       if (!text || text.length > 80) return;
       const style = el.attr("style") ?? "";
       if (el.attr("hidden") !== undefined || /display\s*:\s*none/i.test(style)) return;
@@ -185,7 +189,8 @@ export class HtmlBrowserSession {
       const id = el.attr("id") ?? "";
       let selector: string;
       if (id && /^[A-Za-z][\w-]*$/.test(id)) selector = `#${id}`;
-      else if (href) selector = `${tag}[href="${href.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
+      else if (href)
+        selector = `${tag}[href="${href.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]`;
       else {
         generated += 1;
         el.attr("data-rakazo-click", String(generated));
@@ -198,7 +203,9 @@ export class HtmlBrowserSession {
         type,
         text,
         href,
-        inHeader: el.closest("header, nav, [role='banner'], [role='navigation'], .navbar, .headerbar").length > 0,
+        inHeader:
+          el.closest("header, nav, [role='banner'], [role='navigation'], .navbar, .headerbar")
+            .length > 0,
       });
     });
     return controls;
@@ -219,8 +226,16 @@ export class HtmlBrowserSession {
           return false;
         }
       };
+      const fieldCount = form.find("input, textarea, select").filter((_, el) => {
+        if (el.type !== "tag") return false;
+        const type = (this.$(el).attr("type") ?? "").toLowerCase();
+        return type !== "hidden";
+      }).length;
       let score = 1;
-      if (
+      // A register control rendered as a button-only form must not hide the login form.
+      if (fieldCount === 0) {
+        score = 1;
+      } else if (
         has("input[type='password']") &&
         (has("input[type='email']") || has("input[name='email']"))
       ) {

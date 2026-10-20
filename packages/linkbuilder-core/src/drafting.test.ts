@@ -32,4 +32,44 @@ describe("selectThreadCandidate activity", () => {
   it("skips a thread with no visible date", () => {
     expect(select(null)).toEqual({ selected: false, rejectReason: "inactive" });
   });
+
+  it("accepts relevance 0.65 for warmup and rejects it for a link", () => {
+    const base = {
+      relevance: 0.65,
+      openQuestion: true,
+      lastActivityAt: new Date("2026-09-20T12:00:00.000Z"),
+      now,
+      activityDays: 30,
+      pageText: "Welche Ergänzung im Winter?",
+      allowedDomains: ["vitaminexpress.org"],
+      laneId: null,
+      excludedLaneIds: [],
+    };
+    expect(
+      selectThreadCandidate({ ...base, minRelevance: 0.6, requireOpenQuestion: false }),
+    ).toEqual({
+      selected: true,
+    });
+    expect(selectThreadCandidate(base)).toEqual({
+      selected: false,
+      rejectReason: "low_relevance",
+    });
+  });
+
+  it("lets a warmup reply join a thread that is not a question", () => {
+    expect(
+      selectThreadCandidate({
+        relevance: 0.9,
+        openQuestion: false,
+        lastActivityAt: new Date("2026-09-20T12:00:00.000Z"),
+        now,
+        activityDays: 30,
+        pageText: "Austausch zum Schlaf",
+        allowedDomains: [],
+        laneId: null,
+        excludedLaneIds: [],
+        requireOpenQuestion: false,
+      }),
+    ).toEqual({ selected: true });
+  });
 });

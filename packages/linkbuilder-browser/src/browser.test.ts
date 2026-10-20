@@ -22,7 +22,9 @@ import {
   LocalBrowserRefused,
   LocalBrowserSessionFactory,
   SandboxBrowserSessionFactory,
+  startScript,
 } from "./factory.js";
+import { KIOSK_CHROMIUM_ARGS, kioskChromiumArgs } from "./playwright-session.js";
 import { BrowserRpcServer, RpcBrowserSession } from "./rpc.js";
 import { describeCall, LAUNCH_ENV, REQUEST_ENV } from "./runner-cli.js";
 import { browserTestGate, FIXTURE_PAGE_HELPER_DIR } from "./testing.js";
@@ -484,5 +486,14 @@ describe("form field rpc", () => {
     const rpc = new BrowserRpcServer(session);
     const client = new RpcBrowserSession("fields", (request) => rpc.handle(request));
     expect(await client.formFields("form")).toEqual([field]);
+  });
+});
+
+describe("kiosk chromium flags", () => {
+  it("adds the window flags only when AUTOSEO_KIOSK is set", () => {
+    expect(kioskChromiumArgs({})).toEqual([]);
+    expect(kioskChromiumArgs({ AUTOSEO_KIOSK: "1" })).toEqual([...KIOSK_CHROMIUM_ARGS]);
+    expect(startScript(true)).toContain("export AUTOSEO_KIOSK=1");
+    expect(startScript(false)).not.toContain("AUTOSEO_KIOSK");
   });
 });

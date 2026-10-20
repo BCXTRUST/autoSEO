@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { probePages, sampleForumHtml, settleProbe } from "./probe.js";
+import { cleanStoredUrl, probePages, sampleForumHtml, settleProbe } from "./probe.js";
 
 const platforms = [
   "phpbb",
@@ -83,5 +83,21 @@ describe("probePages", () => {
     });
     expect(facts.hrefForNewMembers).toBe("yes");
     expect(facts.relDefault).toBe("nofollow");
+  });
+
+  it("drops a session id from a stored register url", () => {
+    const facts = probePages({
+      homepageUrl: "https://board.example/",
+      pages: [
+        {
+          url: "https://board.example/",
+          html: `<a href="/ucp.php?mode=register&amp;sid=abc123">Registrieren</a>`,
+        },
+      ],
+    });
+    expect(facts.registerUrl).toBe("https://board.example/ucp.php?mode=register");
+    expect(cleanStoredUrl("https://board.example/ucp.php?mode=register&sid=abc")).toBe(
+      "https://board.example/ucp.php?mode=register",
+    );
   });
 });

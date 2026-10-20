@@ -35,6 +35,18 @@ describe("page move when rules find no thread", () => {
     expect(boardLink(links, ["excel", "office"])?.text).toBe("Excel");
   });
 
+  it("drops a lost-password link", () => {
+    const links = usablePageLinks(
+      [
+        { text: "Kennwort vergessen", href: "/lost-password/" },
+        { text: "Verstopfung", href: "/forum/board/12-verstopfung/" },
+      ],
+      "https://www.med2-forum.de/login/",
+      "med2-forum.de",
+    );
+    expect(links.map((link) => link.text)).toEqual(["Verstopfung"]);
+  });
+
   it("reads the thread and board links this forum actually uses", () => {
     const links = usablePageLinks(
       [
@@ -51,6 +63,14 @@ describe("page move when rules find no thread", () => {
     expect(threadsFromLinks(links).map((thread) => thread.url)).toEqual([
       "https://www.office-fragen.de/thread-29336-lastpost.html",
     ]);
+    expect(
+      threadsFromLinks([
+        {
+          text: "Serie",
+          url: "https://www.med2-forum.de/forum/thread/328-serienjunkies/?action=firstNew",
+        },
+      ]).map((thread) => thread.url),
+    ).toEqual(["https://www.med2-forum.de/forum/thread/328-serienjunkies/"]);
     expect(boardLink(links, ["excel"])?.url).toBe("https://www.office-fragen.de/forum-2.html");
   });
 

@@ -302,7 +302,9 @@ function apiSignal(json: unknown): { code: string; message: string } {
   let code = "";
   let message = "";
   if (typeof record.code === "string") code = record.code;
+  if (typeof record.errorCode === "string" && !code) code = record.errorCode;
   if (typeof record.message === "string") message = record.message;
+  if (typeof record.errorDescription === "string" && !message) message = record.errorDescription;
   if (typeof record.error === "string") {
     message = message || record.error;
     if (!code && /^[A-Z0-9_]+$/.test(record.error)) code = record.error;
@@ -396,47 +398,62 @@ function isTransientSolveFailure(path: string, status: number, json: unknown): b
   return /did not answer in time|no solver is free/.test(text);
 }
 
+/** HTTP status plus Captell's own code and description, with secrets removed. */
+function captellPublicLine(status: number, json: unknown): string {
+  const { code, message } = apiSignal(json);
+  const detail = [code, message]
+    .filter((part) => part.trim().length > 0)
+    .join(" ")
+    .replace(/Bearer\s+\S+/gi, "Bearer")
+    .replace(/ct_live_[A-Za-z0-9_-]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return `Captell ${status}${detail ? ` ${detail}` : ""}`.slice(0, 160);
+}
+
 function failure(status: number, json: unknown): CaptchaSolverError {
   const { code, message } = apiSignal(json);
   const text = `${code} ${message}`.toLowerCase();
+  const line = captellPublicLine(status, json);
   if (code === "UNREADABLE" || /not read|unreadable/.test(text)) {
-    return new CaptchaSolverError("not_read", "not_read", { retryable: false });
+    return new CaptchaSolverError("not_read", line, { retryable: false });
   }
   if (code === "TIMEOUT" || /did not answer in time/.test(text)) {
-    return new CaptchaSolverError("error", "error", { retryable: true });
+    return new CaptchaSolverError("error", line, { retryable: true });
   }
   if (/no solver is free/.test(text) || code === "UPSTREAM") {
-    return new CaptchaSolverError("error", "error", { retryable: true });
+    return new CaptchaSolverError("error", line, { retryable: true });
   }
   if (code === "ABORTED" || status === 499 || /the try was stopped/.test(text)) {
-    return new CaptchaSolverError("error", "error", { retryable: false });
+    return new CaptchaSolverError("error", line, { retryable: false });
   }
   if (/no token/.test(text)) {
-    return new CaptchaSolverError("no_token", "no_token", { retryable: true });
+    return new CaptchaSolverError("no_token", line, { retryable: true });
   }
   if (/missing site key/.test(text)) {
-    return new CaptchaSolverError("missing_site_key", "missing_site_key", { retryable: false });
+    return new CaptchaSolverError("missing_site_key", line, { retryable: false });
   }
   if (code === "MISSING_FIELD" || code === "BAD_JSON" || code === "FILE_TOO_SMALL") {
-    return new CaptchaSolverError("invalid_request", "invalid_request", { retryable: false });
+    return new CaptchaSolverError("invalid_request", line, { retryable: false });
   }
   if (code === "UNKNOWN_TYPE" || /unsupported/.test(text)) {
-    return new CaptchaSolverError("unsupported", "unsupported", { retryable: false });
+    return new CaptchaSolverError("unsupported", line, { retryable: false });
   }
   if (
     code === "INSUFFICIENT_CREDITS" ||
     /not enough credits|insufficient credits/.test(text) ||
     status === 402
   ) {
-    return new CaptchaSolverError("credits", "credits", { retryable: false });
+    return new CaptchaSolverError("credits", line, { retryable: false });
   }
   if (code === "UNAUTHORIZED" || /refus/.test(text) || status === 401 || status === 403) {
-    return new CaptchaSolverError("refused", "refused", { retryable: false });
+    return new CaptchaSolverError("refused", line, { retryable: false });
   }
   if (code === "PAUSED" || status === 400 || status === 422) {
-    return new CaptchaSolverError("invalid_request", "invalid_request", { retryable: false });
+    return new CaptchaSolverError("invalid_request", line, { retryable: false });
   }
-  return new CaptchaSolverError("error", "error", { retryable: false });
+  return new CaptchaSolverError("error", line, { retryable: false });
 }
 
 function usableBearer(token: string): boolean {

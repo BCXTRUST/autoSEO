@@ -8,6 +8,7 @@ import {
   type MailboxProviderCapabilities,
 } from "@rakazo/adapter-kit";
 import { z } from "zod";
+import { personMailboxAddress } from "./person-mailbox.js";
 
 /*
  * AgentMail inbound mail, provider side. The webhook body is translated to the neutral
@@ -79,8 +80,8 @@ export class AgentMailEmulator implements MailboxProvider {
   async ensureInbox(projectId: string, _context: AdapterContext): Promise<MailboxInbox> {
     const existing = this.byProject.get(projectId);
     if (existing) return this.inboxes.get(existing)!;
-    const local = `lb-${projectId.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.slice(0, 60);
-    const inbox = { inboxId: `${local}@${this.domain}`, address: `${local}@${this.domain}` };
+    const address = personMailboxAddress(`${projectId}:0`, this.domain);
+    const inbox = { inboxId: address, address };
     this.registerInbox(projectId, inbox);
     return inbox;
   }

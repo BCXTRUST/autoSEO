@@ -102,7 +102,7 @@ export interface BrowserSession {
   holdForm?(): Promise<void>;
   /** The current signup step was submitted. Scrolling and navigation work again. */
   releaseForm?(): Promise<void>;
-  click(selector: string): Promise<void>;
+  click(selector: string, options?: { navigationMs?: number }): Promise<void>;
   /** Visible text of the first match, or null when nothing matches. */
   text(selector: string): Promise<string | null>;
   exists(selector: string): Promise<boolean>;
@@ -118,6 +118,8 @@ export interface BrowserSession {
    */
   elementScreenshotPng(selector: string, options?: ElementScreenshotOptions): Promise<Uint8Array>;
   pageText(): Promise<string>;
+  /** Page HTML, used when a captcha site key is not on a widget attribute. */
+  pageHtml?(): Promise<string>;
   /** Accessibility tree for one look. Browser agents choose the next control from this. */
   ariaSnapshot?(): Promise<string>;
   /** Resolves true once the selector matches, false when the timeout elapses first. */

@@ -45,7 +45,7 @@ import {
 import { verifyPlacement } from "@rakazo/linkbuilder-drivers";
 import { createAlertSink, deliverDueWebhooks } from "./link-builder-alerts.js";
 import { syncCostLedger } from "./link-builder-costs.js";
-import { discoverDueProjects } from "./link-builder-discovery.js";
+import { type DiscoveryBrowserProject, discoverDueProjects } from "./link-builder-discovery.js";
 import { renewDueLeases } from "./link-builder-proxy.js";
 
 export interface DueWorkDeps {
@@ -63,6 +63,11 @@ export interface DueWorkDeps {
   artifacts?: ArtifactStore;
   realtime?: RealtimeFanout;
   search?: SearchProvider;
+  openBrowser?: (
+    project: DiscoveryBrowserProject,
+  ) => Promise<import("@rakazo/adapter-kit").BrowserSession>;
+  prepareComputer?: (project: { id: string; workspaceId: string }) => Promise<void>;
+  releaseSearchDesktop?: (projectId: string) => Promise<void>;
   probeFetch?: typeof fetch;
   allowPrivateProbe?: boolean;
   captcha?: CaptchaSolver;
@@ -71,6 +76,17 @@ export interface DueWorkDeps {
 }
 
 export async function runDueWork(deps: DueWorkDeps): Promise<void> {
+  try {
+    await runScheduledWork(deps);
+  } catch (error) {
+    console.error(
+      "linkbuilder.schedule",
+      error instanceof Error ? error.message : "schedule failed",
+    );
+  }
+}
+
+async function runScheduledWork(deps: DueWorkDeps): Promise<void> {
   const productionWebhooks = deps.productionWebhooks ?? process.env.NODE_ENV === "production";
   const resolveHostname = productionWebhooks ? deps.resolveHostname : undefined;
   const alerts = createAlertSink({
@@ -92,7 +108,11 @@ export async function runDueWork(deps: DueWorkDeps): Promise<void> {
       fetchImpl: deps.probeFetch,
       allowPrivate: deps.allowPrivateProbe ?? false,
       now: deps.now,
-    }).catch(() => undefined);
+      openBrowser: deps.openBrowser,
+      prepareComputer: deps.prepareComputer,
+      releaseSearchDesktop: deps.releaseSearchDesktop,
+      resolveCaptcha: deps.resolveCaptcha,
+    });
   }
   if (deps.proxies) {
     await renewDueLeases({

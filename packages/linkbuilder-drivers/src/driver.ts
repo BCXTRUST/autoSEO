@@ -1,6 +1,7 @@
 import type { BrowserSession, TokenCaptchaType } from "@rakazo/adapter-kit";
 import type { LbHostPlatform, LbHrefForNewMembers, LbRelDefault } from "@rakazo/contracts";
 import type { ReferenceFormat } from "@rakazo/linkbuilder-core";
+import type { ThreadMeta } from "./thread-meta.js";
 
 /*
  * One driver per forum platform. Drivers only know page structure: selectors, URLs and the
@@ -122,7 +123,11 @@ export interface BoardDriver {
     homepageUrl: string,
     account: Pick<BoardAccount, "username" | "password">,
   ): Promise<boolean>;
-  listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]>;
+  listThreads(
+    session: BrowserSession,
+    homepageUrl: string,
+    topic?: { terms: string[]; activityDays?: number },
+  ): Promise<BoardThread[]>;
   /**
    * Board search for the human problem. Omitted drivers fall back to the index.
    * Results use a stable topic URL so a later search with a new session id is the same thread.
@@ -134,6 +139,16 @@ export interface BoardDriver {
   ): Promise<BoardThread[]>;
   /** Opens the reply editor for a thread; false when the thread is locked or replies are off. */
   openReply(session: BrowserSession, thread: BoardThread): Promise<boolean>;
+  /**
+   * Authors, dates, the board section, and whether the thread is closed.
+   * Omitted drivers leave the date unknown, which the warmup gate treats as stale.
+   */
+  readThreadMeta?(session: BrowserSession): Promise<ThreadMeta>;
+  /**
+   * URL of the page that holds the newest posts. Page 1 of a long thread is the opener.
+   * Omitted drivers stay on the thread URL.
+   */
+  lastPageUrl?(session: BrowserSession, thread: BoardThread): Promise<string | null>;
   fillReply(session: BrowserSession, body: string): Promise<void>;
   submitReply(session: BrowserSession): Promise<ReplyResult>;
   /** Reads the board's rule for links by new members from rules, FAQ or editor text. */

@@ -14,6 +14,7 @@ import type {
 } from "./driver.js";
 import { holdSignupForm, releaseSignupForm } from "./driver.js";
 import { captchaRejected } from "./messages.js";
+import { phpbbLastPageUrl, readThreadMetaFromSession } from "./thread-meta.js";
 import { detectWidget } from "./widgets.js";
 
 /*
@@ -238,7 +239,13 @@ export class PhpbbDriver implements BoardDriver {
     homepageUrl: string,
     account: Pick<BoardAccount, "username" | "password">,
   ): Promise<boolean> {
-    await session.goto(`${boardRoot(homepageUrl)}ucp.php?mode=login`);
+    const root = boardRoot(homepageUrl);
+    try {
+      await session.goto(`${root}ucp.php?mode=login`);
+    } catch {
+      await session.goto(root);
+      await session.click("a[href*='mode=login']").catch(() => false);
+    }
     await acceptCookieWall(session);
     if (await this.isLoggedIn(session)) return true;
     if (!(await session.waitFor(PHPBB_SELECTORS.loginForm, { timeoutMs: 10_000 }))) return false;
@@ -276,6 +283,17 @@ export class PhpbbDriver implements BoardDriver {
       `${root}search.php?keywords=${encodeURIComponent(keywords)}&sr=topics&sk=t&sd=d`,
     );
     return readTopicRows(session, 8);
+  }
+
+  async readThreadMeta(session: BrowserSession) {
+    return readThreadMetaFromSession(session, "phpbb");
+  }
+
+  async lastPageUrl(session: BrowserSession, _thread: BoardThread): Promise<string | null> {
+    const html = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
+    const current = await session.url().catch(() => "");
+    if (!html || !current) return null;
+    return phpbbLastPageUrl(html, current);
   }
 
   async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { footprintQuery, planFootprintQueries } from "./discovery.js";
+import { footprintQuery, planDiscoveryQueries, planFootprintQueries } from "./discovery.js";
 
 const de = {
   country: "DE" as const,
@@ -45,5 +45,13 @@ describe("footprint planning", () => {
       need: 1,
     });
     expect(planned.map((item) => item.query)).toEqual([footprintQuery("Rückenschmerzen")]);
+  });
+
+  it("sends at most eight problem queries and never a ninth", () => {
+    const queries = planDiscoveryQueries(["Magnesium Schlaf", "Vitamin D", "Gelenkschmerzen"], 8);
+    expect(queries).toHaveLength(8);
+    expect(queries[0]).toBe("Magnesium Schlaf Forum");
+    expect(queries.some((query) => query.includes("Registrieren"))).toBe(true);
+    expect(queries.some((query) => /vitaminexpress/i.test(query))).toBe(false);
   });
 });

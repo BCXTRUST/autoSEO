@@ -80,9 +80,9 @@ export function isLegacyAgentMailbox(address: string | null | undefined): boolea
 }
 
 /**
- * Address typed into a new signup. An account that already exists keeps the
- * address it was given, including an old AgentMail inbox. A new account gets
- * a person on the Resend domain.
+ * Address typed into a new signup. A person-like address already stored is
+ * kept. A legacy `lb-` or AgentMail address is never typed again. A new
+ * account gets a person on the Resend domain.
  */
 export function signupMailboxAddress(input: {
   existingAccount: boolean;
@@ -92,9 +92,10 @@ export function signupMailboxAddress(input: {
   priorSignups: number;
 }): string | null {
   const stored = input.storedAddress?.trim() || null;
-  if (input.existingAccount && stored) return stored;
+  const kept = stored && !isLegacyAgentMailbox(stored) ? stored : null;
+  if (input.existingAccount && kept) return kept;
   const domain = input.domain?.trim();
-  if (!domain) return stored;
+  if (!domain) return kept;
   const generation = mailboxGeneration(input.priorSignups);
   return personMailboxAddress(`${input.seed}:${generation}`, domain);
 }

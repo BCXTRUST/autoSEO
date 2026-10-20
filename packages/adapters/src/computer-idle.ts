@@ -10,11 +10,19 @@ import { expireComputerControl, hasActiveComputerControl } from "./computer-cont
 import { toComputerRef } from "./computer-lifecycle.js";
 import { checkpointComputerWorkspace } from "./computer-workspace.js";
 
-export const DEFAULT_SANDBOX_IDLE_MS = 10 * 60 * 1000;
+export const DEFAULT_SANDBOX_IDLE_MS = 120_000;
+export const DEFAULT_SANDBOX_HARD_TIMEOUT_MS = 300_000;
 
 export function sandboxIdleMs(): number {
   const raw = Number(process.env.SANDBOX_IDLE_MS ?? DEFAULT_SANDBOX_IDLE_MS);
-  return Number.isFinite(raw) && raw >= 30_000 ? raw : DEFAULT_SANDBOX_IDLE_MS;
+  const value = Number.isFinite(raw) && raw >= 30_000 ? raw : DEFAULT_SANDBOX_IDLE_MS;
+  if (process.env.SANDBOX_PROVIDER === "e2b") return Math.min(value, 120_000);
+  return value;
+}
+
+export function sandboxHardTimeoutMs(): number {
+  const raw = Number(process.env.SANDBOX_HARD_TIMEOUT_MS ?? DEFAULT_SANDBOX_HARD_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw >= 120_000 ? raw : DEFAULT_SANDBOX_HARD_TIMEOUT_MS;
 }
 
 export function scheduleComputerSleep(jobs: JobPublisher, computerId: string): void {
@@ -122,8 +130,10 @@ export async function sleepComputerIfIdle(
     return;
   }
 
+  const e2b = computer.kind === "e2b";
   try {
-    await deps.sandbox.stop(ref, ctx);
+    if (e2b) await deps.sandbox.destroy(ref, ctx);
+    else await deps.sandbox.stop(ref, ctx);
   } catch (error) {
     await deps.prisma.computer.updateMany({
       where: { id: computerId, state: "suspending" },
@@ -134,7 +144,8 @@ export async function sleepComputerIfIdle(
   await deps.prisma.computer.update({
     where: { id: computerId },
     data: {
-      state: "suspended",
+      state: e2b ? "stopped" : "suspended",
+      ...(e2b ? { providerRef: null, screenUrl: null, browserSeenAt: null } : {}),
       controlHolder: "none",
       controlLeaseId: null,
       controlLeaseExpiresAt: null,
@@ -153,7 +164,7 @@ export async function sleepComputerIfIdle(
       threadId: bot.thread.id,
       botId: bot.id,
       type: "computer.status",
-      payload: { status: "suspended" },
+      payload: { status: e2b ? "stopped" : "suspended" },
     });
   }
 }

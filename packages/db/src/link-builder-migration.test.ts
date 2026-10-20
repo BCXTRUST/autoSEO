@@ -197,4 +197,30 @@ describe("link builder migration", () => {
       );
     }
   });
+
+  it("deletes stored low-relevance rows and leaves a later rejection in place", () => {
+    const reset = readFileSync(
+      path.resolve(here, "../prisma/migrations/20261020160000_lb_relevance_reset/migration.sql"),
+      "utf8",
+    );
+    expect(reset).toContain('DELETE FROM "lb_thread_candidates"');
+    expect(reset).toContain("\"status\" = 'rejected'");
+    const reasons = reset.match(/'low_relevance'|'model_relevance'/g) ?? [];
+    expect(reasons.sort()).toEqual(["'low_relevance'", "'model_relevance'"]);
+    const before = [
+      { url: "20533", status: "rejected", rejectReason: "low_relevance" },
+      { url: "20556", status: "rejected", rejectReason: "low_relevance" },
+      { url: "20560", status: "rejected", rejectReason: "low_relevance" },
+      { url: "20561", status: "rejected", rejectReason: "model_relevance" },
+      { url: "kept", status: "rejected", rejectReason: "off_topic_thread" },
+      { url: "later", status: "rejected", rejectReason: "low_relevance" },
+    ];
+    const cleared = new Set(["low_relevance", "model_relevance"]);
+    const afterReset = before
+      .filter((row) => row.url !== "later")
+      .filter((row) => !(row.status === "rejected" && cleared.has(row.rejectReason)));
+    expect(afterReset.map((row) => row.url)).toEqual(["kept"]);
+    const later = before.find((row) => row.url === "later");
+    expect(later?.status === "rejected" && cleared.has(later.rejectReason)).toBe(true);
+  });
 });

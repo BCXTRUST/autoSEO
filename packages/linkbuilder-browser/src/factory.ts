@@ -139,6 +139,10 @@ export interface SandboxBrowserSessionFactoryOptions {
   /** Helper extension directories inside the sandbox. */
   helperDirs?: readonly string[];
   executablePath?: string;
+  /** Use Playwright's bundled Chromium instead of SANDBOX_CHROMIUM. */
+  bundledChromium?: boolean;
+  /** Export AUTOSEO_KIOSK=1 into the sandbox runner. */
+  kiosk?: boolean;
   camoufoxPath?: string;
   headless?: boolean;
   pacing?: PacingPolicy;
@@ -153,10 +157,14 @@ export const SANDBOX_PROFILE_ROOT = "/home/rakazo/.browser-profiles";
 export const SANDBOX_STATE_ROOT = "/tmp/rakazo-lb";
 export const SANDBOX_CHROMIUM = "/usr/bin/chromium";
 
-const START_SCRIPT =
-  'state="$1"; shift; mkdir -p "$(dirname "$state")" && chmod 700 "$(dirname "$state")" && ' +
-  'export DISPLAY="${DISPLAY:-:0}" && ' +
-  'setsid -f "$@" serve --state "$state" </dev/null >"$state.log" 2>&1';
+export function startScript(kiosk: boolean): string {
+  return (
+    'state="$1"; shift; mkdir -p "$(dirname "$state")" && chmod 700 "$(dirname "$state")" && ' +
+    'export DISPLAY="${DISPLAY:-:0}" && ' +
+    (kiosk ? "export AUTOSEO_KIOSK=1 && " : "") +
+    'setsid -f "$@" serve --state "$state" </dev/null >"$state.log" 2>&1'
+  );
+}
 
 async function collect(
   events: AsyncIterable<{ type: string; data?: string; code?: number }>,
@@ -247,7 +255,9 @@ export class SandboxBrowserSessionFactory implements BrowserSessionFactory {
         executablePath:
           parsed.engine === "camoufox"
             ? (this.options.camoufoxPath ?? process.env.LINK_BUILDER_CAMOUFOX_PATH)
-            : (this.options.executablePath ?? SANDBOX_CHROMIUM),
+            : this.options.executablePath === undefined && this.options.bundledChromium === true
+              ? undefined
+              : (this.options.executablePath ?? SANDBOX_CHROMIUM),
         engine: parsed.engine === "camoufox" ? "camoufox" : undefined,
         pacing: this.options.pacing,
       };
@@ -255,7 +265,14 @@ export class SandboxBrowserSessionFactory implements BrowserSessionFactory {
         this.options.sandbox.execute(
           computer,
           {
-            argv: ["sh", "-c", START_SCRIPT, "sh", statePath, ...this.runnerArgv],
+            argv: [
+              "sh",
+              "-c",
+              startScript(this.options.kiosk === true),
+              "sh",
+              statePath,
+              ...this.runnerArgv,
+            ],
             env: { [LAUNCH_ENV]: encodeEnvJson(launch) },
             timeoutMs: 30_000,
           },

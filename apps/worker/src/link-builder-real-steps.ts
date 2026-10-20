@@ -71,8 +71,10 @@ import {
   isMailSendFailure,
   isMissingSandboxWorkspace,
   isNewSignupBannedHost,
+  isRestoredSignupHost,
   isSandboxGoneText,
   isWarmupMet,
+  laneTermInTitleOrOpener,
   localStuckChoice,
   MAIL_SKIP_STATUS,
   marketForHost,
@@ -80,6 +82,7 @@ import {
   PAGE_HELPER_VERSION,
   type PlanCaps,
   pacedDelayMs,
+  pageMatchesTopics,
   parseStuckLook,
   proxyStickyKey,
   type RealStepKind,
@@ -89,9 +92,11 @@ import {
   recordRegistration,
   redactSecrets,
   resolvePersonaDisplayName,
+  restoredSignupIndex,
   STUCK_LOOK_SYSTEM,
   type StuckLookAction,
   type StuckRecord,
+  sameLocalDay,
   shouldCount,
   shouldSkipDesktopPage,
   skippedHostLine,
@@ -99,12 +104,14 @@ import {
   statusAfterMissingWorkspace,
   stepCountsTowardPageGiveUp,
   stuckLookPrompt,
+  topicTerms,
   transitionHost,
   transitionPlacement,
   transitionProject,
   transitionRun,
   verifyDeadline,
   WORKABLE_HOST_ORDER,
+  warmupThreadEligible,
 } from "@rakazo/linkbuilder-core";
 import {
   acceptCookieWall,
@@ -113,18 +120,19 @@ import {
   type BoardThread,
   boardDriverFor,
   type CaptchaChallenge,
+  clickAccountActivation,
   clickResendMail,
   enrichCaptchaChallenge,
+  fitsOnOnePage,
   formErrorFixable,
+  formErrorTextFromHtml,
   GenericFormDriver,
-  type GenericJourneyResult,
   instructionClickSelector,
   isLoginPath,
+  isPasswordResetTarget,
   placeCaptchaToken,
   type RegistrationPage,
   type RegistrationResult,
-  registrationProfile,
-  runGenericRegistrationJourney,
   runPageHelper,
   solveImageCaptcha,
   splitFormContinues,
@@ -132,7 +140,7 @@ import {
   usernameTaken,
   verifyPlacement,
 } from "@rakazo/linkbuilder-drivers";
-import { bumpModelRefusal, composeReply } from "./link-builder-draft.js";
+import { bumpModelRefusal, composeReply, threadDiscussionExcerpt } from "./link-builder-draft.js";
 import {
   boardLink,
   chosenLink,
@@ -141,10 +149,22 @@ import {
   PAGE_LOOK_WAIT_MS,
   type PageLink,
   pageLookPrompt,
+  threadKey,
   threadsFromLinks,
   usablePageLinks,
 } from "./link-builder-page-move.js";
 import { ensureProxyLease } from "./link-builder-proxy.js";
+import {
+  berlinDayStart,
+  CAPTCHA_SOLVES_PER_HOST_DAY,
+  dailyRefusal,
+  distinctWarmupThreads,
+  rejectionIsStored,
+  replyBodyBlocked,
+  replyVisibility,
+  verifiedFlag,
+  warmupPaceBlocked,
+} from "./link-builder-warmup.js";
 
 /** Bot id recorded on forum logins the link builder stores; logins are workspace-shared. */
 export const LINK_BUILDER_LOGIN_BOT = "link-builder";
@@ -332,10 +352,10 @@ function requireDriver(host: HostRow, entry?: PoolEntry): BoardDriver {
   return driver;
 }
 
-/** Project warm-up, raised when the driver requires more link-free posts (Discourse TL0). */
+/** Project warm-up, at least four link-free posts, and higher when the driver requires it. */
 export function postsRequiredBeforeLink(projectMin: number, platform: string): number {
   const floor = boardDriverFor(platform as LbHostPlatform)?.minPostsBeforeLink ?? 0;
-  return Math.max(projectMin, floor);
+  return Math.max(4, projectMin, floor);
 }
 
 function requireSession(ctx: StepContext, host: HostRow): PoolEntry {
@@ -445,7 +465,10 @@ async function desktopSkipPlan(
   reason: LbOperatorTicketReason,
 ): Promise<{ lastAction: string; apply?: (tx: Tx) => Promise<void> }> {
   const failures = await pageGiveUpCount(ctx, host.id);
-  if (!shouldSkipDesktopPage({ reason, failures })) {
+  if (
+    !shouldSkipDesktopPage({ reason, failures }) ||
+    (host.status === "warming" && ctx.account?.emailVerifiedAt)
+  ) {
     return { lastAction: "The page did not finish, trying again" };
   }
   return {
@@ -484,6 +507,434 @@ function hostOrder(status: string): number {
   return (WORKABLE_HOST_ORDER as readonly string[]).indexOf(status);
 }
 
+/** Warming first, then a host waiting on its confirmation, then a ready board. */
+function hostWorkPhase(status: string): number {
+  if (status === "warming") return 0;
+  if (status === "pending_email") return 1;
+  if (status === "ready") return 2;
+  return 3;
+}
+
+function waitingForMail(row: { status: string }): boolean {
+  return row.status === "pending_email";
+}
+
+function fieldBlob(field: FormFieldInfo): string {
+  return [field.name, field.id, field.label, field.placeholder, field.autocomplete]
+    .filter((part) => part)
+    .join(" ");
+}
+
+/** A pending-email host already read in the last ten minutes stays parked. */
+async function hostsMailedRecently(
+  ctx: StepContext,
+  hostIds: readonly string[],
+): Promise<Set<string>> {
+  const recent = new Set<string>();
+  if (hostIds.length === 0) return recent;
+  const findMany = ctx.services.prisma.lbRunStep?.findMany;
+  if (typeof findMany !== "function") return recent;
+  const since = ctx.now.getTime() - MAIL_REREAD_MS;
+  try {
+    const steps = await findMany({
+      where: {
+        hostId: { in: [...hostIds] },
+        kind: "email_verify",
+        createdAt: { gte: new Date(since) },
+      },
+      select: { hostId: true, kind: true, createdAt: true, outcome: true },
+    });
+    for (const step of steps) {
+      if (step.kind !== "email_verify" || !step.hostId) continue;
+      const outcome = step.outcome;
+      const mail =
+        outcome && typeof outcome === "object" ? (outcome as { mail?: unknown }).mail : null;
+      const parked = mail === "not_in_inbox" || mail === "opened";
+      if (!parked) continue;
+      const created =
+        step.createdAt instanceof Date
+          ? step.createdAt.getTime()
+          : Date.parse(String(step.createdAt));
+      if (Number.isFinite(created) && created >= since) recent.add(step.hostId);
+    }
+  } catch {
+    return recent;
+  }
+  return recent;
+}
+
+async function mailAlreadyResent(ctx: StepContext, hostId: string): Promise<boolean> {
+  const findMany = ctx.services.prisma.lbRunStep?.findMany;
+  if (typeof findMany !== "function") return false;
+  try {
+    const steps = await findMany({
+      where: { hostId, kind: "email_verify" },
+      select: { outcome: true },
+    });
+    return steps.some((step) => {
+      const outcome = step.outcome;
+      return Boolean(
+        outcome && typeof outcome === "object" && (outcome as { resent?: unknown }).resent === true,
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function mailNeverArrived(ctx: StepContext, host: HostRow): Promise<StepResult> {
+  let prior = 0;
+  try {
+    const count = ctx.services.prisma.lbHost?.count;
+    if (typeof count === "function") {
+      prior = await count({
+        where: {
+          projectId: ctx.project.id,
+          statusReason: "mail_never_arrived",
+          id: { not: host.id },
+        },
+      });
+    }
+  } catch {
+    prior = 0;
+  }
+  const pause = prior + 1 >= MAIL_DEAD_PAUSE;
+  return {
+    kind: "step",
+    hostId: host.id,
+    lastAction: "Confirmation never arrived",
+    outcome: {
+      mail: "not_in_inbox",
+      dead: "mail_never_arrived",
+      ...(pause ? { paused: true } : {}),
+    },
+    run: pause
+      ? { status: transitionRun(ctx.run.status, "paused"), currentHostId: null }
+      : { currentHostId: null },
+    apply: async (tx) => {
+      await moveHost(tx, host, "failed", { statusReason: "mail_never_arrived" });
+      if (!pause) return;
+      await tx.lbProject.updateMany({
+        where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
+        data: { status: transitionProject("active", "paused") },
+      });
+    },
+  };
+}
+
+/** A forum this discovery tick just probed. Older stored rows wait for a later run. */
+const JUST_FOUND_MS = 15 * 60 * 1000;
+
+export function hostJustFound(row: { lastProbeAt?: Date | string | null }, now: Date): boolean {
+  const raw = row.lastProbeAt;
+  const probed =
+    raw instanceof Date ? raw.getTime() : typeof raw === "string" ? Date.parse(raw) : Number.NaN;
+  if (!Number.isFinite(probed)) return false;
+  const age = now.getTime() - probed;
+  return age >= -5_000 && age <= JUST_FOUND_MS;
+}
+
+const STORED_SIGNUP_DENY = [
+  "aquacomputer.de",
+  "edubily.de",
+  "science-fitness.de",
+  "medizin-forum.de",
+  "phpbb.de",
+  "macuser.de",
+  "lifters-lounge.com",
+  "frauenselbsthilfe.de",
+  "bulli-forum.com",
+] as const;
+
+const FORM_MISS_CAP = 3;
+const MAIL_REREAD_MS = 10 * 60_000;
+const MAIL_RESEND_MS = 30 * 60_000;
+const MAIL_DEAD_MS = 48 * 60 * 60_000;
+const MAIL_DEAD_PAUSE = 3;
+
+/** Stored forums for this signup, in the only order the run may open them. */
+const STORED_SIGNUP_ORDER = ["aquacomputer.de", "edubily.de", "science-fitness.de"] as const;
+
+function registrableKey(domain: string): string {
+  return domain
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "");
+}
+
+function restoredSignupRank(domain: string): number {
+  const index = restoredSignupIndex(domain);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
+function topicEvidence(row: {
+  notes?: string | null;
+  topicTags?: readonly string[] | null;
+}): string {
+  return [row.notes ?? "", ...(row.topicTags ?? [])]
+    .filter((part) => part.trim().length > 0)
+    .join("\n");
+}
+
+/** Stored page text, title, or tags match a lane. Empty evidence is not a match. */
+function topicEvidenceMatches(
+  row: { notes?: string | null; topicTags?: readonly string[] | null },
+  project: ProjectConfig,
+): boolean {
+  const evidence = topicEvidence(row);
+  if (!evidence.trim() || topicTerms(project).length === 0) return false;
+  return pageMatchesTopics(
+    { pageText: evidence, title: evidence, topicTags: row.topicTags },
+    project,
+  );
+}
+
+/** Off-topic pages are not eligible. A qualified row with no stored text was already judged. */
+function topicAllowsSignup(
+  row: { status: string; notes?: string | null; topicTags?: readonly string[] | null },
+  project: ProjectConfig,
+): boolean {
+  if (row.status === "off_topic") return false;
+  if (topicTerms(project).length === 0) return true;
+  const evidence = topicEvidence(row);
+  if (!evidence.trim()) return true;
+  return pageMatchesTopics(
+    { pageText: evidence, title: evidence, topicTags: row.topicTags },
+    project,
+  );
+}
+
+function storedSignupIndex(domain: string): number {
+  const index = (STORED_SIGNUP_ORDER as readonly string[]).indexOf(registrableKey(domain));
+  return index === -1 ? STORED_SIGNUP_ORDER.length : index;
+}
+
+export function noSignupFormLine(domain: string): string {
+  return `No signup form on ${domain.trim()}`;
+}
+
+function hostCreatedMs(row: { createdAt?: Date | string | null }): number {
+  if (row.createdAt instanceof Date) return row.createdAt.getTime();
+  if (typeof row.createdAt === "string") {
+    const parsed = Date.parse(row.createdAt);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function deniedForStoredSignup(domain: string, deny: ReadonlySet<string>): boolean {
+  const host = domain
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, "");
+  if (deny.has(host)) return true;
+  const needles = [...deny, ...STORED_SIGNUP_DENY];
+  return needles.some((item) => item.length > 0 && (host === item || host.endsWith(`.${item}`)));
+}
+
+function unusedQualifiedHost(
+  row: { status: string; registrableDomain: string; accounts: readonly unknown[] },
+  deny: ReadonlySet<string>,
+): boolean {
+  return (
+    row.status === "qualified" &&
+    row.accounts.length === 0 &&
+    !deniedForStoredSignup(row.registrableDomain, deny)
+  );
+}
+
+async function anotherFreshForumRemains(ctx: StepContext, currentDomain: string): Promise<boolean> {
+  const current = registrableKey(currentDomain);
+  const deny = new Set(ctx.project.denyHosts.map((host) => host.toLowerCase()));
+  let rows: Array<{
+    status: string;
+    registrableDomain: string;
+    accounts: readonly unknown[];
+    lastProbeAt?: Date | string | null;
+  }> = [];
+  try {
+    rows = await ctx.services.prisma.lbHost.findMany({
+      where: { workspaceId: ctx.project.workspaceId, projectId: ctx.project.id },
+      include: { accounts: true },
+    });
+  } catch {
+    return false;
+  }
+  return rows.some((row) => {
+    const domain = registrableKey(row.registrableDomain);
+    if (domain === current) return false;
+    if (row.status !== "qualified" || row.accounts.length > 0) return false;
+    if (deniedForStoredSignup(domain, deny)) return false;
+    return hostJustFound(row, ctx.now);
+  });
+}
+
+/** A stored forum still waiting to sign up. An unfinished login row does not skip it. */
+function storedSignupTarget(
+  row: { status: string; registrableDomain: string },
+  deny: ReadonlySet<string>,
+): boolean {
+  const domain = registrableKey(row.registrableDomain);
+  return (
+    row.status === "qualified" &&
+    (STORED_SIGNUP_ORDER as readonly string[]).includes(domain) &&
+    !deniedForStoredSignup(domain, deny)
+  );
+}
+
+/** A warming host whose latest step was a refused sign-in waits behind the others. */
+async function hostsStuckOnLogin(
+  ctx: StepContext,
+  hostIds: readonly string[],
+): Promise<Set<string>> {
+  const stuck = new Set<string>();
+  if (hostIds.length === 0) return stuck;
+  let steps: Array<{
+    hostId: string | null;
+    kind: string;
+    error: string | null;
+    outcome: unknown;
+  }> = [];
+  try {
+    steps = await ctx.services.prisma.lbRunStep.findMany({
+      where: { runId: ctx.run.id, hostId: { in: [...hostIds] } },
+      orderBy: { stepIndex: "desc" },
+      take: 24,
+      select: { hostId: true, kind: true, error: true, outcome: true },
+    });
+  } catch {
+    return stuck;
+  }
+  const seen = new Set<string>();
+  for (const step of steps) {
+    if (!step.hostId || seen.has(step.hostId) || step.kind === "page_look") continue;
+    seen.add(step.hostId);
+    const outcome =
+      step.outcome && typeof step.outcome === "object"
+        ? (step.outcome as Record<string, unknown>)
+        : {};
+    const error = step.error ?? "";
+    const reason = typeof outcome.reason === "string" ? outcome.reason : "";
+    if (
+      reason === "unmapped_form" ||
+      /angaben sind ungültig|kennwort ist falsch/i.test(error) ||
+      (outcome.login === false && error.length > 0)
+    ) {
+      stuck.add(step.hostId);
+    }
+  }
+  return stuck;
+}
+
+async function warmupPassAlreadyRecorded(
+  ctx: StepContext,
+  hostId: string,
+  timeZone: string,
+): Promise<boolean> {
+  const since = berlinDayStart(ctx.now, timeZone);
+  try {
+    const steps = await ctx.services.prisma.lbRunStep.findMany({
+      where: { hostId, createdAt: { gte: since }, kind: "warmup_post" },
+      select: { outcome: true },
+    });
+    return steps.some((step) => dailyRefusal(step.outcome) === "no_thread_today");
+  } catch {
+    return false;
+  }
+}
+
+/** A warming host that already finished a pass with no eligible thread stays out for the Berlin day. */
+async function hostsExhaustedToday(
+  ctx: StepContext,
+  hostIds: readonly string[],
+): Promise<Set<string>> {
+  const exhausted = new Set<string>();
+  if (hostIds.length === 0) return exhausted;
+  const since = berlinDayStart(ctx.now, ctx.project.schedule?.timezone || "Europe/Berlin");
+  try {
+    const steps = await ctx.services.prisma.lbRunStep.findMany({
+      where: { hostId: { in: [...hostIds] }, createdAt: { gte: since }, kind: "warmup_post" },
+      select: { hostId: true, outcome: true },
+    });
+    for (const step of steps) {
+      if (step.hostId && dailyRefusal(step.outcome)) {
+        exhausted.add(step.hostId);
+      }
+    }
+  } catch {
+    return exhausted;
+  }
+  return exhausted;
+}
+
+/** Warming hosts that already posted a link-free reply on this run. */
+async function hostsPostedThisRun(
+  ctx: StepContext,
+  hostIds: readonly string[],
+): Promise<Set<string>> {
+  const posted = new Set<string>();
+  if (hostIds.length === 0) return posted;
+  try {
+    const steps = await ctx.services.prisma.lbRunStep.findMany({
+      where: {
+        runId: ctx.run.id,
+        hostId: { in: [...hostIds] },
+        kind: "warmup_post",
+        error: null,
+      },
+      select: { hostId: true, outcome: true },
+    });
+    for (const step of steps) {
+      const outcome =
+        step.outcome && typeof step.outcome === "object"
+          ? (step.outcome as Record<string, unknown>)
+          : {};
+      if (outcome.lastAction === "Posted the reply" && step.hostId) posted.add(step.hostId);
+    }
+  } catch {
+    return posted;
+  }
+  return posted;
+}
+
+async function distinctWarmupByHost(
+  ctx: StepContext,
+  hostIds: readonly string[],
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (hostIds.length === 0) return counts;
+  try {
+    const rows = await ctx.services.prisma.lbDraft.findMany({
+      where: {
+        projectId: ctx.project.id,
+        threadCandidate: { hostId: { in: [...hostIds] } },
+      },
+      select: {
+        modelId: true,
+        status: true,
+        qualityChecks: true,
+        threadCandidate: { select: { hostId: true, url: true } },
+      },
+    });
+    const grouped = new Map<string, Parameters<typeof distinctWarmupThreads>[0][number][]>();
+    for (const row of rows) {
+      const hostId = row.threadCandidate.hostId;
+      const list = grouped.get(hostId) ?? [];
+      list.push({
+        url: row.threadCandidate.url,
+        modelId: row.modelId,
+        status: row.status,
+        verified: verifiedFlag(row.qualityChecks),
+      });
+      grouped.set(hostId, list);
+    }
+    for (const [hostId, list] of grouped) counts.set(hostId, distinctWarmupThreads(list));
+  } catch {
+    return counts;
+  }
+  return counts;
+}
+
 function hostSortRank(row: {
   status: string;
   statusReason: string | null;
@@ -520,20 +971,27 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
   const dueAdmin = await adminHostsDue(ctx, rows);
   const deny = new Set(ctx.project.denyHosts.map((host) => host.toLowerCase()));
   const prefer = new Set(ctx.project.preferHosts.map((host) => host.toLowerCase()));
+  const blocked = (row: (typeof rows)[number]) =>
+    deniedForStoredSignup(row.registrableDomain, deny) ||
+    (isNewSignupBannedHost(row.registrableDomain) && row.accounts.length === 0) ||
+    isFixtureHostDomain(row.registrableDomain) ||
+    isExampleRegistrableDomain(row.registrableDomain);
   const candidates = rows.filter((row) => {
-    if (
-      deny.has(row.registrableDomain) ||
-      (isNewSignupBannedHost(row.registrableDomain) && row.accounts.length === 0) ||
-      isFixtureHostDomain(row.registrableDomain) ||
-      isExampleRegistrableDomain(row.registrableDomain) ||
-      !boardDriverFor(row.platform as LbHostPlatform)
-    ) {
+    if (row.status === "form_not_found" || row.status === "off_topic") return false;
+    if (blocked(row) || !boardDriverFor(row.platform as LbHostPlatform)) {
       return false;
     }
-    if (row.status === "qualified") return ctx.run.counters.newToday < ctx.project.quotas.newPerDay;
+    if (row.status === "qualified") {
+      const restored = isRestoredSignupHost(row.registrableDomain);
+      if (restored && row.accounts.length > 0) return false;
+      if (!topicAllowsSignup(row, ctx.project)) return false;
+      const matched = topicEvidenceMatches(row, ctx.project);
+      if (!restored && !hostJustFound(row, ctx.now) && !matched) return false;
+      return ctx.run.counters.newToday < ctx.project.quotas.newPerDay;
+    }
     if (row.status === "warming") {
       const account = row.accounts[0];
-      if (!account) return false;
+      if (!account?.emailVerifiedAt) return false;
       const postsShort =
         account.postCount <
         postsRequiredBeforeLink(ctx.project.warmup.minPostsBeforeLink, row.platform);
@@ -547,7 +1005,12 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
         })
       );
     }
-    if (row.status === "ready") return !row.placements.some((p) => p.status !== "pending");
+    if (row.status === "ready") {
+      const account = row.accounts[0];
+      const timeZone = ctx.project.schedule?.timezone || "Europe/Berlin";
+      if (account?.lastPostAt && sameLocalDay(account.lastPostAt, ctx.now, timeZone)) return false;
+      return !row.placements.some((p) => p.status !== "pending");
+    }
     if (row.status === "pending_admin") return dueAdmin.has(row.id);
     if (row.status === "dead") {
       if (row.statusReason === "no_open_thread" && row.accounts.length > 0) return true;
@@ -560,15 +1023,90 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
     if (row.status === "qualified" && !(await registrationOpen(ctx, row.id))) continue;
     eligible.push(row);
   }
-  eligible.sort(
-    (a, b) =>
+  const exhaustedWarmup = await hostsExhaustedToday(
+    ctx,
+    eligible.filter((row) => row.status === "warming").map((row) => row.id),
+  );
+  const hadWorkBesidesRefusal = eligible.some((row) => !exhaustedWarmup.has(row.id));
+  for (let index = eligible.length - 1; index >= 0; index -= 1) {
+    if (exhaustedWarmup.has(eligible[index]?.id ?? "")) eligible.splice(index, 1);
+  }
+  const recentMail = await hostsMailedRecently(
+    ctx,
+    eligible.filter((row) => row.status === "pending_email").map((row) => row.id),
+  );
+  let skippedRecentMail = 0;
+  for (let index = eligible.length - 1; index >= 0; index -= 1) {
+    if (!recentMail.has(eligible[index]?.id ?? "")) continue;
+    eligible.splice(index, 1);
+    skippedRecentMail += 1;
+  }
+  const loginStuck = await hostsStuckOnLogin(
+    ctx,
+    eligible.map((row) => row.id),
+  );
+  const warmingIds = eligible
+    .filter((row) => row.status === "warming" && row.accounts[0]?.emailVerifiedAt)
+    .map((row) => row.id);
+  const postedThisRun = await hostsPostedThisRun(ctx, warmingIds);
+  const warmupPosted = warmingIds.length > 0 && warmingIds.every((id) => postedThisRun.has(id));
+  const warmupCounts = await distinctWarmupByHost(ctx, warmingIds);
+  eligible.sort((a, b) => {
+    const aTarget = storedSignupTarget(a, deny);
+    const bTarget = storedSignupTarget(b, deny);
+    if (aTarget && bTarget) {
+      return storedSignupIndex(a.registrableDomain) - storedSignupIndex(b.registrableDomain);
+    }
+    if (aTarget !== bTarget) return aTarget ? -1 : 1;
+    if (
+      waitingForMail(a) !== waitingForMail(b) &&
+      a.status !== "warming" &&
+      b.status !== "warming"
+    ) {
+      return waitingForMail(a) ? -1 : 1;
+    }
+    const aOpen = unusedQualifiedHost(a, deny);
+    const bOpen = unusedQualifiedHost(b, deny);
+    if (aOpen && bOpen) {
+      const restored =
+        restoredSignupRank(a.registrableDomain) - restoredSignupRank(b.registrableDomain);
+      if (restored !== 0) return restored;
+      return hostCreatedMs(a) - hostCreatedMs(b);
+    }
+    if (ctx.run.counters.newToday === 0 && aOpen !== bOpen) {
+      return aOpen ? -1 : 1;
+    }
+    if (aOpen && deniedForStoredSignup(b.registrableDomain, deny)) return -1;
+    if (bOpen && deniedForStoredSignup(a.registrableDomain, deny)) return 1;
+    if (warmupPosted) {
+      const finishSignup = (row: (typeof eligible)[number]) =>
+        row.status === "registering" || row.status === "pending_email";
+      if (finishSignup(a) !== finishSignup(b)) return finishSignup(a) ? -1 : 1;
+    }
+    if (loginStuck.has(a.id) !== loginStuck.has(b.id)) return loginStuck.has(a.id) ? 1 : -1;
+    const warmingThreads = (row: (typeof eligible)[number]) =>
+      row.status === "warming" ? (warmupCounts.get(row.id) ?? 0) : null;
+    const aThreads = warmingThreads(a);
+    const bThreads = warmingThreads(b);
+    if (aThreads !== null && bThreads !== null && aThreads !== bThreads) return aThreads - bThreads;
+    const phaseDelta = hostWorkPhase(a.status) - hostWorkPhase(b.status);
+    if (phaseDelta !== 0) return phaseDelta;
+    return (
       hostSortRank(a) - hostSortRank(b) ||
       Number(prefer.has(b.registrableDomain)) - Number(prefer.has(a.registrableDomain)) ||
-      b.qualityScore - a.qualityScore,
-  );
+      b.qualityScore - a.qualityScore
+    );
+  });
   const picked = eligible[0];
+  if (!picked && skippedRecentMail > 0 && eligible.length === 0) {
+    return { kind: "wait", reason: "mail_pending" };
+  }
+  if (!picked && exhaustedWarmup.size > 0 && !hadWorkBesidesRefusal) {
+    return { kind: "wait", reason: "nothing_today" };
+  }
   if (!picked) {
-    const capped = rows.filter((row) => row.status === "qualified");
+    const openRows = rows.filter((row) => !blocked(row));
+    const capped = openRows.filter((row) => row.status === "qualified");
     for (const host of capped) {
       if (await registrationOpen(ctx, host.id)) continue;
       if (await registrationCapAlreadyTold(ctx, host.id)) {
@@ -582,10 +1120,37 @@ async function selectHost(ctx: StepContext): Promise<StepResult> {
         outcome: { refused: "registration_cap" },
       };
     }
-    if (rows.some((row) => row.status === "pending_admin")) {
-      return { kind: "wait", reason: "admin_approval" };
+    const denied = rows.filter((row) => blocked(row));
+    if (denied.length > 0) {
+      const domains = denied.map((row) => row.registrableDomain).sort();
+      return {
+        kind: "step",
+        stepKind: "select_host",
+        hostId: null,
+        lastAction: `Skipped ${denied.length} denied forums`,
+        outcome: { skipped: domains },
+      };
     }
-    return { kind: "wait", reason: "no_workable_host" };
+    const pending = openRows.filter((row) => row.status === "pending_admin");
+    if (pending.length > 0) {
+      return {
+        kind: "step",
+        stepKind: "select_host",
+        hostId: null,
+        lastAction: "Waiting for a site admin",
+        outcome: {
+          reason: "admin_approval",
+          domains: pending.map((row) => row.registrableDomain).sort(),
+        },
+      };
+    }
+    return {
+      kind: "step",
+      stepKind: "select_host",
+      hostId: null,
+      lastAction: "No forum left to work on",
+      outcome: { reason: "no_workable_host" },
+    };
   }
   if (ctx.services.sleep && ctx.host && ctx.host.id !== picked.id) {
     await ctx.services.sleep(pacedDelayMs(HOST_IDLE_GAP, ctx.services.random ?? Math.random));
@@ -791,6 +1356,10 @@ async function openSession(ctx: StepContext): Promise<StepResult> {
     }
     throw error;
   }
+  await ctx
+    .pool()
+    ?.session.releaseForm?.()
+    .catch(() => undefined);
   const engine = host.engineHint === "camoufox" ? "camoufox" : "chromium";
   let entry: PoolEntry;
   try {
@@ -1127,17 +1696,39 @@ async function registrationOutcome(
         apply: (tx) => moveHost(tx, host, "account_active"),
         afterCommit: settled,
       };
-    case "form_error":
+    case "form_error": {
+      const visible = result.messages.map((message) => message.trim()).filter(Boolean);
+      const extra: string[] = [];
+      let reason = redactAll(ctx, visible).join(" ").slice(0, 500);
+      if (!reason) {
+        const html = entry.session.pageHtml ? await entry.session.pageHtml().catch(() => "") : "";
+        reason = redactAll(ctx, [formErrorTextFromHtml(html)])
+          .join(" ")
+          .slice(0, 500);
+        if (!reason) reason = "form_error:no_text";
+        if (html) {
+          extra.push(
+            await ctx
+              .storeArtifact(
+                `step-${ctx.stepIndex}-form-error.html`,
+                "text/html",
+                new TextEncoder().encode(html),
+              )
+              .catch(() => ""),
+          );
+        }
+        extra.push(...(await screenshot(ctx, entry, "form-error")));
+      }
+      const shown = visible.length > 0 ? redactAll(ctx, visible) : [reason];
       return {
         ...base,
+        artifactIds: [...artifactIds, ...extra.filter(Boolean)],
         lastAction: "The board refused the registration",
-        outcome: { registration: result.kind, messages: redactAll(ctx, result.messages) },
-        apply: (tx) =>
-          moveHost(tx, host, "failed", {
-            statusReason: redactAll(ctx, result.messages).join(" ").slice(0, 500),
-          }),
+        outcome: { registration: result.kind, messages: shown },
+        apply: (tx) => moveHost(tx, host, "failed", { statusReason: reason }),
         afterCommit: settled,
       };
+    }
     case "unknown": {
       const plan = await desktopSkipPlan(ctx, host, "unknown_page_state");
       return {
@@ -1154,7 +1745,7 @@ async function registrationOutcome(
 
 /**
  * Stock drivers are the prior. An unknown host, or a stock driver that never reaches a
- * registration form, runs the generic journey instead of parking.
+ * registration form, uses the generic form driver instead of parking.
  */
 export function selectsGenericRegistrationJourney(
   platform: string,
@@ -1164,239 +1755,64 @@ export function selectsGenericRegistrationJourney(
   return stockPage === "unknown" || stockPage === "unmapped";
 }
 
-function personaRegistrationProfile(ctx: StepContext, host: HostRow, credentials: Credentials) {
-  const parts = ctx.project.persona.displayName.trim().split(/\s+/).filter(Boolean);
-  const market = marketOf(ctx.project, host);
-  return registrationProfile({
-    username: credentials.username,
-    email: credentials.email,
-    password: credentials.password,
-    givenName: parts[0] ?? "Sophie",
-    familyName: parts.length > 1 ? parts.slice(1).join(" ") : "Braun",
-    language: host.language || market.language,
-    timezone: host.timezoneId || market.timezoneId,
-  });
-}
-
-function warmupReplyWithoutLink(language: string): string {
-  return language.split("-")[0] === "de"
-    ? "Danke für den Hinweis, das hatte ich ähnlich erlebt."
-    : "Thanks for laying that out. I had a similar experience.";
-}
-
-/** Link-free warmup. Brand relevance is for the later live post, not this one. */
-export function warmupReplyChoice(language: string): {
-  body: string;
-  linkSlot: "none";
-  targetUrl: null;
-  anchorText: null;
-} {
-  return {
-    body: warmupReplyWithoutLink(language),
-    linkSlot: "none",
-    targetUrl: null,
-    anchorText: null,
-  };
-}
-
-async function advanceHost(
-  tx: Tx,
-  host: HostRow,
-  event: Parameters<typeof moveHost>[2],
-  extra: Prisma.LbHostUpdateManyMutationInput = {},
-): Promise<void> {
-  await moveHost(tx, host, event, extra);
-  const next = transitionHost(hostStateOf(host), event);
-  host.status = next.status;
-  host.parkedFrom = next.parkedFrom;
-}
-
-function journeyCaptchaType(detected: CaptchaChallenge | null): LbCaptchaType {
-  if (!detected || detected.kind === "none") return "unsupported";
-  if (detected.kind === "image") return "image_letters";
-  if (detected.kind === "question") return "knowledge_question";
-  return detected.type;
-}
-
-async function genericRegistrationJourney(
-  ctx: StepContext,
-  host: HostRow,
-  entry: PoolEntry,
-): Promise<StepResult> {
-  const credentials = await ensureCredentials(ctx, host);
-  const driver = new GenericFormDriver();
-  entry.driver = driver;
-  const listMessages = ctx.services.mailbox.listMessages?.bind(ctx.services.mailbox);
-  const mailbox = {
-    listMessages: listMessages ?? (async () => []),
-  };
-  const journey = await runGenericRegistrationJourney(
-    entry.session,
-    host.homepageUrl,
-    personaRegistrationProfile(ctx, host, credentials),
-    ctx.services.captcha,
-    ctx.adapter,
-    mailbox,
-    ctx.project.mailboxId ?? "",
-    warmupReplyWithoutLink(host.language || marketOf(ctx.project, host).language),
-  );
-  entry.registerFormReady = false;
-  entry.captchaAttempts = 0;
-  if (journey.username && journey.username !== credentials.username) {
-    try {
-      await replaceUsername(ctx, host, credentials.accountId, journey.username);
-    } catch {
-      // The board already answered. Losing the vault update must not drop that result.
-    }
+async function missedFormsThisRun(ctx: StepContext): Promise<number> {
+  try {
+    const steps = await ctx.services.prisma.lbRunStep.findMany({
+      where: { runId: ctx.run.id },
+      select: { outcome: true },
+    });
+    return steps.filter((step) => stepActionText(step.outcome).startsWith("No signup form")).length;
+  } catch {
+    return 0;
   }
-  const artifactIds = await screenshot(ctx, entry, "register");
-  return genericJourneyStep(ctx, host, credentials.accountId, journey, artifactIds);
 }
 
-async function genericJourneyStep(
+function stepActionText(outcome: unknown): string {
+  if (!outcome || typeof outcome !== "object") return "";
+  const action = (outcome as { lastAction?: unknown }).lastAction;
+  return typeof action === "string" ? action : "";
+}
+
+/** The open page has no signup path. The host stays retryable; this run does not pick it again. */
+async function noSignupForm(
   ctx: StepContext,
   host: HostRow,
-  accountId: string,
-  journey: GenericJourneyResult,
   artifactIds: string[],
 ): Promise<Extract<StepResult, { kind: "step" }>> {
-  const starting = host.status === "qualified";
-  const submitted = journey.registration.length > 0;
-  const waitingForMail =
-    journey.parkReason === "verification_mail_missing" &&
-    journey.registration.includes("pending_email");
-  const outcome = {
-    journey: "generic" as const,
-    result: journey.outcome,
-    fromForm: journey.fromForm,
-    registration: journey.registration,
-    solved: journey.solved,
-    activation: journey.activation,
-    permalink: journey.permalink,
-    ...(journey.parkReason ? { reason: journey.parkReason } : {}),
-    ...(journey.parkLabel ? { label: redactText(ctx, journey.parkLabel) } : {}),
-    ...(journey.detected ? { captcha: journey.detected.kind } : {}),
-  };
-  const base = {
-    kind: "step" as const,
+  const misses = await missedFormsThisRun(ctx);
+  const another =
+    misses + 1 < FORM_MISS_CAP && (await anotherFreshForumRemains(ctx, host.registrableDomain));
+  return {
+    kind: "step",
+    lastAction: noSignupFormLine(host.registrableDomain),
     hostId: host.id,
     artifactIds,
-    outcome,
-    run:
-      starting && (submitted || journey.outcome === "posted")
-        ? { counters: recordRegistration(ctx.run.counters), currentUrl: journey.permalink }
-        : journey.permalink
-          ? { currentUrl: journey.permalink }
-          : undefined,
+    outcome: {
+      reason: "no_signup_form",
+      domain: host.registrableDomain,
+      releaseDesktop: !another,
+    },
+    apply: async (tx) => {
+      const updated = await tx.lbHost.updateMany({
+        where: { id: host.id, status: host.status },
+        data: { status: "form_not_found", parkedFrom: null, statusReason: "no_signup_form" },
+      });
+      if (updated.count !== 1) throw new StaleState(`Host ${host.id} moved during the step`);
+      if (another) return;
+      const warmingLeft = await tx.lbHost.count({
+        where: {
+          projectId: ctx.project.id,
+          status: "warming",
+          accounts: { some: { emailVerifiedAt: { not: null }, postCount: { lt: 4 } } },
+        },
+      });
+      if (warmingLeft > 0) return;
+      await tx.lbProject.updateMany({
+        where: { id: ctx.project.id, workspaceId: ctx.project.workspaceId, status: "active" },
+        data: { status: transitionProject("active", "paused") },
+      });
+    },
   };
-  const recordSolve =
-    journey.solved > 0
-      ? captchaEvent(ctx, host, journey.solved, {
-          type: journeyCaptchaType(journey.detected),
-          door: "https_api",
-          outcome: "placed_submitted",
-          credits: 0,
-          siteKeyFound: journey.detected?.kind === "widget" && journey.detected.siteKey !== null,
-        })
-      : null;
-  const withSolve = (
-    step: Extract<StepResult, { kind: "step" }>,
-  ): Extract<StepResult, { kind: "step" }> =>
-    recordSolve ? (withEvent(step, recordSolve, 0) as Extract<StepResult, { kind: "step" }>) : step;
-
-  if (journey.outcome === "pending_admin") {
-    return withSolve({
-      ...base,
-      lastAction: "The form says an administrator must activate the account",
-      apply: async (tx) => {
-        if (host.status === "qualified") {
-          await advanceHost(tx, host, "registration_started", {
-            registerUrl: new GenericFormDriver().registerUrl(host.homepageUrl),
-          });
-        }
-        await advanceHost(tx, host, "admin_pending");
-      },
-    });
-  }
-
-  if (journey.outcome === "posted" || waitingForMail) {
-    const posted = journey.outcome === "posted";
-    return withSolve({
-      ...base,
-      lastAction: posted
-        ? "Registered and posted the first reply"
-        : "Registered, waiting for the verification mail",
-      apply: async (tx) => {
-        if (host.status === "qualified") {
-          await advanceHost(tx, host, "registration_started", {
-            registerUrl: new GenericFormDriver().registerUrl(host.homepageUrl),
-          });
-        }
-        if (waitingForMail) {
-          await advanceHost(tx, host, "email_pending");
-          return;
-        }
-        await advanceHost(tx, host, "account_active");
-        await tx.lbHostAccount.update({
-          where: { id: accountId },
-          data: {
-            emailVerifiedAt: ctx.now,
-            postCount: { increment: 1 },
-            firstPostAt: ctx.now,
-            lastPostAt: ctx.now,
-          },
-        });
-      },
-    });
-  }
-
-  const reason = journey.parkReason ?? "unmapped";
-  if (reason === "mail_send_failed") {
-    return withSolve({
-      ...base,
-      lastAction: MAIL_SKIP_STATUS,
-      apply: (tx) => moveHost(tx, host, "failed", { statusReason: "mail_send_failed" }),
-    });
-  }
-  if (
-    reason === "missing_site_key" ||
-    reason === "captcha_rejected" ||
-    reason === "secret_prompt"
-  ) {
-    return withSolve({
-      ...base,
-      lastAction: reason === "captcha_rejected" ? CAPTCHA_SKIPPED : "Captcha not supported",
-      apply: async (tx) => {
-        if (host.status === "qualified" && submitted) {
-          await advanceHost(tx, host, "registration_started");
-        }
-        if (reason === "missing_site_key") {
-          await advanceHost(tx, host, "unsupported_captcha", {
-            captchaType: journeyCaptchaType(journey.detected),
-          });
-          return;
-        }
-        await skipUnsolvedCaptcha(host)(tx);
-      },
-    });
-  }
-  if (reason === "form_error" || journey.registration.at(-1) === "form_error") {
-    const detail = (journey.parkLabel || "").slice(0, 500);
-    return withSolve({
-      ...base,
-      lastAction: "The board refused the registration",
-      apply: detail ? (tx) => moveHost(tx, host, "failed", { statusReason: detail }) : undefined,
-    });
-  }
-  const ticket =
-    reason === "tie" || reason === "unknown_required" || reason === "unmapped"
-      ? "unmapped_form"
-      : "unknown_page_state";
-  const plan = await desktopSkipPlan(ctx, host, ticket);
-  return withSolve({
-    ...base,
-    ...plan,
-  });
 }
 
 async function register(ctx: StepContext): Promise<StepResult> {
@@ -1415,7 +1831,7 @@ async function register(ctx: StepContext): Promise<StepResult> {
   }
   const entry = requireSession(ctx, host);
   const genericHost = selectsGenericRegistrationJourney(host.platform);
-  const driver = genericHost ? new GenericFormDriver() : requireDriver(host, entry);
+  let driver: BoardDriver = genericHost ? new GenericFormDriver() : requireDriver(host, entry);
   if (genericHost) entry.driver = driver;
   if (host.status === "registering") {
     // A resumed step: the operator may already have submitted, so read the page and never submit.
@@ -1429,17 +1845,20 @@ async function register(ctx: StepContext): Promise<StepResult> {
       }
     }
   }
-  if (genericHost) return genericRegistrationJourney(ctx, host, entry);
-  const credentials = await ensureCredentials(ctx, host);
-  let page: Awaited<ReturnType<BoardDriver["openRegistration"]>>;
-  try {
-    page = await driver.openRegistration(entry.session, host.homepageUrl);
-  } catch (error) {
-    if (error instanceof UnmappedFormError) return genericRegistrationJourney(ctx, host, entry);
-    throw error;
+  let page: Awaited<ReturnType<BoardDriver["openRegistration"]>> = "unknown";
+  if (!genericHost) {
+    try {
+      page = await driver.openRegistration(entry.session, host.homepageUrl);
+    } catch (error) {
+      if (!(error instanceof UnmappedFormError)) throw error;
+      page = "unmapped";
+    }
   }
-  if (selectsGenericRegistrationJourney(host.platform, page)) {
-    return genericRegistrationJourney(ctx, host, entry);
+  if (page !== "form" && page !== "closed") {
+    const generic = new GenericFormDriver();
+    entry.driver = generic;
+    driver = generic;
+    page = await generic.openRegistration(entry.session, host.homepageUrl);
   }
   if (page !== "form") {
     const artifactIds = await screenshot(ctx, entry, "register");
@@ -1452,14 +1871,9 @@ async function register(ctx: StepContext): Promise<StepResult> {
         apply: (tx) => moveHost(tx, host, "failed", { statusReason: "registration_closed" }),
       };
     }
-    const plan = await desktopSkipPlan(ctx, host, "unknown_page_state");
-    return {
-      kind: "step",
-      hostId: host.id,
-      artifactIds,
-      ...plan,
-    };
+    return noSignupForm(ctx, host, artifactIds);
   }
+  const credentials = await ensureCredentials(ctx, host);
   await driver.fillRegistration(entry.session, credentials);
   entry.registerFormReady = true;
   entry.captchaAttempts = 0;
@@ -1591,8 +2005,33 @@ function widgetRecord(
   };
 }
 
+async function captchaSolvesToday(ctx: StepContext, hostId: string): Promise<number> {
+  const since = berlinDayStart(ctx.now, ctx.project.schedule?.timezone || "Europe/Berlin");
+  return ctx.services.prisma.lbCaptchaEvent.count({
+    where: {
+      hostId,
+      door: "https_api",
+      outcome: { not: "credits" },
+      createdAt: { gte: since },
+    },
+  });
+}
+
+function captchaCapStep(hostId: string): StepResult {
+  return {
+    kind: "step",
+    hostId,
+    lastAction: "Captcha budget reached",
+    outcome: { refused: "captcha_cap" },
+    run: { currentHostId: null },
+  };
+}
+
 async function captcha(ctx: StepContext): Promise<StepResult> {
   const host = requireHost(ctx);
+  if ((await captchaSolvesToday(ctx, host.id)) >= CAPTCHA_SOLVES_PER_HOST_DAY) {
+    return captchaCapStep(host.id);
+  }
   const entry = requireSession(ctx, host);
   const driver = requireDriver(host, entry);
   const challenge = await enrichCaptchaChallenge(
@@ -1837,24 +2276,14 @@ async function widgetViaApi(
   attempt: number,
 ): Promise<StepResult> {
   if (!challenge.siteKey) {
-    entry.registerFormReady = false;
-    const artifactIds = await screenshot(ctx, entry, "captcha");
-    return withEvent(
-      {
-        kind: "step",
-        lastAction: "Captcha not supported",
-        hostId: host.id,
-        artifactIds,
-        outcome: { captcha: "missing_site_key" },
-        apply: (tx) => moveHost(tx, host, "unsupported_captcha", { captchaType: challenge.type }),
-      },
-      captchaEvent(
-        ctx,
-        host,
-        attempt,
-        widgetRecord(challenge, "https_api", { outcome: "missing_site_key" }),
-      ),
-      0,
+    return finishRegistration(
+      ctx,
+      host,
+      entry,
+      driver,
+      attempt,
+      null,
+      await driver.submitRegistration(entry.session),
     );
   }
   const solved = await ctx.services.captcha.solve(
@@ -1941,6 +2370,22 @@ async function finishRegistration(
   const artifactIds = await screenshot(ctx, entry, "submitted");
   const event = record ? captchaEvent(ctx, host, attempt, record) : async () => undefined;
   const credits = record?.credits ?? 0;
+  if (result.kind === "form_error" && result.messages.every((message) => !message.trim())) {
+    const html = entry.session.pageHtml ? await entry.session.pageHtml().catch(() => "") : "";
+    const text = formErrorTextFromHtml(html);
+    result = { kind: "form_error", messages: [text || "form_error:no_text"] };
+    if (html) {
+      const snapshot = await ctx
+        .storeArtifact(
+          `step-${ctx.stepIndex}-form-error.html`,
+          "text/html",
+          new TextEncoder().encode(html),
+        )
+        .catch(() => "");
+      if (snapshot) artifactIds.push(snapshot);
+    }
+    artifactIds.push(...(await screenshot(ctx, entry, "form-error")));
+  }
   if (result.kind === "captcha_rejected") {
     entry.captchaAttempts = attempt;
     // The board re-renders the form; refill it so a retry or the operator only has the captcha left.
@@ -2083,35 +2528,6 @@ async function unmappedForm(
   };
 }
 
-async function replaceUsername(
-  ctx: StepContext,
-  host: HostRow,
-  accountId: string,
-  username: string,
-): Promise<void> {
-  const { prisma, secrets } = ctx.services;
-  const account = await prisma.lbHostAccount.findUnique({ where: { id: accountId } });
-  if (!account?.siteLoginId) return;
-  const password = await loadPassword(ctx, account.siteLoginId);
-  const stored = await upsertSiteLogin(
-    { prisma, secrets },
-    {
-      workspaceId: ctx.project.workspaceId,
-      userId: ctx.project.ownerUserId,
-      botId: LINK_BUILDER_LOGIN_BOT,
-      site: host.homepageUrl,
-      username,
-      password,
-      from: "user",
-    },
-  );
-  if ("error" in stored) return;
-  await prisma.lbHostAccount.update({
-    where: { id: accountId },
-    data: { username, siteLoginId: stored.login.id },
-  });
-}
-
 async function rotateUsername(ctx: StepContext, host: HostRow): Promise<void> {
   const { prisma, secrets } = ctx.services;
   const account = await prisma.lbHostAccount.findUnique({ where: { hostId: host.id } });
@@ -2174,8 +2590,12 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
     };
   }
   const account = ctx.account;
-  if (!account) throw new StepFailure("Host has no account");
-  const since = { since: new Date(account.createdAt.getTime() - 5 * 60_000) };
+  const since = {
+    since: account
+      ? new Date(account.createdAt.getTime() - 5 * 60_000)
+      : new Date(ctx.now.getTime() - 14 * 24 * 60 * 60_000),
+  };
+  const waited = account ? ctx.now.getTime() - account.createdAt.getTime() : 0;
   const priorSignups = await ctx.services.prisma.lbHostAccount.count({
     where: { projectId: ctx.project.id },
   });
@@ -2209,49 +2629,132 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
     return found;
   };
   let link = linkFrom(await readInbox());
-  if (!link) {
-    const resent = await clickResendMail(entry.session);
-    if (resent) await new Promise((resolve) => setTimeout(resolve, 1500));
+  if (!link && ctx.services.sleep) {
+    await ctx.services.sleep(1_000);
     link = linkFrom(await readInbox());
   }
+  let resent = false;
   if (!link) {
+    if (waited >= MAIL_RESEND_MS && !(await mailAlreadyResent(ctx, host.id))) {
+      try {
+        resent = await clickResendMail(entry.session);
+      } catch {
+        resent = false;
+      }
+      if (resent) {
+        if (ctx.services.sleep) await ctx.services.sleep(1_500);
+        else await new Promise((resolve) => setTimeout(resolve, 1_500));
+        link = linkFrom(await readInbox());
+      }
+    }
+  }
+  if (!link) {
+    if (waited >= MAIL_DEAD_MS) return mailNeverArrived(ctx, host);
     return {
       kind: "step",
       hostId: host.id,
       lastAction: "Confirmation not in inbox",
-      outcome: { mail: "not_in_inbox" },
+      outcome: { mail: "not_in_inbox", ...(resent ? { resent: true } : {}) },
+      run: { currentHostId: null },
     };
   }
   await entry.session.releaseForm?.();
   await entry.session.goto(link);
+  let activationClicked = false;
+  try {
+    activationClicked = await clickAccountActivation(entry.session);
+  } catch {
+    // The page can activate from the URL alone.
+  }
   const activation = await driver.activationResult(entry.session);
   const artifactIds = await screenshot(ctx, entry, "activated");
   const verifiedAt = ctx.now;
-  if (activation === "unknown") {
-    const plan = await desktopSkipPlan(ctx, host, "unknown_page_state");
+  const buttonStillThere =
+    activation === "unknown"
+      ? await entry.session.exists("#activate-account-button").catch(() => true)
+      : false;
+  const pageText =
+    activation === "unknown"
+      ? (await entry.session.pageText().catch(() => "")).replace(/\s+/g, " ").trim()
+      : "";
+  const activationSpent =
+    activationClicked && !buttonStillThere && pageText.length >= 40 && account === null;
+  if (activation === "unknown" && !activationSpent) {
     return {
       kind: "step",
       hostId: host.id,
       artifactIds,
-      outcome: { activation },
-      ...plan,
+      lastAction: "Confirmation link is still open",
+      outcome: { activation, mail: "opened" },
+      run: { currentHostId: null },
     };
   }
+  const verified = activation === "active" || activationSpent;
   return {
     kind: "step",
-    lastAction:
-      activation === "active" ? "Email verified" : "Email verified, waiting for the admin",
+    lastAction: activationSpent
+      ? "Activated, no login saved"
+      : verified
+        ? "Email verified"
+        : "Email verified, waiting for the admin",
     hostId: host.id,
     artifactIds,
-    outcome: { activation },
+    outcome: { activation: activationSpent ? "active" : activation },
     apply: async (tx) => {
-      await tx.lbHostAccount.update({
-        where: { id: account.id },
-        data: { emailVerifiedAt: verifiedAt },
-      });
-      await moveHost(tx, host, activation === "active" ? "account_active" : "admin_pending");
+      if (account) {
+        await tx.lbHostAccount.update({
+          where: { id: account.id },
+          data: { emailVerifiedAt: verifiedAt },
+        });
+      } else {
+        await rememberVerifiedLogin(tx, ctx, host, verifiedAt);
+      }
+      const linked =
+        account ??
+        (typeof tx.lbHostAccount.findUnique === "function"
+          ? await tx.lbHostAccount.findUnique({ where: { hostId: host.id } })
+          : null);
+      if (!linked) {
+        await moveHost(tx, host, "parked", { statusReason: "no_login_saved" });
+        return;
+      }
+      await moveHost(tx, host, verified ? "account_active" : "admin_pending");
     },
   };
+}
+
+/** A revived host may have mail and a vault login, but no account row yet. */
+async function rememberVerifiedLogin(
+  tx: Tx,
+  ctx: StepContext,
+  host: HostRow,
+  verifiedAt: Date,
+): Promise<void> {
+  const findMany = tx.siteLogin?.findMany;
+  const create = tx.lbHostAccount?.create;
+  if (typeof findMany !== "function" || typeof create !== "function") return;
+  const domain = registrableKey(host.registrableDomain);
+  try {
+    const rows = await findMany({
+      where: { workspaceId: ctx.project.workspaceId, host: { contains: domain } },
+      select: { id: true, username: true, host: true },
+      take: 5,
+    });
+    const login = rows.find((row) => registrableKey(row.host).endsWith(domain));
+    if (!login) return;
+    await create({
+      data: {
+        workspaceId: ctx.project.workspaceId,
+        projectId: ctx.project.id,
+        hostId: host.id,
+        username: login.username,
+        siteLoginId: login.id,
+        emailVerifiedAt: verifiedAt,
+      },
+    });
+  } catch {
+    return;
+  }
 }
 
 async function warmup(ctx: StepContext): Promise<StepResult> {
@@ -2312,14 +2815,17 @@ async function threadsForReply(
         found = [];
       }
       const fresh = found.filter(
-        (thread) => !skip.has(thread.url) && !isMailSendFailure(thread.title),
+        (thread) => !skip.has(threadKey(thread.url)) && !isMailSendFailure(thread.title),
       );
       if (fresh.length > 0) return { threads: fresh, searched: true };
     }
   }
-  const listed = (await driver.listThreads(session, homepageUrl)).filter(
-    (thread) => !skip.has(thread.url) && !isMailSendFailure(thread.title),
-  );
+  const listed = (
+    await driver.listThreads(session, homepageUrl, {
+      terms: topicTerms(project),
+      activityDays: project.warmup?.activityDays,
+    })
+  ).filter((thread) => !skip.has(threadKey(thread.url)) && !isMailSendFailure(thread.title));
   return { threads: listed, searched: false };
 }
 
@@ -2353,6 +2859,10 @@ async function collectPageAnchors(
       } catch {
         // The open runner may not know this read yet.
       }
+      if (
+        found.some((link) => /\/forum\/thread\/|thread-\d+|viewtopic|showthread/i.test(link.href))
+      )
+        break;
     }
   }
   if (
@@ -2455,7 +2965,7 @@ async function recoverOpenThreads(
     pageUrl,
     host.registrableDomain,
   );
-  const direct = threadsFromLinks(links).filter((thread) => !skip.has(thread.url));
+  const direct = threadsFromLinks(links).filter((thread) => !skip.has(threadKey(thread.url)));
   if (direct.length > 0) return direct;
   const picked = boardLink(links, topicWords(ctx.project)) ?? (await askPageMove(ctx, links));
   if (!picked) return [];
@@ -2471,24 +2981,202 @@ async function recoverOpenThreads(
     nextUrl,
     host.registrableDomain,
   );
-  const fromLinks = threadsFromLinks(nextLinks).filter((thread) => !skip.has(thread.url));
+  const fromLinks = threadsFromLinks(nextLinks).filter(
+    (thread) => !skip.has(threadKey(thread.url)),
+  );
   if (fromLinks.length > 0) return fromLinks;
   try {
     const listed = await driver.listThreads(entry.session, host.homepageUrl);
-    return listed.filter((thread) => !skip.has(thread.url));
+    return listed.filter((thread) => !skip.has(threadKey(thread.url)));
   } catch (error) {
     if (error instanceof UnmappedFormError) throw error;
     return [];
   }
 }
 
+const MODERATION_TIMEOUT_MS = 7 * 86_400_000;
+
+/** A logged-out look at replies the board was holding. Visible ones count. Old ones are dropped. */
+async function recheckHeldReplies(
+  ctx: StepContext,
+  host: HostRow,
+  username: string,
+): Promise<void> {
+  const { prisma } = ctx.services;
+  let drafts: Array<{
+    id: string;
+    body: string;
+    createdAt: Date;
+    qualityChecks: unknown;
+    threadCandidate: { url: string };
+  }> = [];
+  try {
+    drafts = await prisma.lbDraft.findMany({
+      where: { status: "pending_moderation", threadCandidate: { hostId: host.id } },
+      orderBy: { createdAt: "desc" },
+      take: 3,
+      select: {
+        id: true,
+        body: true,
+        createdAt: true,
+        qualityChecks: true,
+        threadCandidate: { select: { url: true } },
+      },
+    });
+  } catch {
+    return;
+  }
+  const fetchImpl = ctx.services.verifyFetch ?? fetch;
+  for (const draft of drafts) {
+    const checks =
+      draft.qualityChecks && typeof draft.qualityChecks === "object"
+        ? (draft.qualityChecks as Record<string, unknown>)
+        : {};
+    const permalink =
+      typeof checks.permalink === "string" ? checks.permalink : draft.threadCandidate.url;
+    let html = "";
+    try {
+      const response = await fetchImpl(permalink, { redirect: "follow" });
+      html = await response.text();
+    } catch {
+      html = "";
+    }
+    const visibility = replyVisibility({
+      pageText: html,
+      html,
+      username,
+      body: draft.body,
+      permalink,
+    });
+    if (visibility === "posted") {
+      await prisma.lbDraft
+        .update({
+          where: { id: draft.id },
+          data: { status: "posted", qualityChecks: { ...checks, verified: true, permalink } },
+        })
+        .catch(() => undefined);
+      continue;
+    }
+    if (ctx.now.getTime() - draft.createdAt.getTime() >= MODERATION_TIMEOUT_MS) {
+      await prisma.lbDraft
+        .update({
+          where: { id: draft.id },
+          data: {
+            status: "discarded",
+            qualityChecks: { ...checks, permalink, discardReason: "moderation_timeout" },
+          },
+        })
+        .catch(() => undefined);
+    }
+  }
+}
+
+function warmupNoThread(
+  hostId: string,
+  rejected: string[] = [],
+  rejectedDetail: string[] = [],
+): Extract<StepResult, { kind: "step" }> {
+  return {
+    kind: "step",
+    hostId,
+    lastAction: "No thread passed selection",
+    outcome: {
+      refused: "no_thread_today",
+      rejected,
+      ...(rejectedDetail.length > 0 ? { rejectedDetail } : {}),
+    },
+    run: { currentHostId: null },
+  };
+}
+
+function openFailureDetail(error: unknown, secrets: readonly string[]): string {
+  const name = error instanceof Error ? error.name : "Error";
+  const message = error instanceof Error ? error.message : String(error);
+  return redactSecrets(`${name}: ${message}`, secrets).replace(/\s+/g, " ").trim().slice(0, 160);
+}
+
+function openFailureDetails(
+  rejections: ReadonlyArray<{ reason: string; detail?: string }>,
+): string[] {
+  return rejections.flatMap((rejection) =>
+    rejection.reason === "open_failed" && rejection.detail ? [rejection.detail] : [],
+  );
+}
+
 async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   const host = requireHost(ctx);
-  const entry = requireSession(ctx, host);
-  const driver = requireDriver(host, entry);
-  const { prisma } = ctx.services;
+  if (
+    host.status === "pending_email" ||
+    host.status === "registering" ||
+    host.status === "qualified"
+  ) {
+    return {
+      kind: "step",
+      hostId: host.id,
+      lastAction: "Waiting for the confirmation",
+      outcome: { refused: "pending_email" },
+    };
+  }
   const account = ctx.account;
   if (!account) throw new StepFailure("Host has no account");
+  const timeZone = ctx.project.schedule?.timezone || "Europe/Berlin";
+  const postedToday = account.lastPostAt
+    ? sameLocalDay(account.lastPostAt, ctx.now, timeZone)
+    : false;
+  if (!warmup && (sameLocalDay(account.createdAt, ctx.now, timeZone) || postedToday)) {
+    return {
+      kind: "step",
+      hostId: host.id,
+      lastAction: "Link waits for a later day",
+      outcome: { refused: "link_day" },
+      run: { currentHostId: null },
+    };
+  }
+  const { prisma } = ctx.services;
+  if (warmup) await recheckHeldReplies(ctx, host, account.username);
+  const hostDrafts = await prisma.lbDraft.findMany({
+    where: { projectId: ctx.project.id, threadCandidate: { hostId: host.id } },
+    select: {
+      body: true,
+      status: true,
+      createdAt: true,
+      modelId: true,
+      qualityChecks: true,
+      threadCandidate: { select: { url: true } },
+    },
+  });
+  const warmupCount = distinctWarmupThreads(
+    hostDrafts.map((draft) => ({
+      url: draft.threadCandidate.url,
+      modelId: draft.modelId,
+      status: draft.status,
+      verified: verifiedFlag(draft.qualityChecks),
+    })),
+  );
+  if (
+    warmup &&
+    warmupPaceBlocked(
+      hostDrafts
+        .filter((draft) => draft.status === "posted" || draft.status === "pending_moderation")
+        .map((draft) => draft.createdAt),
+      ctx.now,
+      timeZone,
+    )
+  ) {
+    return {
+      kind: "step",
+      hostId: host.id,
+      lastAction: "Next reply waits",
+      outcome: { refused: "warmup_pace" },
+      run: { currentHostId: null },
+    };
+  }
+  if (warmup && (await warmupPassAlreadyRecorded(ctx, host.id, timeZone))) {
+    return warmupNoThread(host.id);
+  }
+  const earlierBodies = hostDrafts.map((draft) => draft.body);
+  const entry = requireSession(ctx, host);
+  const driver = requireDriver(host, entry);
   if (!account.siteLoginId) {
     const plan = await desktopSkipPlan(ctx, host, "missing_password");
     return {
@@ -2500,6 +3188,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   const password = await loadPassword(ctx, account.siteLoginId);
   let loggedIn = false;
   try {
+    await noteAction(ctx, `Signing in on ${host.registrableDomain}`);
     loggedIn = await driver.login(entry.session, host.homepageUrl, {
       username: account.username,
       password,
@@ -2508,6 +3197,12 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     if (error instanceof UnmappedFormError) return unmappedForm(ctx, host);
     throw error;
   }
+  await noteAction(
+    ctx,
+    loggedIn
+      ? `Signed in on ${host.registrableDomain}`
+      : `Sign-in did not stick on ${host.registrableDomain}`,
+  );
   if (!loggedIn) {
     const plan = await desktopSkipPlan(ctx, host, "unknown_page_state");
     return {
@@ -2520,7 +3215,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   }
   if (!entry.profileSet) {
     const pastWarmup = isWarmupMet({
-      postCount: account.postCount,
+      postCount: warmupCount,
       accountCreatedAt: account.createdAt,
       now: ctx.now,
       minPostsBeforeLink: postsRequiredBeforeLink(
@@ -2547,13 +3242,22 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     where: { hostId: host.id, status: { in: ["posted", "rejected"] } },
     select: { url: true },
   });
-  const skip = new Set(known.map((thread) => thread.url));
+  const skip = new Set(known.map((thread) => threadKey(thread.url)));
   const found = await threadsForReply(driver, entry.session, host.homepageUrl, ctx.project, skip);
   let threads = found.threads;
   if (threads.length === 0) {
     threads = await recoverOpenThreads(ctx, entry, driver, host, skip);
   }
   if (threads.length === 0) {
+    if (warmup) return warmupNoThread(host.id);
+    if (host.status === "warming" && account.emailVerifiedAt) {
+      return {
+        kind: "step",
+        lastAction: "No thread here, trying again",
+        hostId: host.id,
+        outcome: { rejected: [] },
+      };
+    }
     return {
       kind: "step",
       lastAction: "No thread here, moving on",
@@ -2562,8 +3266,10 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       apply: (tx) => moveHost(tx, host, "failed", { statusReason: "no_thread_after_look" }),
     };
   }
-  const selectionBudget = found.searched ? 4 : 1;
-  if (!ctx.services.textModel) throw new StepFailure("Draft model is not configured");
+  const selectionBudget = 4;
+  const draftedToday = hostDrafts.filter(
+    (draft) => draft.status !== "discarded" && sameLocalDay(draft.createdAt, ctx.now, timeZone),
+  ).length;
   const model = ctx.services.textModel;
   let chosen: {
     thread: (typeof threads)[number];
@@ -2581,8 +3287,16 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     queueOnly: boolean;
     refusal: boolean;
   } | null = null;
+  let chosenProof: string | null = null;
   let rule = driver.probeLinkRule("");
-  const rejections: Array<{ url: string; title: string; reason: string; relevance: number }> = [];
+  const rejections: Array<{
+    url: string;
+    title: string;
+    reason: string;
+    relevance: number;
+    store?: boolean;
+    detail?: string;
+  }> = [];
   let drafted = 0;
   for (const thread of threads) {
     const approved = warmup
@@ -2591,23 +3305,105 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
           where: {
             projectId: ctx.project.id,
             status: "approved",
-            threadCandidate: { hostId: host.id, url: thread.url },
+            threadCandidate: {
+              hostId: host.id,
+              url: { in: [thread.url, threadKey(thread.url)] },
+            },
           },
         });
     let opened = false;
     let discussion = "";
+    let meta: Awaited<ReturnType<NonNullable<BoardDriver["readThreadMeta"]>>> | null = null;
+    let opener = "";
+    let proofPage = thread.url;
+    const key = threadKey(thread.url);
     try {
       await entry.session.goto(thread.url);
-      const firstPost = await entry.session.text("div.postbody div.content").catch(() => null);
-      discussion = firstPost || (await entry.session.pageText().catch(() => ""));
+      if (driver.readThreadMeta) {
+        meta = await driver.readThreadMeta(entry.session);
+        opener = meta?.firstPost ?? "";
+      }
+      if (driver.lastPageUrl) {
+        const last = await driver.lastPageUrl(entry.session, thread).catch(() => null);
+        const here = await entry.session.url().catch(() => thread.url);
+        if (last && threadKey(last) === key && last !== here) {
+          await entry.session.goto(last);
+          proofPage = last;
+          if (driver.readThreadMeta) {
+            const latest = await driver.readThreadMeta(entry.session);
+            const html = entry.session.pageHtml
+              ? await entry.session.pageHtml().catch(() => "")
+              : "";
+            if (html && fitsOnOnePage(html)) opener = latest.firstPost || opener;
+            meta = latest;
+          }
+        }
+      }
+      const lastVisible = (await entry.session.pageText().catch(() => ""))
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 3_000);
+      const pageHtml = entry.session.pageHtml ? await entry.session.pageHtml().catch(() => "") : "";
+      const onePage = pageHtml ? fitsOnOnePage(pageHtml) : true;
+      const topicBody = (onePage ? `${opener}\n${lastVisible}` : lastVisible).trim();
+      discussion = [thread.title, topicBody].filter(Boolean).join("\n");
+      if (meta?.unreadable) {
+        rejections.push({
+          url: key,
+          title: thread.title,
+          reason: "meta_unreadable",
+          relevance: 0,
+          store: false,
+        });
+        continue;
+      }
+      const facts = meta ?? {
+        lastActivityAt: null,
+        posts: [],
+        closed: false,
+        section: null,
+        firstPost: opener,
+      };
+      const gate = warmupThreadEligible({
+        title: thread.title,
+        section: facts.section,
+        firstPost: topicBody,
+        meta: facts,
+        username: account.username,
+        now: ctx.now,
+        project: ctx.project,
+        activityDays: ctx.project.warmup.activityDays,
+      });
+      if (!gate.ok) {
+        rejections.push({
+          url: key,
+          title: thread.title,
+          reason: gate.reason,
+          relevance: 0,
+          store: rejectionIsStored(gate.reason),
+        });
+        continue;
+      }
+      if (!warmup && !laneTermInTitleOrOpener(thread.title, opener, ctx.project)) {
+        rejections.push({
+          url: key,
+          title: thread.title,
+          reason: "off_topic_thread",
+          relevance: 0,
+          store: true,
+        });
+        continue;
+      }
       opened = await driver.openReply(entry.session, thread);
     } catch (error) {
       if (error instanceof UnmappedFormError) return unmappedForm(ctx, host);
       rejections.push({
-        url: thread.url,
+        url: key,
         title: thread.title,
-        reason: "replies_closed",
+        reason: "open_failed",
         relevance: 0,
+        store: false,
+        detail: openFailureDetail(error, ctx.secrets),
       });
       continue;
     }
@@ -2623,40 +3419,26 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       }
     }
     if (!opened) {
+      const closed = meta?.closed === true;
       rejections.push({
-        url: thread.url,
+        url: key,
         title: thread.title,
-        reason: "replies_closed",
+        reason: closed ? "replies_closed" : "open_failed",
         relevance: 0,
+        store: closed,
+        ...(closed ? {} : { detail: "Error: reply did not open" }),
       });
       continue;
     }
-    if (warmup) {
-      const reply = warmupReplyChoice(host.language || marketOf(ctx.project, host).language);
-      chosen = {
-        thread,
-        body: reply.body,
-        linkSlot: reply.linkSlot,
-        targetUrl: reply.targetUrl,
-        anchorText: reply.anchorText,
-        modelLane: "draft",
-        modelId: "warmup-fixed",
-        confidence: null,
-        qualityChecks: {},
-        tokens: 0,
-        relevance: 0,
-        openQuestion: true,
-        queueOnly: false,
-        refusal: false,
-      };
-      break;
-    }
+    if (!model) throw new StepFailure("Draft model is not configured");
     const editorText = await entry.session.pageText().catch(() => "");
     const pageText = [discussion, editorText].filter(Boolean).join("\n");
     rule = driver.probePageLinkRule
       ? await driver.probePageLinkRule(entry.session)
       : driver.probeLinkRule(pageText);
+    if (draftedToday + drafted >= selectionBudget) break;
     if (approved) {
+      chosenProof = proofPage;
       chosen = {
         thread,
         body: approved.body,
@@ -2675,31 +3457,39 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       };
       break;
     }
+    const discussionExcerpt = threadDiscussionExcerpt({
+      title: thread.title,
+      opener,
+      posts: meta?.posts ?? [],
+    });
     const composed = await composeReply({
       model,
       adapter: ctx.adapter,
       project: ctx.project,
       thread: {
         title: thread.title,
-        excerpt: (discussion || pageText).replace(/\s+/g, " ").trim().slice(0, 700),
+        excerpt: discussionExcerpt.excerpt,
+        replies: discussionExcerpt.replies,
+        minRelevance: warmup ? 0.6 : 0.7,
         pageText,
-        lastActivityAt: thread.lastActivityAt ?? null,
+        lastActivityAt: meta?.lastActivityAt ?? thread.lastActivityAt ?? null,
         citeSource: !warmup,
         signatureLinks: host.signatureLinks,
         allowEmoji: driver.allowEmoji === true,
         bodyFormat: driver.bodyFormat,
         hostCountry: host.country,
         hostLanguage: host.language,
-        postsOnHost: account.postCount,
+        postsOnHost: warmupCount,
         linkPostsOnHost: account.linkPostCount,
         now: ctx.now,
+        requireOpenQuestion: !warmup,
       },
     });
     const relevance = composed.draft.relevance?.relevance ?? 0;
     const openQuestion = composed.draft.relevance?.openQuestion ?? false;
     if (composed.draft.action === "refused") {
       rejections.push({
-        url: thread.url,
+        url: key,
         title: thread.title,
         reason: "model_refusal",
         relevance,
@@ -2725,10 +3515,22 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     drafted += 1;
     if (!composed.selection.selected) {
       rejections.push({
-        url: thread.url,
+        url: key,
         title: thread.title,
         reason: composed.selection.rejectReason ?? "rejected",
         relevance,
+      });
+      if (drafted >= selectionBudget) break;
+      continue;
+    }
+    const blocked = warmup ? replyBodyBlocked(composed.draft.body, earlierBodies) : null;
+    if (blocked) {
+      rejections.push({
+        url: key,
+        title: thread.title,
+        reason: blocked,
+        relevance,
+        store: false,
       });
       if (drafted >= selectionBudget) break;
       continue;
@@ -2737,7 +3539,8 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       composed.draft.action === "queue" ||
       (composed.draft.action === "post" && ctx.project.disclosureMode === "drafts_only");
     if (composed.draft.action === "discard") {
-      rejections.push({ url: thread.url, title: thread.title, reason: "discarded", relevance });
+      rejections.push({ url: key, title: thread.title, reason: "discarded", relevance });
+      chosenProof = proofPage;
       chosen = {
         thread,
         body: composed.draft.body,
@@ -2758,6 +3561,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       // Keep the discarded draft and stop. A later thread can be tried next tick.
       break;
     }
+    chosenProof = proofPage;
     chosen = {
       thread,
       body: composed.draft.body,
@@ -2778,7 +3582,8 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   }
   const upsertRejected = async (tx: Tx) => {
     for (const rejection of rejections) {
-      if (chosen && rejection.url === chosen.thread.url && !chosen.refusal) continue;
+      if (rejection.store === false) continue;
+      if (chosen && rejection.url === threadKey(chosen.thread.url) && !chosen.refusal) continue;
       if (isMailSendFailure(rejection.title)) continue;
       await tx.lbThreadCandidate.upsert({
         where: { hostId_url: { hostId: host.id, url: rejection.url } },
@@ -2802,11 +3607,25 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     }
   };
   if (!chosen) {
+    const rejectedDetail = openFailureDetails(rejections);
+    if (warmup) {
+      return {
+        ...warmupNoThread(
+          host.id,
+          rejections.map((rejection) => rejection.reason),
+          rejectedDetail,
+        ),
+        apply: upsertRejected,
+      };
+    }
     return {
       kind: "step",
       lastAction: threads.length === 0 ? "No thread here, moving on" : "No thread passed selection",
       hostId: host.id,
-      outcome: { rejected: rejections.map((rejection) => rejection.reason) },
+      outcome: {
+        rejected: rejections.map((rejection) => rejection.reason),
+        ...(rejectedDetail.length > 0 ? { rejectedDetail } : {}),
+      },
       apply: async (tx) => {
         await upsertRejected(tx);
         if (threads.length === 0)
@@ -2816,15 +3635,16 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   }
   const thread = chosen.thread;
   const body = chosen.body;
+  const canonicalUrl = threadKey(thread.url);
   const base = {
     workspaceId: ctx.project.workspaceId,
     projectId: ctx.project.id,
     hostId: host.id,
-    url: thread.url,
+    url: canonicalUrl,
   };
   const upsertThread = (tx: Tx, status: string, rejectReason?: string) =>
     tx.lbThreadCandidate.upsert({
-      where: { hostId_url: { hostId: host.id, url: thread.url } },
+      where: { hostId_url: { hostId: host.id, url: canonicalUrl } },
       create: {
         ...base,
         title: thread.title,
@@ -2863,7 +3683,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     };
   }
   const discarded = rejections.some(
-    (rejection) => rejection.url === thread.url && rejection.reason === "discarded",
+    (rejection) => rejection.url === canonicalUrl && rejection.reason === "discarded",
   );
   if (discarded) {
     return {
@@ -2922,7 +3742,16 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   }
   await driver.fillReply(entry.session, body);
   const challenge = await driver.detectCaptcha(entry.session);
+  let replySolve: {
+    type: Extract<CaptchaChallenge, { kind: "widget" }>["type"];
+    credits: number;
+    balance: number | null;
+    taskId: string | null;
+  } | null = null;
   if (challenge.kind === "widget") {
+    if ((await captchaSolvesToday(ctx, host.id)) >= CAPTCHA_SOLVES_PER_HOST_DAY) {
+      return captchaCapStep(host.id);
+    }
     const solved = await ctx.services.captcha.solve(
       {
         type: challenge.type,
@@ -2931,6 +3760,12 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
       },
       ctx.adapter,
     );
+    replySolve = {
+      type: challenge.type,
+      credits: solved.credits,
+      balance: solved.balance ?? null,
+      taskId: solved.taskId ?? null,
+    };
     await placeCaptchaToken(entry.session, challenge.type, solved.answer);
   }
   const reply = await driver.submitReply(entry.session);
@@ -2964,17 +3799,140 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     };
   }
   const postedAt = ctx.now;
-  await entry.session.goto(reply.permalink);
+  const proofUrl = reply.permalink || chosenProof || thread.url;
+  try {
+    await entry.session.goto(proofUrl);
+  } catch {
+    // The visibility check uses whatever page is still open.
+  }
+  const proofHtml = entry.session.pageHtml ? await entry.session.pageHtml().catch(() => "") : "";
+  const proofText = await entry.session.pageText().catch(() => "");
+  let loggedOut = "";
+  try {
+    const fetchImpl = ctx.services.verifyFetch ?? fetch;
+    const response = await fetchImpl(proofUrl, { redirect: "follow" });
+    loggedOut = await response.text();
+  } catch {
+    loggedOut = "";
+  }
+  const publicVisibility = loggedOut
+    ? replyVisibility({
+        pageText: loggedOut,
+        html: loggedOut,
+        username: account.username,
+        body,
+        permalink: reply.permalink,
+      })
+    : "not_visible";
+  const signedInVisibility = replyVisibility({
+    pageText: proofText,
+    html: proofHtml || undefined,
+    username: account.username,
+    body,
+    permalink: reply.permalink,
+  });
+  const visibility =
+    publicVisibility === "posted"
+      ? "posted"
+      : signedInVisibility === "posted"
+        ? "pending_moderation"
+        : "not_visible";
   const threadShot = await screenshot(ctx, entry, "thread");
+  const recordSolve = async (tx: Tx) => {
+    if (!replySolve) return;
+    await tx.lbCaptchaEvent.create({
+      data: {
+        workspaceId: ctx.project.workspaceId,
+        projectId: ctx.project.id,
+        hostId: host.id,
+        runId: ctx.run.id,
+        type: replySolve.type,
+        door: "https_api",
+        outcome: "placed_submitted",
+        siteKeyFound: true,
+        attempt: 1,
+        creditsCharged: replySolve.credits,
+        balanceAfter: replySolve.balance,
+        taskId: replySolve.taskId,
+      },
+    });
+  };
+  if (visibility !== "posted") {
+    const waiting = visibility === "pending_moderation";
+    return {
+      kind: "step",
+      lastAction: waiting ? "Reply is waiting for moderation" : "Reply not visible",
+      hostId: host.id,
+      artifactIds: [...artifactIds, ...threadShot],
+      outcome: { thread: canonicalUrl, permalink: reply.permalink, visibility },
+      run: { currentUrl: proofUrl },
+      apply: async (tx) => {
+        await tx.lbHost.update({ where: { id: host.id }, data: ruleData });
+        await recordSolve(tx);
+        const candidate = await upsertThread(tx, "posted");
+        const baseChecks =
+          chosen.qualityChecks &&
+          typeof chosen.qualityChecks === "object" &&
+          !Array.isArray(chosen.qualityChecks)
+            ? (chosen.qualityChecks as Record<string, unknown>)
+            : {};
+        const draft = await tx.lbDraft.create({
+          data: {
+            workspaceId: ctx.project.workspaceId,
+            projectId: ctx.project.id,
+            threadCandidateId: candidate.id,
+            modelLane: chosen.modelLane,
+            modelId: chosen.modelId,
+            body,
+            linkSlot: chosen.linkSlot,
+            targetUrl: chosen.targetUrl,
+            anchorText: chosen.anchorText,
+            confidence: chosen.confidence,
+            status: waiting ? "pending_moderation" : "posted",
+            qualityChecks: {
+              ...baseChecks,
+              verified: false,
+              permalink: reply.permalink ?? proofUrl,
+            },
+          },
+        });
+        const linked = chosen.linkSlot !== "none" && chosen.targetUrl && chosen.anchorText;
+        if (linked && chosen.targetUrl && chosen.anchorText) {
+          await tx.lbPlacement.create({
+            data: {
+              workspaceId: ctx.project.workspaceId,
+              projectId: ctx.project.id,
+              hostId: host.id,
+              hostAccountId: account.id,
+              draftId: draft.id,
+              threadUrl: canonicalUrl,
+              postUrl: reply.permalink ?? proofUrl,
+              targetUrl: chosen.targetUrl,
+              anchorText: chosen.anchorText,
+              status: "pending",
+              counted: false,
+              nextVerifyAt: new Date(postedAt.getTime() + ctx.services.verifyDelayMs),
+              verifyCount: 0,
+            },
+          });
+        }
+        await tx.lbHostAccount.update({
+          where: { id: account.id },
+          data: { lastPostAt: postedAt },
+        });
+      },
+    };
+  }
   return {
     kind: "step",
     lastAction: "Posted the reply",
     hostId: host.id,
     artifactIds: [...artifactIds, ...threadShot],
-    outcome: { thread: thread.url, permalink: reply.permalink },
+    outcome: { thread: canonicalUrl, permalink: reply.permalink, visibility },
     run: { currentUrl: reply.permalink },
     apply: async (tx) => {
       await tx.lbHost.update({ where: { id: host.id }, data: ruleData });
+      await recordSolve(tx);
       const candidate = await upsertThread(tx, "posted");
       const linked = chosen.linkSlot !== "none" && chosen.targetUrl && chosen.anchorText;
       const draft = await tx.lbDraft.create({
@@ -3001,7 +3959,7 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
             hostId: host.id,
             hostAccountId: account.id,
             draftId: draft.id,
-            threadUrl: thread.url,
+            threadUrl: canonicalUrl,
             postUrl: reply.permalink,
             targetUrl: chosen.targetUrl,
             anchorText: chosen.anchorText,
@@ -3139,13 +4097,13 @@ const PAUSED_STUCK = "Paused, the browser step is stuck";
  * After that look, a still-stuck step pauses the project.
  */
 export async function recoverStuckStep(ctx: StepContext): Promise<StepResult | null> {
-  let rows: Array<{ outcome: unknown; error: string | null; createdAt: Date }> = [];
+  let rows: Array<{ outcome: unknown; error: string | null; createdAt: Date; kind?: string }> = [];
   try {
     rows = await ctx.services.prisma.lbRunStep.findMany({
       where: { runId: ctx.run.id },
       orderBy: { stepIndex: "desc" },
       take: 4,
-      select: { outcome: true, error: true, createdAt: true },
+      select: { outcome: true, error: true, createdAt: true, kind: true },
     });
   } catch {
     return null;
@@ -3153,12 +4111,49 @@ export async function recoverStuckStep(ctx: StepContext): Promise<StepResult | n
   const decision = decideStuckStep(rows.map(stuckRecordFromStep));
   if (decision === "continue") return null;
   if (decision === "yield") {
-    const replaced = await sandboxWasReplaced(ctx, rows[0]?.createdAt ?? ctx.now);
-    if (!replaced) return { kind: "wait", reason: "sandbox_gone" };
+    const yieldTo = await sandboxYield(ctx, rows[0]?.createdAt ?? ctx.now);
+    if (yieldTo === "wait") return { kind: "wait", reason: "sandbox_gone" };
+    return null;
+  }
+  const latestKind = rows[0]?.kind ?? "";
+  if (
+    (decision === "look" || decision === "pause") &&
+    latestKind === "register" &&
+    !signupFormWasOpen(ctx, rows) &&
+    ctx.host
+  ) {
+    return noSignupForm(ctx, ctx.host, []);
+  }
+  if (decision === "pause" && !ctx.host) {
+    const project = await ctx.services.prisma.lbProject.findUnique({
+      where: { id: ctx.project.id },
+      select: { status: true },
+    });
+    if (project?.status === "active") return null;
+  }
+  if (decision === "pause" && ctx.host?.status === "warming" && ctx.account?.emailVerifiedAt) {
     return null;
   }
   if (decision === "pause") return pauseStuckProject(ctx);
-  return lookAtStuckPage(ctx);
+  return lookAtStuckPage(ctx, latestKind);
+}
+
+function signupFormWasOpen(ctx: StepContext, rows: Array<{ outcome: unknown }>): boolean {
+  if (ctx.pool()?.registerFormReady) return true;
+  const status = ctx.host?.status;
+  if (status === "registering" || status === "pending_email" || status === "pending_admin") {
+    return true;
+  }
+  return rows.some((row) => {
+    const outcome =
+      row.outcome && typeof row.outcome === "object"
+        ? (row.outcome as Record<string, unknown>)
+        : {};
+    const action = typeof outcome.lastAction === "string" ? outcome.lastAction : "";
+    return (
+      action === "Filled the registration form" || action.startsWith("Filled the next registration")
+    );
+  });
 }
 
 function stuckRecordFromStep(step: { outcome: unknown; error: string | null }): StuckRecord {
@@ -3172,7 +4167,8 @@ function stuckRecordFromStep(step: { outcome: unknown; error: string | null }): 
   return { action, error, looked: outcome.looked === true };
 }
 
-async function sandboxWasReplaced(ctx: StepContext, failedAt: Date): Promise<boolean> {
+/** A stopped sandbox is opened again. A sandbox that is still running waits for the viewer. */
+async function sandboxYield(ctx: StepContext, failedAt: Date): Promise<"go" | "wait"> {
   try {
     const computers = await ctx.services.prisma.computer.findMany({
       where: { workspaceId: ctx.project.workspaceId },
@@ -3180,14 +4176,14 @@ async function sandboxWasReplaced(ctx: StepContext, failedAt: Date): Promise<boo
       take: 4,
       select: { state: true, providerRef: true, updatedAt: true },
     });
-    return computers.some(
-      (computer) =>
-        computer.state === "running" &&
-        Boolean(computer.providerRef) &&
-        computer.updatedAt.getTime() > failedAt.getTime(),
+    const running = computers.filter(
+      (computer) => computer.state === "running" && Boolean(computer.providerRef),
     );
+    if (running.length === 0) return "go";
+    if (running.some((computer) => computer.updatedAt.getTime() > failedAt.getTime())) return "go";
+    return "wait";
   } catch {
-    return false;
+    return "go";
   }
 }
 
@@ -3212,10 +4208,26 @@ async function pauseStuckProject(ctx: StepContext): Promise<StepResult> {
   };
 }
 
-async function lookAtStuckPage(ctx: StepContext): Promise<StepResult> {
+const REGISTER_LOOK_KINDS = new Set(["register", "captcha", "finish_registration"]);
+
+function stayOnRegistration(ctx: StepContext, stepKind: string): boolean {
+  if (ctx.host?.status === "registering") return true;
+  return REGISTER_LOOK_KINDS.has(stepKind);
+}
+
+async function lookAtStuckPage(ctx: StepContext, stepKind = ""): Promise<StepResult | null> {
   try {
     const entry = await sessionForLook(ctx);
-    if (!entry) return pauseStuckProject(ctx);
+    if (!entry) {
+      // No computer is open yet. The planned step opens one. Pausing here
+      // stops the run before that step can sign in.
+      const project = await ctx.services.prisma.lbProject.findUnique({
+        where: { id: ctx.project.id },
+        select: { status: true },
+      });
+      if (project?.status === "active") return null;
+      return pauseStuckProject(ctx);
+    }
     const pageUrl = await entry.session.url().catch(() => ctx.host?.homepageUrl ?? "");
     const fields = entry.session.formFields
       ? await entry.session.formFields("form").catch(() => [])
@@ -3225,13 +4237,17 @@ async function lookAtStuckPage(ctx: StepContext): Promise<StepResult> {
       domain ? usablePageLinks(await collectPageAnchors(entry.session), pageUrl, domain) : []
     ).filter((link) => !bannedPage(link.url));
     const labels = emptyFieldLabels(fields);
-    const choice =
+    const stay = stayOnRegistration(ctx, stepKind);
+    const asked =
       (await askStuckLook(
         ctx,
         pageUrl,
         labels,
         links.map((link) => link.text),
+        stay,
       )) ?? localStuckChoice({ emptyFillable: labels.length, threadCount: links.length });
+    const choice =
+      stay && asked.action === "other_thread" ? { action: "find_form" as const } : asked;
     if (choice.action === "fill_fields") {
       await entry.session.holdForm?.();
       if (ctx.host) await fillEmptyAccountFields(ctx, entry.session, fields);
@@ -3246,11 +4262,16 @@ async function lookAtStuckPage(ctx: StepContext): Promise<StepResult> {
       return looked(ctx, pageUrl, "Looking at the page to open another thread", choice.action);
     }
     const visible = fields.filter((field) => !field.hidden);
+    let movedToForm = false;
     if (visible.length === 0) {
       const registerUrl = registrationLink(await collectPageAnchors(entry.session), pageUrl);
-      if (registerUrl && registerUrl !== pageUrl) await entry.session.goto(registerUrl);
+      if (registerUrl && registerUrl !== pageUrl) {
+        await entry.session.goto(registerUrl);
+        movedToForm = true;
+      }
     }
-    await entry.session.holdForm?.();
+    if (visible.length > 0 || movedToForm) await entry.session.holdForm?.();
+    else await entry.session.releaseForm?.();
     return looked(ctx, pageUrl, "Looking at the page to find the form", "find_form");
   } catch (error) {
     if (sandboxGoneError(error)) {
@@ -3293,18 +4314,20 @@ async function askStuckLook(
   url: string,
   fields: readonly string[],
   links: readonly string[],
+  stayOnForm = false,
 ): Promise<StuckLookAction | null> {
   const model = ctx.services.textModel;
   if (!model) return null;
+  const linkCount = stayOnForm ? 0 : links.length;
   const request = {
     lane: "classify" as const,
     modelId: PAGE_LOOK_MODEL,
     system: STUCK_LOOK_SYSTEM,
-    user: stuckLookPrompt({ url, fields, links }),
+    user: stuckLookPrompt({ url, fields, links, allowOtherThread: !stayOnForm }),
     maxTokens: 120,
     schema: {
       safeParse(value: unknown) {
-        const parsed = parseStuckLook(value, links.length);
+        const parsed = parseStuckLook(value, linkCount);
         if (!parsed) return { success: false as const };
         return { success: true as const, data: parsed };
       },
@@ -3318,7 +4341,7 @@ async function askStuckLook(
       }),
     ]);
     if (!result.ok || !("value" in result) || !result.value) return null;
-    return parseStuckLook(result.value, links.length);
+    return parseStuckLook(result.value, linkCount);
   } catch {
     return null;
   }
@@ -3331,7 +4354,11 @@ async function fillEmptyAccountFields(
 ): Promise<void> {
   const host = ctx.host;
   if (!host) return;
-  const empty = fields.filter(isEmptyFillable);
+  const pageUrl = typeof session.url === "function" ? await session.url().catch(() => "") : "";
+  if (isPasswordResetTarget(pageUrl)) return;
+  const empty = fields.filter(
+    (field) => isEmptyFillable(field) && !isPasswordResetTarget(fieldBlob(field)),
+  );
   if (empty.length === 0) return;
   const credentials = await ensureCredentials(ctx, host);
   for (const field of empty) {

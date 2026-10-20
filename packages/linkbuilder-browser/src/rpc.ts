@@ -23,7 +23,13 @@ export const BrowserRpcRequestSchema = z.discriminatedUnion("method", [
     .strict(),
   z.object({ method: z.literal("holdForm") }).strict(),
   z.object({ method: z.literal("releaseForm") }).strict(),
-  z.object({ method: z.literal("click"), selector }).strict(),
+  z
+    .object({
+      method: z.literal("click"),
+      selector,
+      navigationMs: z.number().int().min(1_000).max(90_000).optional(),
+    })
+    .strict(),
   z.object({ method: z.literal("text"), selector }).strict(),
   z.object({ method: z.literal("exists"), selector }).strict(),
   z.object({ method: z.literal("isVisible"), selector }).strict(),
@@ -45,6 +51,7 @@ export const BrowserRpcRequestSchema = z.discriminatedUnion("method", [
     })
     .strict(),
   z.object({ method: z.literal("pageText") }).strict(),
+  z.object({ method: z.literal("pageHtml") }).strict(),
   z.object({ method: z.literal("ariaSnapshot") }).strict(),
   z.object({ method: z.literal("navigationMeta") }).strict(),
   z.object({ method: z.literal("formFields"), selector }).strict(),
@@ -124,7 +131,10 @@ export class BrowserRpcServer {
         if (!session.releaseForm) return null;
         return session.releaseForm();
       case "click":
-        return session.click(request.selector);
+        return session.click(
+          request.selector,
+          request.navigationMs ? { navigationMs: request.navigationMs } : undefined,
+        );
       case "text":
         return session.text(request.selector);
       case "exists":
@@ -150,6 +160,8 @@ export class BrowserRpcServer {
         return session.injectToken(request.fieldName, request.token);
       case "pageText":
         return session.pageText();
+      case "pageHtml":
+        return session.pageHtml ? session.pageHtml() : "";
       case "ariaSnapshot":
         return session.ariaSnapshot ? session.ariaSnapshot() : "";
       case "navigationMeta":
@@ -228,8 +240,12 @@ export class RpcBrowserSession implements BrowserSession {
     await this.call({ method: "releaseForm" });
   }
 
-  async click(selector: string): Promise<void> {
-    await this.call({ method: "click", selector });
+  async click(selector: string, options?: { navigationMs?: number }): Promise<void> {
+    await this.call({
+      method: "click",
+      selector,
+      ...(options?.navigationMs ? { navigationMs: options.navigationMs } : {}),
+    });
   }
 
   async text(selector: string): Promise<string | null> {
@@ -276,6 +292,10 @@ export class RpcBrowserSession implements BrowserSession {
 
   async pageText(): Promise<string> {
     return z.string().parse(await this.call({ method: "pageText" }));
+  }
+
+  async pageHtml(): Promise<string> {
+    return z.string().parse(await this.call({ method: "pageHtml" }));
   }
 
   async ariaSnapshot(): Promise<string> {

@@ -3,6 +3,7 @@ import { ORPCError } from "@orpc/server";
 import { CaptchaSolverError } from "@rakazo/adapter-kit";
 import {
   CaptellHttpSolver,
+  destroyWorkspaceComputers,
   personMailboxAddress,
   StaticPlanProvider,
   stripeCheckoutConfigured,
@@ -92,6 +93,8 @@ import {
   validateTargetUrl,
   webhookUrlAllowed,
 } from "@rakazo/linkbuilder-core";
+import { readArtifactBytes } from "./artifacts.js";
+import { redactOpsSecrets } from "./ops.js";
 import type { RouterDeps } from "./router.js";
 
 const DEFAULT_SCHEDULE = LbScheduleSchema.parse({ timezone: "Europe/Berlin" });
@@ -552,6 +555,11 @@ export async function pauseLbProject(deps: RouterDeps, actor: Actor, projectId: 
   const status = transitionOrBad(readProjectStatus(row.status), "paused");
   await deps.prisma.lbProject.update({ where: { id: row.id }, data: { status } });
   await setOpenRun(deps.prisma, actor.workspaceId, row.id, "paused");
+  await destroyWorkspaceComputers(
+    { prisma: deps.prisma, sandbox: deps.sandbox },
+    actor.workspaceId,
+    projectComputerContext(actor, "link-builder.pause"),
+  );
   await publish(deps, row.id);
   return getLbProject(deps, actor, row.id);
 }
@@ -561,6 +569,11 @@ export async function stopLbProject(deps: RouterDeps, actor: Actor, projectId: s
   const status = transitionOrBad(readProjectStatus(row.status), "stopped");
   await deps.prisma.lbProject.update({ where: { id: row.id }, data: { status } });
   await setOpenRun(deps.prisma, actor.workspaceId, row.id, "cancelled");
+  await destroyWorkspaceComputers(
+    { prisma: deps.prisma, sandbox: deps.sandbox },
+    actor.workspaceId,
+    projectComputerContext(actor, "link-builder.stop"),
+  );
   await publish(deps, row.id);
   return getLbProject(deps, actor, row.id);
 }
@@ -825,6 +838,7 @@ export async function listLbRunSteps(
         },
         artifactIds: step.artifactIds,
         createdAt: step.createdAt.toISOString(),
+        outcome: redactStepOutcome(step.outcome),
       },
     ];
   });
@@ -860,13 +874,20 @@ export async function getLbArtifact(
     where: { id: input.artifactId, workspaceId: actor.workspaceId },
   });
   if (!row) throw new ORPCError("NOT_FOUND");
-  const bytes = await deps.artifacts.get(row.storageKey, {
-    operationId: `lb-artifact:${row.id}`,
-    traceId: `lb-artifact:${row.id}`,
-    workspaceId: actor.workspaceId,
-    userId: actor.userId,
-    signal: new AbortController().signal,
-  });
+  let bytes: Uint8Array;
+  try {
+    bytes = await readArtifactBytes(deps.artifacts, row, {
+      operationId: `lb-artifact:${row.id}`,
+      traceId: `lb-artifact:${row.id}`,
+      workspaceId: actor.workspaceId,
+      userId: actor.userId,
+      signal: new AbortController().signal,
+    });
+  } catch (error) {
+    const code = error && typeof error === "object" ? (error as { code?: unknown }).code : null;
+    if (code === "ENOENT" || code === "EISDIR") throw new ORPCError("NOT_FOUND");
+    throw error;
+  }
   return {
     id: row.id,
     name: row.name,
@@ -1801,6 +1822,13 @@ function scheduleState(
   return isWithinWindow(now, schedule, { liveMet });
 }
 
+function redactStepOutcome(outcome: unknown): string | null {
+  if (outcome == null) return null;
+  const text = typeof outcome === "string" ? outcome : JSON.stringify(outcome);
+  const redacted = redactOpsSecrets(text).slice(0, 300);
+  return redacted || null;
+}
+
 function outcomeAction(outcome: unknown): string | null {
   if (!outcome || typeof outcome !== "object" || !("lastAction" in outcome)) return null;
   const value = (outcome as { lastAction?: unknown }).lastAction;
@@ -1811,6 +1839,16 @@ function numberField(value: unknown, key: string): number {
   if (!value || typeof value !== "object" || !(key in value)) return 0;
   const raw = (value as Record<string, unknown>)[key];
   return typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? raw : 0;
+}
+
+function projectComputerContext(actor: Actor, operationId: string) {
+  return {
+    operationId,
+    traceId: operationId,
+    workspaceId: actor.workspaceId,
+    userId: actor.userId,
+    signal: new AbortController().signal,
+  };
 }
 
 function transitionOrBad(from: LbProjectStatus, to: LbProjectStatus): LbProjectStatus {

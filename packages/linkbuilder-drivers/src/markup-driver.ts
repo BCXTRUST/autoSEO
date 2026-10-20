@@ -1,7 +1,7 @@
 import type { BrowserSession } from "@rakazo/adapter-kit";
 import type { LbHostPlatform } from "@rakazo/contracts";
 import type { ReferenceFormat } from "@rakazo/linkbuilder-core";
-import { detectKnowledgeQuestion } from "./captcha.js";
+import { answerBoardQuestion, detectKnowledgeQuestion } from "./captcha.js";
 import type {
   ActivationResult,
   BoardAccount,
@@ -21,7 +21,14 @@ import {
   registrationClosed,
   relFromAttribute,
 } from "./messages.js";
+import { isPasswordResetTarget } from "./password-reset.js";
+import { readThreadMetaFromSession } from "./thread-meta.js";
 import { detectWidget } from "./widgets.js";
+
+const LOGIN_FORM = "form#login, form#loginForm";
+const LOGIN_SUBMIT =
+  "form#login #submit, form#loginForm #submit, form#login input[type='submit'], form#loginForm input[type='submit']";
+const LOGGED_OUT_LINK = "a.logout, a[href*='logout'], a[href*='Logout'], a[href*='logoff']";
 
 /**
  * Selectors-and-URL driver shared by the forum platforms. Every page action goes through
@@ -254,8 +261,13 @@ export class MarkupBoardDriver implements BoardDriver {
     return "unknown";
   }
 
+  /** Logout link, or a platform menu that only exists after sign-in. */
+  protected signedInSelector(): string {
+    return LOGGED_OUT_LINK;
+  }
+
   async isLoggedIn(session: BrowserSession): Promise<boolean> {
-    return session.exists("a.logout");
+    return session.exists(this.signedInSelector());
   }
 
   async login(
@@ -263,14 +275,75 @@ export class MarkupBoardDriver implements BoardDriver {
     homepageUrl: string,
     account: Pick<BoardAccount, "username" | "password">,
   ): Promise<boolean> {
-    await session.goto(href(this.config.paths.login, homepageUrl));
+    await session.releaseForm?.();
+    try {
+      await session.goto(href(this.config.paths.login, homepageUrl));
+    } catch {
+      await session.goto(homepageUrl);
+    }
     if (await this.isLoggedIn(session)) return true;
-    if (!(await session.waitFor("form#login", { timeoutMs: 10_000 }))) return false;
+    if (await this.passwordResetForm(session)) return false;
+    if (!(await session.waitFor(LOGIN_FORM, { timeoutMs: 10_000 }))) return false;
+    if (await this.passwordResetForm(session)) return false;
+    await this.submitLogin(session, account);
+    if (await session.waitFor(this.signedInSelector(), { timeoutMs: 10_000 })) return true;
+    // The question is missing on the first paint and the board asks for it after submit.
+    if (await session.exists("#captchaAnswer")) {
+      await this.submitLogin(session, account);
+      if (await session.waitFor(this.signedInSelector(), { timeoutMs: 10_000 })) return true;
+    }
+    const detail = await this.loginFailure(session);
+    if (detail) throw new Error(detail.slice(0, 240));
+    return false;
+  }
+
+  /** Lost-password forms share the username field and must never be submitted. */
+  private async passwordResetForm(session: BrowserSession): Promise<boolean> {
+    const url = await session.url().catch(() => "");
+    if (isPasswordResetTarget(url)) return true;
+    const action =
+      (await session.attribute(`${LOGIN_FORM}, form#lostPassword`, "action").catch(() => null)) ??
+      "";
+    if (isPasswordResetTarget(action)) return true;
+    return false;
+  }
+
+  private async submitLogin(
+    session: BrowserSession,
+    account: Pick<BoardAccount, "username" | "password">,
+  ): Promise<void> {
+    if (await this.passwordResetForm(session)) return;
     const fields = this.config.fields;
+    const passwordField = `#${fields.password.id}`;
+    if (!(await session.exists(passwordField))) return;
     await session.fill(`#${fields.username.id}`, account.username);
-    await session.fill(`#${fields.password.id}`, account.password, { secret: true });
-    await session.click("form#login #submit");
-    return session.waitFor("a.logout", { timeoutMs: 10_000 });
+    await session.fill(passwordField, account.password, { secret: true });
+    // WoltLab copies the XSRF cookie into the hidden field after the page scripts run.
+    await session.waitFor(".xsrfTokenInputHandled", { timeoutMs: 5_000 });
+    await this.fillLoginQuestion(session);
+    await session.click(LOGIN_SUBMIT, { navigationMs: 12_000 });
+  }
+
+  private async fillLoginQuestion(session: BrowserSession): Promise<void> {
+    if (!(await session.exists("#captchaAnswer"))) return;
+    const label = ((await session.text("label[for='captchaAnswer']")) ?? "").trim();
+    const answer = answerBoardQuestion(label);
+    if (!answer) throw new Error((label || "Login question was not answered").slice(0, 180));
+    await session.fill("#captchaAnswer", answer);
+  }
+
+  private async loginFailure(session: BrowserSession): Promise<string> {
+    const messages = [
+      (await session.text(".formError")) ?? "",
+      (await session.text(".innerError")) ?? "",
+      ...(await this.pageMessages(session)),
+    ]
+      .map((message) => message.trim())
+      .filter(Boolean);
+    const specific = messages.find((message) =>
+      /kennwort ist falsch|bitte fülle dieses eingabefeld/i.test(message),
+    );
+    return specific ?? messages[0] ?? "";
   }
 
   async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {
@@ -295,6 +368,10 @@ export class MarkupBoardDriver implements BoardDriver {
       });
     }
     return threads;
+  }
+
+  async readThreadMeta(session: BrowserSession) {
+    return readThreadMetaFromSession(session, "markup");
   }
 
   async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {

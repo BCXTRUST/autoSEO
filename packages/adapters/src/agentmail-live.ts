@@ -7,6 +7,7 @@ import type {
   MailboxProviderCapabilities,
 } from "@rakazo/adapter-kit";
 import type { PrismaClient } from "@rakazo/db";
+import { personMailboxAddress } from "./person-mailbox.js";
 
 /**
  * Live AgentMail inbox. HTTP stays behind this class; tests pass a fake client and never
@@ -141,7 +142,9 @@ export class AgentMailMailbox implements MailboxProvider {
       (inbox) => inbox.projectId === projectId,
     );
     if (existing) return { inboxId: existing.inboxId, address: existing.email };
-    const username = `lb-${projectId.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`.slice(0, 40);
+    const username = (
+      personMailboxAddress(`${projectId}:0`, "sideinbox.email").split("@")[0] ?? "lena.hoffmann"
+    ).slice(0, 40);
     const created = await this.client.createInbox({
       username,
       projectId,

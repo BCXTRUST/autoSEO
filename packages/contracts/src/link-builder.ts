@@ -24,6 +24,8 @@ export const LbHostStatusSchema = z.enum([
   "spam_blocked",
   "unsupported_captcha",
   "parked_operator",
+  "form_not_found",
+  "off_topic",
   "dead",
 ]);
 export type LbHostStatus = z.infer<typeof LbHostStatusSchema>;
@@ -88,7 +90,13 @@ export type LbVerifyMethod = z.infer<typeof LbVerifyMethodSchema>;
 export const LbThreadStatusSchema = z.enum(["candidate", "selected", "posted", "rejected"]);
 export type LbThreadStatus = z.infer<typeof LbThreadStatusSchema>;
 
-export const LbDraftStatusSchema = z.enum(["drafted", "approved", "posted", "discarded"]);
+export const LbDraftStatusSchema = z.enum([
+  "drafted",
+  "approved",
+  "posted",
+  "pending_moderation",
+  "discarded",
+]);
 export type LbDraftStatus = z.infer<typeof LbDraftStatusSchema>;
 
 export const LbLinkSlotSchema = z.enum(["none", "inline", "signature"]);
@@ -377,6 +385,8 @@ export const LbWarmupSchema = z.object({
     .min(0)
     .max(24 * 30)
     .default(24),
+  /** Newest foreign post may be this many days old. Omitted means 30. */
+  activityDays: z.number().int().min(1).max(90).optional(),
 });
 export type LbWarmup = z.infer<typeof LbWarmupSchema>;
 

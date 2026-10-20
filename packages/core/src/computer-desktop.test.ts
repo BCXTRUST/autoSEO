@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  attachBrowserWindowStreamCommand,
-  recoverWindowlessBrowserCommand,
+  browserWindowPresentCommand,
   COMPUTER_AUTONOMY_INSTRUCTION,
-  detachedBrowserCommand,
   exposeBrowserDesktopCommand,
   isFileManagerLabel,
   isHttpUrl,
@@ -12,12 +10,7 @@ import {
   openHttpUrlCommand,
   openPathDesktopCommand,
   parseVisibleWindows,
-  prepareKioskDesktopCommand,
-  raiseBrowserWindowCommand,
   refuseBrowserHuntShell,
-  repairBlackStreamCommand,
-  repairDesktopDisplayCommand,
-  streamedDisplayCommand,
 } from "./computer-desktop.js";
 
 describe("computer desktop window helpers", () => {
@@ -46,126 +39,10 @@ describe("computer desktop window helpers", () => {
     expect(command).not.toContain("windowquit");
   });
 
-  it("detaches Chrome so the sandbox command can return", () => {
-    const command = detachedBrowserCommand(
-      ":0",
-      "https://www.google.de/search?q=Magnesium+Kr%C3%A4mpfe+Forum&hl=de&gl=de",
-    );
-    expect(command).toContain("RAKAZO_DETACH_BROWSER");
-    expect(command).toContain("/usr/bin/google-chrome");
-    expect(command).toContain("--no-sandbox");
-    expect(command).toContain("--no-first-run");
-    expect(command).toContain("--disable-fre");
-    expect(command).toContain("OutdatedBuildDetector");
-    expect(command).toContain("setsid -f");
-    expect(command).toContain("/tmp/rakazo-watch.pid");
-    expect(command).toContain("rakazo-desktop-watch*");
-    expect(command).toContain("MOZ_HEADLESS=0");
-    expect(command).not.toContain("pkill -f '[r]akazo-desktop-watch'");
-    const recover = recoverWindowlessBrowserCommand(":0", "https://www.google.de/search?q=Kreatin");
-    expect(recover).toContain("search --pid");
-    expect(recover).toContain("rakazo-ff-recover");
-    expect(recover).toContain("firefox-esr");
-    expect(recover).toContain("etimes=");
-    expect(recover).not.toContain("pkill -f");
-    expect(command).toContain("rakazo-watch-v2");
-    expect(command).toContain("xfce4-panel");
-    expect(command).toContain(
-      "https://www.google.de/search?q=Magnesium+Kr%C3%A4mpfe+Forum&hl=de&gl=de",
-    );
-    expect(command).toContain("--kiosk");
-    expect(command).toContain("exec /usr/bin/google-chrome");
-    expect(command).toContain("firefox-esr");
-    expect(command).toContain("firefox --kiosk");
-    expect(command).not.toContain(">/tmp/rakazo-browser.log");
-    expect(command.trimEnd().endsWith("&")).toBe(false);
-  });
-
-  it("replaces the shell with Chrome so the sandbox cannot reap it", () => {
-    const command = detachedBrowserCommand(
-      ":0",
-      "https://www.google.de/search?q=Magnesium+Kr%C3%A4mpfe+Forum&hl=de&gl=de",
-    );
-    expect(command).toContain("RAKAZO_DETACH_BROWSER");
-    expect(command).toContain("exec /usr/bin/google-chrome");
-    expect(command).toContain("</dev/null");
-    expect(command).toContain("--kiosk");
-    expect(command).toContain("--disable-fre");
-    expect(command).toContain("--no-first-run");
-    expect(command).toContain("--no-default-browser-check");
-    expect(command).toContain("First Run");
-    expect(command).toContain(
-      "https://www.google.de/search?q=Magnesium+Kr%C3%A4mpfe+Forum&hl=de&gl=de",
-    );
-    const raised = raiseBrowserWindowCommand(":0");
-    expect(raised).toContain("Can't update Chrome");
-    expect(raised).toContain("Reinstall Chrome");
-    expect(raised).toContain("Welcome to Google Chrome");
-    expect(raised).toContain("windowclose");
-    expect(raised).not.toContain("key Return");
-    expect(raised).toContain("xfce4-panel");
-    expect(raised).toContain("fluxbox");
-    expect(raised).toContain("toolbar.visible: false");
-    expect(raised).toContain("FULLSCREEN");
-    expect(command).toContain("fluxbox");
-    expect(command).toContain("--disable-component-update");
-    expect(command).toContain("--disable-translate");
-    expect(command).toContain("--lang=de");
-    expect(command).toContain("LANG=de_DE.UTF-8");
-    expect(command).toContain("TranslateEnabled");
-    expect(command).toContain("translate_blocked_languages");
-    expect(command).toContain("app_locale");
-    expect(command).toContain("--disable-gpu");
-    expect(command).toContain("/usr/bin/firefox-esr");
-    expect(command).toContain('exec "$ff"');
-    expect(command).toContain("exec firefox --kiosk");
-    expect(command).toContain("--ozone-platform=x11");
-    expect(command).not.toContain("VizDisplayCompositor");
-    expect(command).toContain("rakazo-chrome-kiosk-v6");
-    expect(command).toContain("Translate this page");
-    expect(command).toContain("Diese Seite übersetzen");
-    expect(command).toContain("Toolbar");
-    expect(command).not.toContain("rakazo-chrome-kiosk-v5");
-    expect(command).toContain("windowmap");
-    const streamed = streamedDisplayCommand();
-    expect(streamed).toContain("x11vnc");
-    expect(streamed).toContain("-display");
-    expect(streamed).toContain("-rfbport");
-    expect(streamed).toContain("5900");
-    expect(streamed.indexOf("5900")).toBeLessThan(streamed.indexOf("/tmp/.X11-unix/X0"));
-    expect(streamed.indexOf("/tmp/.X11-unix/X0")).toBeLessThan(
-      streamed.indexOf("/tmp/.X11-unix/X1"),
-    );
-    expect(streamed).toContain("display=:1");
-    const black = repairBlackStreamCommand(":0");
-    expect(black).toContain("windowmap");
-    expect(black).toContain("-noxdamage");
-    expect(black).toContain("FULLSCREEN");
-    expect(black).not.toContain("killall");
-    expect(black).not.toContain("google.de");
-    expect(command).toContain("TranslateUI");
-    expect(raised).toContain("Google Translate");
-    expect(raised).toContain("Translate this page");
-    expect(raised).not.toContain("key --window");
-    expect(raised).not.toContain("key Escape");
-    expect(raised.trimEnd().endsWith("exit 0")).toBe(true);
-    const kiosk = prepareKioskDesktopCommand(":0");
-    expect(kiosk.indexOf("[r]akazo-lb-browser")).toBeLessThan(kiosk.indexOf("killall -q chrome"));
-    const repair = repairDesktopDisplayCommand(":0");
-    expect(repair).toContain("xdpyinfo -display ':0'");
-    expect(repair).toContain("setsid -f Xvfb ':0'");
-    expect(repair).not.toContain("pkill");
-    expect(repair).not.toMatch(/-nolisten/);
-    expect(repair).not.toContain("exit 1");
-    const attached = attachBrowserWindowStreamCommand(":0");
-    expect(attached).toContain("-noxdamage");
-    expect(attached).toContain("-nowf");
-    expect(attached).toContain("-rfbport 5900");
-    expect(attached).toContain("-id");
-    expect(attached).toContain("pgrep -x x11vnc");
-    expect(attached).toContain("pkill -x x11vnc");
-    expect(attached).not.toContain("pkill -f");
-    expect(command).not.toContain("nohup");
+  it("looks only for a Chromium window", () => {
+    const command = browserWindowPresentCommand(":0");
+    expect(command).toContain("chromium Chromium");
+    expect(command).not.toMatch(/firefox/i);
   });
 
   it("quotes URLs so query strings stay one argv", () => {

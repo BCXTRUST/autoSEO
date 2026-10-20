@@ -13,6 +13,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "ops:stop-all": "tsx src/ops-cli.ts stop-all",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run --root ../.. apps/api/src"
   },
@@ -25,8 +26,11 @@
     "@rakazo/contracts": "workspace:*",
     "@rakazo/core": "workspace:*",
     "@rakazo/db": "workspace:*",
+    "@e2b/desktop": "^2.3.1",
+    "@rakazo/linkbuilder-browser": "workspace:*",
     "@rakazo/linkbuilder-core": "workspace:*",
     "@rakazo/memory": "workspace:*",
+    "e2b": "2.38.3",
     "hono": "^4.9.6"
   },
   "devDependencies": {

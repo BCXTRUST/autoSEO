@@ -4,6 +4,9 @@ export const NEW_SIGNUP_BANNED_HOSTS = [
   "lifters-lounge.com",
   "lifters-lounge.de",
   "medizin-forum.de",
+  "phpbb.de",
+  "macuser.de",
+  "bulli-forum.com",
   "psychic.de",
   "ulrichradig.de",
   "tauschring-koeln.de",
@@ -12,7 +15,8 @@ export const NEW_SIGNUP_BANNED_HOSTS = [
 const NO_PROGRESS =
   /did not finish|trying again|step failed, retrying|captcha not submitted|black pane|scrolled off the form|same page/i;
 
-const SANDBOX_GONE = /SandboxNotFound|sandbox not found|not running anymore/i;
+const SANDBOX_GONE =
+  /SandboxNotFound|sandbox not found|not running anymore|runner returned no response/i;
 
 export interface StuckRecord {
   action: string;
@@ -68,9 +72,11 @@ export function stuckLookPrompt(input: {
   url: string;
   fields: readonly string[];
   links: readonly string[];
+  allowOtherThread?: boolean;
 }): string {
   const fields = input.fields.length > 0 ? input.fields.join("\n") : "(none)";
   const links = input.links.length > 0 ? input.links.join("\n") : "(none)";
+  const allowOtherThread = input.allowOtherThread !== false;
   return [
     "The browser step is not moving. Do not repeat the last click.",
     `Page: ${input.url}`,
@@ -78,8 +84,12 @@ export function stuckLookPrompt(input: {
     fields,
     "Links:",
     links,
-    "Choose one: find the form, fill the fields that are listed, or open another thread by index.",
-    'Reply JSON only: {"action":"find_form"} or {"action":"fill_fields"} or {"action":"other_thread","index":0}',
+    allowOtherThread
+      ? "Choose one: find the form, fill the fields that are listed, or open another thread by index."
+      : "Choose one: find the form, or fill the fields that are listed. Do not open another thread.",
+    allowOtherThread
+      ? 'Reply JSON only: {"action":"find_form"} or {"action":"fill_fields"} or {"action":"other_thread","index":0}'
+      : 'Reply JSON only: {"action":"find_form"} or {"action":"fill_fields"}',
   ].join("\n");
 }
 
@@ -103,28 +113,4 @@ export function localStuckChoice(input: {
   if (input.emptyFillable > 0) return { action: "fill_fields" };
   if (input.threadCount > 0) return { action: "other_thread", index: 0 };
   return { action: "find_form" };
-}
-
-/** One click on the first search result. A second call finds the stamp and does nothing. */
-export function forumResultClickCommand(display: string): string {
-  const quoted = `'${display.replace(/'/g, `'"'"'`)}'`;
-  return [
-    `export DISPLAY=${quoted}`,
-    "if [ -f /tmp/rakazo-forum-click ]; then printf '%s\\n' already; exit 0; fi",
-    "if [ -f /tmp/rakazo-form-hold ]; then printf '%s\\n' held; exit 0; fi",
-    "id=",
-    "for class in firefox-esr Firefox-esr firefox Firefox; do",
-    "  id=$(xdotool search --onlyvisible --class \"$class\" 2>/dev/null | awk 'NR==1{print; exit}')",
-    '  if [ -n "$id" ]; then break; fi',
-    "done",
-    'if [ -z "$id" ]; then exit 0; fi',
-    'name=$(xdotool getwindowname "$id" 2>/dev/null || true)',
-    'case "$name" in',
-    "  *frauenselbsthilfe*|*lifters-lounge*|*medizin-forum*|*psychic.de*|*ulrichradig*|*tauschring-koeln*) printf '%s\\n' skip; exit 0 ;;",
-    "esac",
-    'xdotool windowactivate --sync "$id"',
-    'xdotool mousemove --window "$id" 420 300',
-    "xdotool click 1",
-    "printf '%s\\n' clicked > /tmp/rakazo-forum-click",
-  ].join("\n");
 }

@@ -1,5 +1,12 @@
 import type { BrowserSession, ClickableControl, FormFieldInfo } from "@rakazo/adapter-kit";
-import { isMailSendFailure } from "@rakazo/linkbuilder-core";
+import {
+  hasTerm,
+  isMailSendFailure,
+  WARMUP_BOARD_TERMS,
+  warmupBoardScore,
+  warmupHealthTitle,
+} from "@rakazo/linkbuilder-core";
+import { load } from "cheerio";
 import { detectKnowledgeQuestion, looksLikeKnowledgeQuestion } from "./captcha.js";
 import { acceptCookieWall } from "./cookie-wall.js";
 import type {
@@ -23,6 +30,11 @@ import {
   relFromAttribute,
   repliesClosed,
 } from "./messages.js";
+import {
+  genericLastPageUrl,
+  parseGermanPostDate,
+  readThreadMetaFromSession,
+} from "./thread-meta.js";
 import { detectWidget } from "./widgets.js";
 
 /**
@@ -189,7 +201,13 @@ function scoreConfirm(field: FormFieldInfo): number {
 function scoreBody(field: FormFieldInfo): number {
   if (field.tag !== "textarea" && field.role !== "textbox") return 0;
   if (isCaptchaField(field)) return 0;
-  return /message|body|content|comment|\braw\b|reply/.test(blob(field)) ? 4 : 0;
+  if (
+    /message|body|content|comment|\braw\b|reply|beitrag|nachricht|antwort|kommentar/.test(
+      blob(field),
+    )
+  )
+    return 4;
+  return field.tag === "textarea" ? 2 : 0;
 }
 
 function scoreConsent(field: FormFieldInfo): number {
@@ -779,8 +797,8 @@ export class GenericFormDriver implements BoardDriver {
     let entryIndex = 0;
     let previous = "";
     for (let step = 0; step < 12; step += 1) {
-      if (session.ariaSnapshot) await session.ariaSnapshot().catch(() => "");
-      await session.screenshotPng().catch(() => undefined);
+      // Each navigation uses the session timeout. A snapshot here can sit on the
+      // homepage until the worker step budget fires, so the path only navigates.
       const here = await session.url();
       const text = await session.pageText();
       const signature = `${here}\n${text.slice(0, 500)}`;
@@ -797,7 +815,14 @@ export class GenericFormDriver implements BoardDriver {
         previous = "";
         continue;
       }
-      if (await clickRegisterControl(session)) continue;
+      const beforeClick = `${await session.url()}\n${(await session.pageText()).slice(0, 500)}`;
+      if (await clickRegisterControl(session)) {
+        const afterClick = `${await session.url()}\n${(await session.pageText()).slice(0, 500)}`;
+        if (afterClick !== beforeClick) {
+          previous = "";
+          continue;
+        }
+      }
       if (entryIndex < entries.length) {
         const entry = entries[entryIndex] ?? "";
         entryIndex += 1;
@@ -933,8 +958,7 @@ export class GenericFormDriver implements BoardDriver {
   }
 
   async isLoggedIn(session: BrowserSession): Promise<boolean> {
-    if (await session.exists("a.logout")) return true;
-    return session.exists("a[href*='logout']");
+    return session.exists(LOGGED_IN_SELECTOR);
   }
 
   async login(
@@ -956,18 +980,48 @@ export class GenericFormDriver implements BoardDriver {
     await session.fill(mapped.identity.selector, account.username);
     await session.fill(mapped.password.selector, account.password, { secret: true });
     await session.click(mapped.submit.selector);
-    return session.waitFor("a.logout, a[href*='logout']", { timeoutMs: 10_000 });
+    return session.waitFor(LOGGED_IN_SELECTOR, { timeoutMs: 10_000 });
   }
 
-  async listThreads(session: BrowserSession, homepageUrl: string): Promise<BoardThread[]> {
+  async readThreadMeta(session: BrowserSession) {
+    return readThreadMetaFromSession(session, "markup");
+  }
+
+  async lastPageUrl(session: BrowserSession, _thread: BoardThread): Promise<string | null> {
+    const html = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
+    const current = await session.url().catch(() => "");
+    if (!html || !current) return null;
+    return genericLastPageUrl(html, current);
+  }
+
+  async listThreads(
+    session: BrowserSession,
+    homepageUrl: string,
+    topic?: { terms: string[]; activityDays?: number },
+  ): Promise<BoardThread[]> {
     await session.goto(homepageUrl);
-    let threads = await collectThreads(session);
-    if (threads.length > 0) return threads;
+    const home = await collectThreads(session);
+    const html = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
+    const base = await session.url().catch(() => homepageUrl);
+    const sections = html ? genericSections(html, base, topic?.terms ?? []) : [];
+    const found = [...home];
+    const activityDays = topic?.activityDays ?? 30;
+    for (const section of sections.slice(0, 3)) {
+      try {
+        await session.goto(section);
+      } catch {
+        continue;
+      }
+      const page = session.pageHtml ? await session.pageHtml().catch(() => "") : "";
+      const pageUrl = await session.url().catch(() => section);
+      found.push(...genericSectionRows(page, pageUrl, activityDays));
+    }
+    const merged = orderListedThreads(dedupeThreads(found), topic?.terms ?? []);
+    if (merged.length > 0) return merged.slice(0, 25);
     const forum = await session.attribute("a.forumtitle, a[href*='viewforum']", "href");
     if (!forum) return [];
     await session.goto(new URL(forum, await session.url()).href);
-    threads = await collectThreads(session);
-    return threads;
+    return collectThreads(session);
   }
 
   async openReply(session: BrowserSession, thread: BoardThread): Promise<boolean> {
@@ -975,9 +1029,15 @@ export class GenericFormDriver implements BoardDriver {
     if (!(await this.replyReady(session))) {
       const followed = await followAnchor(
         session,
-        ["a.reply", "a[href*='mode=reply']", "a[href*='add-reply']", "a[href*='/reply']"],
-        /reply|antworten|post a reply/i,
-        /quote|edit/i,
+        [
+          "a.reply",
+          "a[href*='mode=reply']",
+          "a[href*='add-reply']",
+          "a[href*='/reply']",
+          "a[href*='/forum/post/']",
+        ],
+        /reply|antworten|antwort|post a reply/i,
+        /quote|edit|zitat/i,
       );
       if (!followed) {
         const href = await session.attribute(
@@ -1001,6 +1061,7 @@ export class GenericFormDriver implements BoardDriver {
 
   async submitReply(session: BrowserSession): Promise<ReplyResult> {
     if (!this.replySelector) throw new UnmappedFormError("reply");
+    const before = await session.url();
     await session.click(this.replySelector.submit);
     await session.waitFor("#message, .error", { timeoutMs: 15_000 });
     const messages = await this.pageMessages(session);
@@ -1008,7 +1069,14 @@ export class GenericFormDriver implements BoardDriver {
     if (href && postedSuccessfully(messages.join("\n"))) {
       return { kind: "posted", permalink: new URL(href, await session.url()).href };
     }
-    if (await session.exists("form")) return { kind: "rejected", messages };
+    const after = await session.url();
+    if (/\/forum\/topic\//i.test(after) && after !== before) {
+      return { kind: "posted", permalink: after };
+    }
+    if (await this.replyReady(session)) return { kind: "rejected", messages };
+    if (postedSuccessfully(messages.join("\n"))) {
+      return { kind: "posted", permalink: after };
+    }
     return { kind: "unknown", messages };
   }
 
@@ -1127,18 +1195,28 @@ export class GenericFormDriver implements BoardDriver {
       ...new Set([
         new URL("/login", homepageUrl).href,
         new URL("/login/", homepageUrl).href,
+        new URL("/profile/logon", homepageUrl).href,
+        new URL("/profile/login", homepageUrl).href,
         new URL("ucp.php?mode=login", homepageUrl).href,
       ]),
     ];
     for (const url of guesses) {
-      await session.goto(url);
+      try {
+        await session.goto(url);
+      } catch {
+        continue;
+      }
       if (await this.isLoggedIn(session)) return true;
       if (await this.onLoginForm(session)) return true;
     }
-    await session.goto(homepageUrl);
+    try {
+      await session.goto(homepageUrl);
+    } catch {
+      return false;
+    }
     const followed = await followAnchor(
       session,
-      ["a[href*='mode=login']", "a[href*='/login']", "a[href*='login']"],
+      ["a[href*='mode=login']", "a[href*='logon']", "a[href*='/login']", "a[href*='login']"],
       LOGIN_TEXT,
       /logout|register|registrieren/i,
     );
@@ -1192,12 +1270,16 @@ function anchorsToThreads(
   return threads;
 }
 
+const LOGGED_IN_SELECTOR =
+  "a.logout, a[href*='logout'], a[href*='Logout'], a[href*='logoff'], a[href*='Logoff']";
+
 const THREAD_LINK_SELECTORS = [
   "#threads a",
   "li.thread a.threadTitle",
   "a.topictitle",
   "li.row a.topictitle",
   "a[href*='thread-']",
+  "a[href*='/forum/topic/']",
 ];
 
 async function collectThreads(session: BrowserSession): Promise<BoardThread[]> {
@@ -1240,4 +1322,99 @@ async function collectThreads(session: BrowserSession): Promise<BoardThread[]> {
     });
   }
   return threads;
+}
+
+const SECTION_HREF = /\/forum\/topics\/\d+\/|viewforum\.php\?f=\d+|\/forum\/board\//i;
+
+function genericSections(html: string, base: string, terms: readonly string[]): string[] {
+  const $ = load(html);
+  const scored: Array<{ url: string; score: number; order: number }> = [];
+  const seen = new Set<string>();
+  $("a[href]").each((order, el) => {
+    const href = $(el).attr("href") ?? "";
+    if (!SECTION_HREF.test(href)) return;
+    const name = $(el).text().replace(/\s+/g, " ").trim();
+    const score = warmupBoardScore(name, terms);
+    if (score <= 0) return;
+    let url: string;
+    try {
+      url = new URL(href, base).href;
+    } catch {
+      return;
+    }
+    const key = url.replace(/\/$/, "").toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    scored.push({ url, score, order });
+  });
+  scored.sort((a, b) => b.score - a.score || a.order - b.order);
+  return scored.map((row) => row.url);
+}
+
+function genericSectionRows(html: string, base: string, activityDays: number): BoardThread[] {
+  const $ = load(html);
+  const now = new Date();
+  const threads: BoardThread[] = [];
+  $("tr").each((_, node) => {
+    const row = $(node);
+    const link = row.find("td.title a[href*='/forum/topic/']").first();
+    const href = link.attr("href");
+    const title = link.text().replace(/\s+/g, " ").trim();
+    if (!href || !title) return;
+    const dated = parseGermanPostDate(row.find("td.last").text(), now, "Europe/Berlin");
+    if (dated) {
+      const age = (now.getTime() - Date.parse(dated)) / 86_400_000;
+      if (Number.isFinite(age) && age > activityDays) return;
+    }
+    let url: string;
+    try {
+      url = new URL(href, base).href;
+    } catch {
+      return;
+    }
+    threads.push({ url, title, lastActivityAt: dated, openQuestion: /\?/.test(title) });
+  });
+  return threads;
+}
+
+function threadListKey(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`.replace(/\/$/, "").toLowerCase();
+  } catch {
+    return url;
+  }
+}
+
+function dedupeThreads(threads: BoardThread[]): BoardThread[] {
+  const byKey = new Map<string, BoardThread>();
+  const order: string[] = [];
+  for (const thread of threads) {
+    const key = threadListKey(thread.url);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, thread);
+      order.push(key);
+      continue;
+    }
+    if (!existing.lastActivityAt && thread.lastActivityAt) byKey.set(key, thread);
+  }
+  return order.flatMap((key) => {
+    const thread = byKey.get(key);
+    return thread ? [thread] : [];
+  });
+}
+
+function orderListedThreads(threads: BoardThread[], terms: readonly string[]): BoardThread[] {
+  const hit = (title: string) =>
+    warmupHealthTitle(title) ||
+    WARMUP_BOARD_TERMS.some((term) => hasTerm(title, term)) ||
+    terms.some((term) => hasTerm(title, term));
+  return [...threads].sort((a, b) => {
+    const delta = Number(hit(b.title)) - Number(hit(a.title));
+    if (delta !== 0) return delta;
+    const aAt = Date.parse(a.lastActivityAt ?? "") || 0;
+    const bAt = Date.parse(b.lastActivityAt ?? "") || 0;
+    return bAt - aAt;
+  });
 }

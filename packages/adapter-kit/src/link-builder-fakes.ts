@@ -183,7 +183,7 @@ export class FakeBrowserSession implements BrowserSession {
   async isVisible(selector: string): Promise<boolean> {
     this.assertOpen();
     const element = this.page().elements[selector];
-    return Boolean(element) && element.hidden !== true;
+    return element !== undefined && element.hidden !== true;
   }
 
   async isChecked(selector: string): Promise<boolean> {

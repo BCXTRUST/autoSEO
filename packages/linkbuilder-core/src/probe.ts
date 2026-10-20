@@ -318,13 +318,26 @@ function collectThreads(pages: readonly ProbePage[], origin: string): ProbeThrea
   return threads.slice(0, 20);
 }
 
+/** Decodes entities and drops a phpBB `sid` so a stored register URL stays stable. */
+export function cleanStoredUrl(value: string): string {
+  const decoded = value.replace(/&amp;/gi, "&").replace(/&#38;/g, "&");
+  try {
+    const url = new URL(decoded);
+    url.searchParams.delete("sid");
+    return url.href;
+  } catch {
+    return decoded.replace(/([?&])sid=[^&#]*/gi, "$1").replace(/[?&]$/, "");
+  }
+}
+
 function findRegisterUrl(html: string, origin: string): string | null {
   const match =
     /href=["']([^"']*(?:mode=register|\/register\/?|\/signup|action=register)[^"']*)["']/i.exec(
       html,
     );
   if (!match?.[1]) return null;
-  return absolute(match[1], origin);
+  const href = match[1].replace(/&amp;/gi, "&").replace(/&#38;/g, "&");
+  return cleanStoredUrl(absolute(href, origin));
 }
 
 function defaultRegister(origin: string, platform: LbHostPlatform): string | null {

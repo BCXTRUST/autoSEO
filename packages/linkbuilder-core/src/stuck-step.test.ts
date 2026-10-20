@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   decideStuckStep,
-  forumResultClickCommand,
   isNewSignupBannedHost,
   localStuckChoice,
   parseStuckLook,
@@ -35,6 +34,12 @@ describe("stuck step", () => {
         { action: "Step failed, retrying", error: "SandboxNotFoundError", looked: false },
       ]),
     ).toBe("yield");
+    expect(
+      decideStuckStep([
+        { action: "Step failed, retrying", error: "runner returned no response", looked: false },
+        { action: "Looking at the page to find the form", error: null, looked: true },
+      ]),
+    ).toBe("yield");
   });
 
   it("blocks a new signup on the banned hosts and keeps every other host", () => {
@@ -66,15 +71,5 @@ describe("stuck step", () => {
     expect(
       stuckLookPrompt({ url: "https://forum.example/register", fields: ["email"], links: [] }),
     ).toContain("find the form");
-  });
-
-  it("clicks a search result once and leaves a held form alone", () => {
-    const command = forumResultClickCommand(":0");
-    expect(command).toContain("/tmp/rakazo-forum-click");
-    expect(command).toContain("/tmp/rakazo-form-hold");
-    expect(command).toContain("xdotool click 1");
-    expect(command).toContain("frauenselbsthilfe");
-    expect(command).not.toMatch(/google\.de\/search|RESEND|CAPTELL|password=/i);
-    expect(command).not.toMatch(/register|signup|post/i);
   });
 });

@@ -1,4 +1,4 @@
-import type { BoardThread } from "@rakazo/linkbuilder-drivers";
+import { type BoardThread, isPasswordResetTarget } from "@rakazo/linkbuilder-drivers";
 
 /**
  * One look when the forum rules find no thread on a page that is already open.
@@ -49,6 +49,7 @@ export function usablePageLinks(
   for (const item of anchors) {
     const text = item.text.replace(/\s+/g, " ").trim();
     if (!text || text.length > 120 || UTILITY_TEXT.test(text)) continue;
+    if (isPasswordResetTarget(text) || isPasswordResetTarget(item.href)) continue;
     const url = sameSiteUrl(item.href, pageUrl, domain);
     if (!url || url === current || seen.has(url)) continue;
     seen.add(url);
@@ -58,12 +59,58 @@ export function usablePageLinks(
   return links;
 }
 
+const DROPPED_QUERY = new Set(["action", "postid", "p", "start", "page", "sid", "view"]);
+
+/**
+ * One thread, whatever last-post anchor or session id the listing used.
+ * phpBB `t` and `f` stay. WoltLab and diabetes topic ids drop the slug.
+ */
+export function threadKey(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url.split("#")[0]?.toLowerCase() ?? url.toLowerCase();
+  }
+  parsed.hash = "";
+  parsed.hostname = parsed.hostname.toLowerCase();
+  for (const key of [...parsed.searchParams.keys()]) {
+    if (DROPPED_QUERY.has(key.toLowerCase())) parsed.searchParams.delete(key);
+  }
+  parsed.pathname = parsed.pathname
+    .replace(/\/page\/\d+\/?$/i, "/")
+    .replace(/\/seite-\d+\/?$/i, "/")
+    .replace(/\/forum\/thread\/(\d+)-[^/]+\/?$/i, "/forum/thread/$1/")
+    .replace(/\/forum\/topic\/(\d+)\/[^/]+\/?$/i, "/forum/topic/$1/");
+  const keys = [...parsed.searchParams.keys()].sort();
+  const search = new URLSearchParams();
+  for (const key of keys) {
+    const value = parsed.searchParams.get(key);
+    if (value !== null) search.set(key, value);
+  }
+  const query = search.toString();
+  return `${parsed.origin}${parsed.pathname}${query ? `?${query}` : ""}`;
+}
+
+function withoutFirstNew(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.searchParams.get("action") === "firstNew") {
+      parsed.searchParams.delete("action");
+      parsed.hash = "";
+    }
+    return parsed.href;
+  } catch {
+    return url.replace(/\?action=firstNew$/, "");
+  }
+}
+
 export function threadsFromLinks(links: readonly PageLink[]): BoardThread[] {
   return links
     .filter((link) => THREAD_HREF.test(link.url))
     .slice(0, 8)
     .map((link) => ({
-      url: link.url,
+      url: withoutFirstNew(link.url),
       title: link.text,
       openQuestion: /\?/.test(link.text),
     }));
@@ -99,7 +146,7 @@ export function pageLookPrompt(links: readonly PageLink[]): string {
   return [
     "The page is already open. The rules found no thread.",
     "Pick one link that opens a forum board or a discussion, or skip.",
-    "Do not pick logout, login, search, or the page that is already open.",
+    "Do not pick logout, login, search, a password reset, or the page that is already open.",
     "Links:",
     ...lines,
     'Reply JSON only: {"action":"open","index":0} or {"action":"skip"}',

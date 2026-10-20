@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clickResendMail } from "./registration-flow.js";
+import { clickAccountActivation, clickResendMail } from "./registration-flow.js";
 
 describe("clickResendMail", () => {
   it("clicks a mail resend control and ignores a generic send", async () => {
@@ -25,5 +25,20 @@ describe("clickResendMail", () => {
       },
     };
     expect(await clickResendMail(session as never)).toBe(false);
+  });
+});
+
+describe("clickAccountActivation", () => {
+  it("clicks the Discourse activate button", async () => {
+    const clicked: string[] = [];
+    const session = {
+      exists: async (selector: string) => selector === "#activate-account-button",
+      waitFor: async () => true,
+      click: async (selector: string) => {
+        clicked.push(selector);
+      },
+    };
+    expect(await clickAccountActivation(session as never)).toBe(true);
+    expect(clicked).toEqual(["#activate-account-button"]);
   });
 });
