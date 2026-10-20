@@ -26,6 +26,26 @@ describe("clickControl", () => {
     expect(calls).toEqual(["requestSubmit"]);
   });
 
+  it("posts the Discourse activate form when the button sits outside it", () => {
+    const calls: string[] = [];
+    const form = { requestSubmit: () => calls.push("form") };
+    const button = {
+      tagName: "BUTTON",
+      getAttribute: (name: string) => (name === "id" ? "activate-account-button" : null),
+      closest: () => null,
+      click: () => calls.push("click"),
+    };
+    (globalThis as { document?: unknown }).document = {
+      querySelector: (selector: string) => {
+        if (selector === "#activate-account-button") return button;
+        if (selector === "#activate-account-form") return form;
+        return null;
+      },
+    };
+    expect(clickControl("#activate-account-button")).toBe(true);
+    expect(calls).toEqual(["form"]);
+  });
+
   it("clicks a link that has no form", () => {
     const calls: string[] = [];
     const link = {

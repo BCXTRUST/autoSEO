@@ -13,6 +13,7 @@ export function clickControl(selector: string): boolean {
     return false;
   }
   if (!node || typeof node.click !== "function") return false;
+  if (submitActivateForm(doc, node)) return true;
   const tag = (node.tagName ?? "").toUpperCase();
   const type = (node.getAttribute?.("type") ?? (tag === "BUTTON" ? "submit" : "")).toLowerCase();
   const form = node.closest?.("form") ?? null;
@@ -42,6 +43,7 @@ export function clickControlHeld(selector: string): boolean {
     return false;
   }
   if (!node) return false;
+  if (submitActivateForm(doc, node)) return true;
   const tag = (node.tagName ?? "").toUpperCase();
   const type = (node.getAttribute?.("type") ?? (tag === "BUTTON" ? "submit" : "")).toLowerCase();
   const form = node.closest?.("form") ?? null;
@@ -73,6 +75,15 @@ export function clickControlHeld(selector: string): boolean {
   return true;
 }
 
+/** The Discourse activate button sits outside its form, so a bare click does not POST. */
+function submitActivateForm(doc: ClickDocument, node: ClickNode): boolean {
+  if (node.getAttribute?.("id") !== "activate-account-button") return false;
+  const form = doc.querySelector("#activate-account-form");
+  if (!form || typeof form.requestSubmit !== "function") return false;
+  form.requestSubmit();
+  return true;
+}
+
 interface ClickNode {
   tagName?: string;
   click?: () => void;
@@ -81,6 +92,7 @@ interface ClickNode {
   closest?: (selector: string) => ClickForm | null;
   focus?: (options?: { preventScroll?: boolean }) => void;
   dispatchEvent?: (event: object) => boolean;
+  requestSubmit?: () => void;
 }
 
 interface ClickForm {
