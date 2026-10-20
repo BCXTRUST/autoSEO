@@ -547,10 +547,9 @@ async function hostsMailedRecently(
     for (const step of steps) {
       if (step.kind !== "email_verify" || !step.hostId) continue;
       const outcome = step.outcome;
-      const parked =
-        Boolean(outcome) &&
-        typeof outcome === "object" &&
-        (outcome as { mail?: unknown }).mail === "not_in_inbox";
+      const mail =
+        outcome && typeof outcome === "object" ? (outcome as { mail?: unknown }).mail : null;
+      const parked = mail === "not_in_inbox" || mail === "opened";
       if (!parked) continue;
       const created =
         step.createdAt instanceof Date
@@ -2670,13 +2669,13 @@ async function emailVerify(ctx: StepContext): Promise<StepResult> {
   const artifactIds = await screenshot(ctx, entry, "activated");
   const verifiedAt = ctx.now;
   if (activation === "unknown") {
-    const plan = await desktopSkipPlan(ctx, host, "unknown_page_state");
     return {
       kind: "step",
       hostId: host.id,
       artifactIds,
-      outcome: { activation },
-      ...plan,
+      lastAction: "Confirmation link is still open",
+      outcome: { activation, mail: "opened" },
+      run: { currentHostId: null },
     };
   }
   const verified = activation === "active";

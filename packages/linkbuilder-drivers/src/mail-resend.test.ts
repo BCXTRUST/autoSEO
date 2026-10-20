@@ -33,6 +33,7 @@ describe("clickAccountActivation", () => {
     const clicked: string[] = [];
     const session = {
       exists: async (selector: string) => selector === "#activate-account-button",
+      waitFor: async () => true,
       click: async (selector: string) => {
         clicked.push(selector);
       },

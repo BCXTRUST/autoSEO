@@ -23,8 +23,11 @@ const RESEND_CONTROL =
 
 /** Discourse shows the activation link as a button. Opening the URL is not enough. */
 export async function clickAccountActivation(session: BrowserSession): Promise<boolean> {
-  if (!(await session.exists("#activate-account-button"))) return false;
-  await session.click("#activate-account-button");
+  const appeared = await session
+    .waitFor("#activate-account-button", { timeoutMs: 8_000 })
+    .catch(() => false);
+  if (!appeared && !(await session.exists("#activate-account-button"))) return false;
+  await session.click("#activate-account-button", { navigationMs: 12_000 });
   return true;
 }
 
