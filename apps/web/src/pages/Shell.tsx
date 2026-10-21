@@ -39,8 +39,8 @@ import {
   inferAttachmentMimeType,
   isActive,
   isRunTerminalEvent,
-  latestAnswerableAskMessageId,
   LINK_BUILDING_BOT_INSTRUCTIONS,
+  latestAnswerableAskMessageId,
   presetFromCron,
   speechFromBlocks,
 } from "@rakazo/core";
@@ -94,12 +94,12 @@ import { type ArtifactTarget, decodeArtifactBase64 } from "../lib/artifact-open"
 import { authClient } from "../lib/auth";
 import { takeInitialBootstrap } from "../lib/bootstrap";
 import { chartViewport } from "../lib/chart-viewport";
+import { latestComputerScreenshotId, screenFrameSrc } from "../lib/computer-screen";
 import { dictation } from "../lib/dictation";
 import { connectMcpOauth } from "../lib/mcp-connect";
+import { modelLabel } from "../lib/model-label";
 import { revokePendingAttachmentPreviews } from "../lib/pending-attachments";
 import { markAfterPaint, markOnce } from "../lib/performance";
-import { latestComputerScreenshotId, screenFrameSrc } from "../lib/computer-screen";
-import { modelLabel } from "../lib/model-label";
 import { rpc } from "../lib/rpc";
 import {
   activeThreadRuns,
@@ -2480,7 +2480,10 @@ export function ShellPage() {
           <ModelSettingsOverlay
             onClose={() => {
               setModelsOpen(false);
-              void rpc.me().then(setBootstrapMe).catch(() => undefined);
+              void rpc
+                .me()
+                .then(setBootstrapMe)
+                .catch(() => undefined);
             }}
           />
         ) : null}

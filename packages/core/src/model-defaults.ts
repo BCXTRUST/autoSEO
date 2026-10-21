@@ -6,7 +6,8 @@ export const DEFAULT_AUX_MODEL_ID = "google/gemini-2.5-flash";
 
 export const LEGACY_FLASH_MODEL_ID = "deepseek/deepseek-v4-flash-0731";
 
-const WEAK_COMPUTER_MODEL = /(?:^|\/)(?:aion(?:[-.\s]*2(?:\.0)?)?|gpt-4\.1-mini|gpt-4o-mini|deepseek-v4-flash)/i;
+const WEAK_COMPUTER_MODEL =
+  /(?:^|\/)(?:aion(?:[-.\s]*2(?:\.0)?)?|gpt-4\.1-mini|gpt-4o-mini|deepseek-v4-flash)/i;
 
 function strongComputerModelFromEnv(): string | undefined {
   for (const value of [process.env.PI_COMPUTER_MODEL, process.env.PI_DEFAULT_MODEL]) {
@@ -18,11 +19,7 @@ function strongComputerModelFromEnv(): string | undefined {
 
 export function resolveOpenRouterModelId(id: string | undefined): string {
   const trimmed = id?.trim();
-  if (
-    !trimmed ||
-    trimmed === LEGACY_FLASH_MODEL_ID ||
-    WEAK_COMPUTER_MODEL.test(trimmed)
-  ) {
+  if (!trimmed || trimmed === LEGACY_FLASH_MODEL_ID || WEAK_COMPUTER_MODEL.test(trimmed)) {
     return strongComputerModelFromEnv() ?? DEFAULT_OPENROUTER_MODEL_ID;
   }
   return trimmed;

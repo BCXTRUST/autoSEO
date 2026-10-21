@@ -32,7 +32,6 @@ describe("latestComputerScreenshotId", () => {
   });
 });
 
-
 describe("screenFrameSrc", () => {
   it("builds a data URL for a PNG frame", () => {
     expect(screenFrameSrc({ image: "abc", mimeType: "image/png" })).toBe(

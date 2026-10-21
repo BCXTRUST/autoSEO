@@ -226,7 +226,10 @@ describe("docker sandbox", () => {
   const dataDir = mkdtempSync(path.join(tmpdir(), "rakazo-docker-conformance-"));
 
   afterAll(async () => {
-    spawned?.kill("SIGTERM");
+    if (spawned?.pid) {
+      if (process.platform === "win32") spawned.kill("SIGTERM");
+      else process.kill(-spawned.pid, "SIGTERM");
+    }
     rmSync(dataDir, { recursive: true, force: true });
   });
 
@@ -247,6 +250,7 @@ describe("docker sandbox", () => {
         SANDBOX_SUPERVISOR_TOKEN: token,
         SUPERVISOR_PORT: String(port),
       },
+      detached: process.platform !== "win32",
       stdio: "ignore",
     });
     const up = await waitForHealth(`${url}/health`, 20_000);
@@ -264,8 +268,15 @@ describe("docker sandbox", () => {
     expect(out).toContain("graphical-ok");
     const session = await provider.connectScreen(computer, { view: "stream" }, ctx);
     expect(session.url).toMatch(/embed\.html/);
+    for await (const _event of provider.execute(
+      computer,
+      { argv: ["chmod", "-R", "a+rwX", "/home/rakazo"] },
+      ctx,
+    )) {
+      // Drain the command so permissions are updated before container removal.
+    }
     await provider.destroy(computer, ctx);
-  }, 60_000);
+  }, 180_000);
 });
 
 function dockerAvailable() {

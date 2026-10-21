@@ -23,7 +23,9 @@ describe("createBackgroundJobHandlers", () => {
     const resolveModel = vi.fn();
     const resolveAuxModel = vi.fn();
     const handlers = createBackgroundJobHandlers({
-      executor: { resolveModel, resolveAuxModel } as unknown as ReturnType<typeof createRunExecutor>,
+      executor: { resolveModel, resolveAuxModel } as unknown as ReturnType<
+        typeof createRunExecutor
+      >,
       prisma,
       sandbox: {} as unknown as SandboxProvider,
       home: {} as unknown as AgentHomeStore,

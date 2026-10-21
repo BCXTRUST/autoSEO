@@ -20,5 +20,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     }
   }
 
-  return config as ExpoConfig;
+  return {
+    ...config,
+    plugins: [...(config.plugins ?? []), "expo-font"],
+  } as ExpoConfig;
 };
