@@ -10,13 +10,13 @@ import {
   clearActiveThreadRuns,
   computerPanelAutoBoot,
   computerTakeoverBlocked,
-  threadAsksComputerTakeover,
   isThreadSnapshotEvent,
   mergeThreadSnapshot,
   prependThreadMessagePage,
   reconcileRefreshedThread,
   reduceComputerStatus,
   reduceThreadSnapshot,
+  threadAsksComputerTakeover,
   userHoldsComputerControl,
 } from "./thread-events.js";
 

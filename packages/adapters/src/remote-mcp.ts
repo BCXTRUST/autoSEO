@@ -3,7 +3,7 @@ import { isIP, type LookupFunction } from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ConnectorTool } from "@rakazo/adapter-kit";
-import { Agent } from "undici";
+import { Agent, EnvHttpProxyAgent } from "undici";
 import { combineSignals } from "./connector-safety.js";
 import {
   createAddressCheckedLookup,
@@ -136,7 +136,18 @@ export function createSafeRemoteFetch(
   baseFetch: typeof globalThis.fetch = globalThis.fetch,
   resolve: ResolveHostname = resolveHostname,
 ): SafeRemoteFetch {
-  const dispatcher = new Agent({ connect: { lookup: createSafeLookup(resolve) } });
+  // Node's fetch does not honor HTTP(S)_PROXY by itself. Cloud and corporate
+  // environments commonly require that proxy for all outbound traffic, so a
+  // direct Agent makes otherwise valid remote MCP servers fail with
+  // ECONNREFUSED. The URL is still resolved and checked before every request;
+  // the egress proxy provides the connection when one is configured.
+  const dispatcher =
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy
+      ? new EnvHttpProxyAgent()
+      : new Agent({ connect: { lookup: createSafeLookup(resolve) } });
   const safeFetch = async (input: string | URL | Request, init?: RequestInit) => {
     if (typeof input !== "string" && !(input instanceof URL)) {
       throw new Error("Connector fetch requires a URL, not a Request");
@@ -146,7 +157,7 @@ export function createSafeRemoteFetch(
       ...init,
       redirect: "manual",
       dispatcher,
-    } as RequestInit & { dispatcher: Agent });
+    } as RequestInit & { dispatcher: Agent | EnvHttpProxyAgent });
     if (response.status >= 300 && response.status < 400) {
       throw new Error("Connector redirects are not allowed");
     }

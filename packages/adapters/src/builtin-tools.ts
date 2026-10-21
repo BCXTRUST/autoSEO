@@ -329,7 +329,10 @@ export const builtinAgentTools: ConnectorTool[] = [
       properties: {
         loginId: { type: "string", description: "Opaque id from vault_list." },
         site: { type: "string", description: "Hostname or URL if loginId is omitted." },
-        username: { type: "string", description: "Required when several accounts exist for the site." },
+        username: {
+          type: "string",
+          description: "Required when several accounts exist for the site.",
+        },
       },
     },
   },

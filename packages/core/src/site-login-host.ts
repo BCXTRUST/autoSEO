@@ -1,5 +1,6 @@
 const MAX_HOST_LENGTH = 253;
-const HOST_IN_TEXT = /(?:https?:\/\/)?(?:www\.)?([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)/gi;
+const HOST_IN_TEXT =
+  /(?:https?:\/\/)?(?:www\.)?([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+)/gi;
 
 function stripWww(host: string): string {
   return host.replace(/^www\./i, "");

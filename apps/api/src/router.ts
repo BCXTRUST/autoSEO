@@ -66,7 +66,6 @@ import {
   verifyMcpInstall,
 } from "@rakazo/adapters";
 import type { Auth } from "@rakazo/auth";
-import { assignAgentMailInbox, listAgentMailInboxes } from "./agentmail.js";
 import {
   type Actor,
   appContract,
@@ -101,6 +100,7 @@ import {
   type ThreadEvents,
   touchGroupUpdatedAt,
 } from "@rakazo/db";
+import { assignAgentMailInbox, listAgentMailInboxes } from "./agentmail.js";
 import { createOwnedArtifact, getOwnedArtifact, getWorkspaceArtifact } from "./artifacts.js";
 import {
   executionBlocksUserTakeover,

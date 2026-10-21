@@ -39,8 +39,7 @@ export function looksLikeDesktopBrowserApp(application: string): boolean {
 
 const BROWSER_HUNT_SHELL =
   /\b(?:which|whereis|type\s+-a|command\s+-v)\b[\s\S]{0,400}\b(?:firefox|chromium|google-chrome|chrome|brave-browser|msedge)\b/i;
-const BROWSER_LS_SHELL =
-  /\bls\b[\s\S]{0,200}(?:\/usr(?:\/(?:local\/)?bin)?|\/opt|\/snap)\b/i;
+const BROWSER_LS_SHELL = /\bls\b[\s\S]{0,200}(?:\/usr(?:\/(?:local\/)?bin)?|\/opt|\/snap)\b/i;
 
 export const BROWSER_HUNT_SHELL_ERROR =
   "The desktop already has a browser. Use computer_observe, then computer_act or open_path on the page you see. Do not search for browsers with shell.";

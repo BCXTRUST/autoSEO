@@ -31,7 +31,7 @@ describe("agentmail helper", () => {
   });
 
   it("assigns an inbox and clears the previous bot mapping", async () => {
-    const fetchMock = vi.fn(async (url: string, init?: { method?: string }) => {
+    const fetchMock = vi.fn(async (_url: string, init?: { method?: string }) => {
       if (!init?.method) {
         return {
           ok: true,

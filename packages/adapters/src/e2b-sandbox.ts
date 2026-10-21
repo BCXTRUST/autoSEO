@@ -52,11 +52,11 @@ import {
   extraDisplayInputCommand,
   extraDisplayLayout,
   observeExtraDisplayCommand,
+  PRIMARY_WATCH_VIEW_PORT,
   parseAllocatedExtraDisplay,
   parseExtraDisplayObservation,
   parseExtraDisplayViewPassword,
   parseReleasedExtraDisplay,
-  PRIMARY_WATCH_VIEW_PORT,
   releaseExtraDisplayCommand,
   screenControlKey,
 } from "./extra-displays.js";

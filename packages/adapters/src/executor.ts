@@ -28,11 +28,11 @@ import {
   appendToolCallSegment,
   assertTransition,
   blocksToAgentHistoryText,
-  DEFAULT_OPENROUTER_MODEL_ID,
   COMPUTER_AUTONOMY_INSTRUCTION,
   connectorKindFromToolName,
   containsSecret,
   createStreamingRedactor,
+  DEFAULT_OPENROUTER_MODEL_ID,
   endsSentence,
   formatSkillRunPrompt,
   humanizeToolName,
@@ -42,11 +42,11 @@ import {
   nextFence,
   prepareSandboxShellCommand,
   promptInvokesSkill,
-  resolveAuxOpenRouterModelId,
-  resolveOpenRouterModelId,
   redactSecrets,
   refuseBrowserHuntShell,
   resolveActionApproval,
+  resolveAuxOpenRouterModelId,
+  resolveOpenRouterModelId,
   sandboxCommandTimeoutMs,
   screenAllowsVaultFill,
   type ToolCallStreak,
@@ -169,6 +169,7 @@ import {
   updateScratchpadItemFromTool,
 } from "./scratchpad-tools.js";
 import { inferScript } from "./scripted-runtime.js";
+import type { EncryptedSecretStore } from "./secrets.js";
 import { loadAgentVaultContext } from "./site-login-context.js";
 import {
   listSiteLoginPlaintextsForRedact,
@@ -179,7 +180,6 @@ import {
   removeSiteLoginFromTool,
   upsertSiteLoginFromTool,
 } from "./site-login-tools.js";
-import type { EncryptedSecretStore } from "./secrets.js";
 import { type TakeoverResumeCheckpoint, takeoverResumeFromRelease } from "./takeover-resume.js";
 import { getActiveTeachingSession, parsePlaybook } from "./teaching-session.js";
 import {
@@ -303,7 +303,9 @@ export function createRunExecutor(deps: ExecutorDeps) {
       const id = resolveOpenRouterModelId(
         credential?.defaultModel ??
           settings?.defaultModelId ??
-          (deps.deploymentModelKey ? (process.env.PI_DEFAULT_MODEL ?? DEFAULT_OPENROUTER_MODEL_ID) : "scripted"),
+          (deps.deploymentModelKey
+            ? (process.env.PI_DEFAULT_MODEL ?? DEFAULT_OPENROUTER_MODEL_ID)
+            : "scripted"),
       );
       return {
         provider,
@@ -706,22 +708,28 @@ export function createRunExecutor(deps: ExecutorDeps) {
                 context,
               )
             : Promise.resolve(null);
-        const [discovered, currentTurnImages, memoryContext, scratchpadContext, recalled, vaultContext] =
-          await Promise.all([
-            discoveredPromise,
-            loadCurrentTurnImages(deps, turnBlocks, context),
-            loadAgentMemoryContext(deps.memory, bot.id, context),
-            loadAgentScratchpadContext(deps, {
-              workspaceId: run.workspaceId,
-              botId: bot.id,
-            }),
-            recallPromise,
-            loadAgentVaultContext(deps, {
-              workspaceId: run.workspaceId,
-              userId: run.userId,
-              botId: bot.id,
-            }),
-          ]);
+        const [
+          discovered,
+          currentTurnImages,
+          memoryContext,
+          scratchpadContext,
+          recalled,
+          vaultContext,
+        ] = await Promise.all([
+          discoveredPromise,
+          loadCurrentTurnImages(deps, turnBlocks, context),
+          loadAgentMemoryContext(deps.memory, bot.id, context),
+          loadAgentScratchpadContext(deps, {
+            workspaceId: run.workspaceId,
+            botId: bot.id,
+          }),
+          recallPromise,
+          loadAgentVaultContext(deps, {
+            workspaceId: run.workspaceId,
+            userId: run.userId,
+            botId: bot.id,
+          }),
+        ]);
         const semanticMemoryEnabled = Boolean(semanticMemory);
         let recalledMemory = "";
         let recallSucceeded = false;
@@ -974,7 +982,14 @@ export function createRunExecutor(deps: ExecutorDeps) {
               attemptId: attempt.id,
               leaseOwner: workerId,
               leaseFence: fence,
-              blocks: [buildApprovalAskBlock(applied!.effect.id, name, redactVaultToolArgs(name, args), runSecrets)],
+              blocks: [
+                buildApprovalAskBlock(
+                  applied!.effect.id,
+                  name,
+                  redactVaultToolArgs(name, args),
+                  runSecrets,
+                ),
+              ],
             });
             // pauseRunForInput returning false after a successful renew means the run row no
             // longer matches this worker. Exiting via pauseForApproval() would leave the run
@@ -1041,7 +1056,11 @@ export function createRunExecutor(deps: ExecutorDeps) {
             }
             observeWithoutAct += 1;
             return computerScreenToolResult(async () =>
-              formatObservation(await deps.sandbox.observe(computer, context), undefined, "observe"),
+              formatObservation(
+                await deps.sandbox.observe(computer, context),
+                undefined,
+                "observe",
+              ),
             );
           }
           if (name === "computer_act") {

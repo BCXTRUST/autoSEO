@@ -1,6 +1,5 @@
 import { normalizeSiteLoginHost, siteLoginUrl } from "@rakazo/core";
-import type { PrismaClient } from "@rakazo/db";
-import { Prisma } from "@rakazo/db";
+import type { Prisma, PrismaClient } from "@rakazo/db";
 import type { EncryptedSecretStore } from "./secrets.js";
 
 export const SITE_LOGIN_SHARES = ["workspace", "creator"] as const;
@@ -152,10 +151,7 @@ export async function loadSiteLoginForFill(
     site?: string;
     username?: string;
   },
-): Promise<
-  | { error: string; usernames?: string[] }
-  | { login: SiteLoginPublic; password: string }
-> {
+): Promise<{ error: string; usernames?: string[] } | { login: SiteLoginPublic; password: string }> {
   const loginId = input.loginId?.trim();
   if (loginId) {
     const row = await deps.prisma.siteLogin.findFirst({
@@ -265,12 +261,15 @@ export async function upsertSiteLogin(
     },
   });
   if (existing) {
-    const accessible =
-      existing.share === "workspace" || existing.createdByBotId === input.botId;
+    const accessible = existing.share === "workspace" || existing.createdByBotId === input.botId;
     if (!accessible) {
       return { error: "A login for that site already exists and this bot cannot change it." };
     }
-    if (input.from === "bot" && existing.share === "workspace" && existing.createdByBotId !== input.botId) {
+    if (
+      input.from === "bot" &&
+      existing.share === "workspace" &&
+      existing.createdByBotId !== input.botId
+    ) {
       return { error: "A shared login for that site already exists. Ask the user to update it." };
     }
   } else {
@@ -363,16 +362,16 @@ export async function removeSiteLogin(
       ...(input.from === "bot"
         ? siteLoginAccessWhere(input.botId)
         : {
-            OR: [
-              { share: "workspace" },
-              { createdByBotId: input.botId },
-              { createdByBotId: null },
-            ],
+            OR: [{ share: "workspace" }, { createdByBotId: input.botId }, { createdByBotId: null }],
           }),
     },
   });
   if (!existing) return { error: "Vault login not found." };
-  if (input.from === "bot" && existing.share === "workspace" && existing.createdByBotId !== input.botId) {
+  if (
+    input.from === "bot" &&
+    existing.share === "workspace" &&
+    existing.createdByBotId !== input.botId
+  ) {
     return { error: "This bot cannot delete a shared login." };
   }
   await deps.prisma.$transaction(async (tx) => {
@@ -382,7 +381,12 @@ export async function removeSiteLogin(
       await tx.secret.deleteMany({ where: { id: existing.secretId } });
     }
   });
-  return { ok: true as const, loginId: existing.id, host: existing.host, username: existing.username };
+  return {
+    ok: true as const,
+    loginId: existing.id,
+    host: existing.host,
+    username: existing.username,
+  };
 }
 
 export async function removeSiteLoginFromTool(
