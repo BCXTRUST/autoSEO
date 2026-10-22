@@ -1,6 +1,6 @@
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
-import { DEFAULT_OPENROUTER_MODEL_ID } from "@rakazo/core";
 import type { ModelOAuthSignInMode } from "@rakazo/contracts";
+import { DEFAULT_OPENROUTER_MODEL_ID } from "@rakazo/core";
 import { LOCAL_PROVIDER_ID, registerLocalProvider } from "./pi-local-provider.js";
 import { SUBSCRIPTION_SIGN_IN_PROVIDERS } from "./pi-oauth.js";
 import {

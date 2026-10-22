@@ -1,7 +1,7 @@
 import type { AgentRunRequest, AgentRuntime, JobPublisher } from "@rakazo/adapter-kit";
 import { historyCompactJob } from "@rakazo/adapter-kit";
 import type { MessageBlock } from "@rakazo/contracts";
-import { DEFAULT_AUX_MODEL_ID, blocksToAgentHistoryText } from "@rakazo/core";
+import { blocksToAgentHistoryText, DEFAULT_AUX_MODEL_ID } from "@rakazo/core";
 import type { PrismaClient } from "@rakazo/db";
 import type {
   ConfiguredMemoryProvider,
@@ -247,23 +247,23 @@ export async function compactHistory(deps: CompactHistoryDeps, threadId: string)
   const model = deps.resolveAuxModel
     ? await deps.resolveAuxModel({ userId: thread.userId, workspaceId: thread.workspaceId })
     : deps.resolveModel
-    ? await deps.resolveModel({ userId: thread.userId, workspaceId: thread.workspaceId })
-    : deps.deploymentModelKey
-      ? {
-          provider: "openrouter",
-          id: process.env.PI_AUX_MODEL ?? DEFAULT_SUMMARIZER_MODEL_ID,
-          apiKey: deps.deploymentModelKey,
-        }
-      : await (async () => {
-          const settings = await deps.prisma.deploymentSettings.findUnique({
-            where: { id: "default" },
-          });
-          return {
-            provider: settings?.defaultModelProvider ?? "scripted",
-            id: settings?.defaultModelId ?? "scripted",
-            apiKey: undefined,
-          };
-        })();
+      ? await deps.resolveModel({ userId: thread.userId, workspaceId: thread.workspaceId })
+      : deps.deploymentModelKey
+        ? {
+            provider: "openrouter",
+            id: process.env.PI_AUX_MODEL ?? DEFAULT_SUMMARIZER_MODEL_ID,
+            apiKey: deps.deploymentModelKey,
+          }
+        : await (async () => {
+            const settings = await deps.prisma.deploymentSettings.findUnique({
+              where: { id: "default" },
+            });
+            return {
+              provider: settings?.defaultModelProvider ?? "scripted",
+              id: settings?.defaultModelId ?? "scripted",
+              apiKey: undefined,
+            };
+          })();
   if (!deps.runtime.describe().capabilities.compaction || model.provider === "scripted") {
     console.log(`history.compact skipped for thread ${threadId}: no usable summarizer model`);
     return;

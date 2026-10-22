@@ -664,7 +664,7 @@ describe("E2B computer backend", () => {
   });
 
   it("takes a primary screenshot for watch preview without allocating extra displays", async () => {
-    const command = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
+    const command = vi.fn(async (_value: string) => ({ stdout: "", stderr: "", exitCode: 0 }));
     const screenshot = vi.fn(async () => new Uint8Array([137, 80, 78, 71]));
     const desktop = {
       sandboxId: "preview-box",
