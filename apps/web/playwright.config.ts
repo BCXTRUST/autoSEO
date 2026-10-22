@@ -1,8 +1,12 @@
+import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
 import { isRealSandboxProvider } from "./e2e/helpers";
 
 const webPort = Number(process.env.WEB_PORT ?? 5173);
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${webPort}`;
+const chromiumExecutable =
+  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
+  (existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined);
 const realSandbox = isRealSandboxProvider();
 const boxSandbox = process.env.SANDBOX_PROVIDER === "box";
 const reporters = [
@@ -25,7 +29,15 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(chromiumExecutable ? { executablePath: chromiumExecutable } : {}),
+      },
+    },
+  ],
   webServer: {
     command: "pnpm dev",
     url: baseURL,

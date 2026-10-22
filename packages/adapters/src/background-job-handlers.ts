@@ -54,7 +54,9 @@ export function createBackgroundJobHandlers(deps: {
           memoryProviders: deps.memoryProviders,
           deploymentModelKey: deps.deploymentModelKey,
           ...(deps.executor.resolveModel ? { resolveModel: deps.executor.resolveModel } : {}),
-          ...(deps.executor.resolveAuxModel ? { resolveAuxModel: deps.executor.resolveAuxModel } : {}),
+          ...(deps.executor.resolveAuxModel
+            ? { resolveAuxModel: deps.executor.resolveAuxModel }
+            : {}),
         },
         payload.threadId,
       );

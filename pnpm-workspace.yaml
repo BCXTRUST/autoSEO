@@ -4,3 +4,7 @@ packages:
   - "infra/sandboxes/supervisor"
   - "infra/sandboxes/e2b-browser"
   - "infra/updater"
+
+overrides:
+  react: 19.2.3
+  react-dom: 19.2.3

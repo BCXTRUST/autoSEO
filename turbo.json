@@ -7,6 +7,7 @@
     "build": {
       "dependsOn": ["^build", "^generate"],
       "env": [
+        "ASTRO_TELEMETRY_DISABLED",
         "BETTER_AUTH_SECRET",
         "DATABASE_URL",
         "ENCRYPTION_KEY",
@@ -17,7 +18,8 @@
       "outputs": ["dist/**", "src/generated/**"]
     },
     "check": {
-      "dependsOn": ["^check", "^generate"]
+      "dependsOn": ["^check", "^generate"],
+      "env": ["ASTRO_TELEMETRY_DISABLED", "EXPO_NO_TELEMETRY", "__UNSAFE_EXPO_HOME_DIRECTORY"]
     },
     "test": {
       "dependsOn": ["^generate"],

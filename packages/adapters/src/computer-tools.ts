@@ -134,7 +134,7 @@ export function observationScreenshot(
   result: AgentToolExecutionResult,
 ): { bytes: Uint8Array; mimeType: string; name: string } | undefined {
   const image = result.content.find((part) => part.type === "image");
-  if (!image || image.type !== "image" || !image.data) return undefined;
+  if (image?.type !== "image" || !image.data) return undefined;
   const mimeType = image.mimeType || "image/png";
   const ext = mimeType.includes("jpeg") ? "jpg" : mimeType.includes("webp") ? "webp" : "png";
   return {

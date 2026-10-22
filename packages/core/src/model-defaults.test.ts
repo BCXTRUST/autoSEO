@@ -38,7 +38,9 @@ describe("openrouter model defaults", () => {
     vi.stubEnv("PI_AUX_MODEL", "");
     expect(DEFAULT_AUX_MODEL_ID).toBe("google/gemini-2.5-flash");
     expect(resolveAuxOpenRouterModelId(undefined)).toBe("google/gemini-2.5-flash");
-    expect(resolveAuxOpenRouterModelId(DEFAULT_OPENROUTER_MODEL_ID)).toBe("google/gemini-2.5-flash");
+    expect(resolveAuxOpenRouterModelId(DEFAULT_OPENROUTER_MODEL_ID)).toBe(
+      "google/gemini-2.5-flash",
+    );
     expect(resolveAuxOpenRouterModelId("moonshotai/kimi-k2")).toBe("moonshotai/kimi-k2");
     vi.stubEnv("PI_AUX_MODEL", "x-ai/grok-4-fast");
     expect(resolveAuxOpenRouterModelId("moonshotai/kimi-k2")).toBe("x-ai/grok-4-fast");
