@@ -749,6 +749,8 @@ async function searchBrowserFirst(args: {
     return { allowed: false, hosts: [] };
   }
   const searchUrl = forumSearchUrl({
+    language: market.language,
+    country: market.country,
     name: project.name,
     brandName: project.brandName,
     topic: browserQuery,

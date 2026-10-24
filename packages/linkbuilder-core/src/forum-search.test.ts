@@ -8,6 +8,25 @@ import {
 } from "./forum-search.js";
 
 describe("forum search", () => {
+  it("opens the configured English topic in its target market", () => {
+    const project = {
+      name: "Signal Wellness",
+      brandName: "Signal Wellness",
+      markets: [{ country: "US", language: "en" }],
+      topicLanes: [{ tag: "PEMF wellness", description: "Meditation and relaxation" }],
+    };
+    const url = new URL(forumSearchUrlFromProject(project));
+    expect(url.origin).toBe("https://www.google.com");
+    expect(url.searchParams.get("q")).toBe("PEMF wellness forum");
+    expect(url.searchParams.get("hl")).toBe("en");
+    expect(url.searchParams.get("gl")).toBe("us");
+    expect(
+      new URL(
+        forumSearchUrl({ language: "en", country: "US", topic: "PEMF wellness forum" }),
+      ).searchParams.get("q"),
+    ).toBe(url.searchParams.get("q"));
+  });
+
   it("searches Google.de for the human problem, not the shop", () => {
     const url = forumSearchUrlFromProject({
       name: "Vitaminexpress",

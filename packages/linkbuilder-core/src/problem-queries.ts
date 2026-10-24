@@ -4,9 +4,11 @@
  */
 
 export const PROBLEM_MARKETS = ["DE", "AT", "CH"] as const;
-export type ProblemMarket = (typeof PROBLEM_MARKETS)[number];
+export type ProblemMarket = string;
 
 export interface ProblemQueryInput {
+  language?: string | null;
+  country?: string | null;
   name?: string | null;
   brandName?: string | null;
   topic?: string | null;
@@ -25,7 +27,7 @@ export interface UseCaseLane {
   id: string;
   nutrient: string;
   useCase: string;
-  /** Short German Google.de query. Never includes the shop name. */
+  /** A topic query in the configured language. Never includes the shop name. */
   query: string;
   market: ProblemMarket;
   destinationUrl: string | null;
@@ -300,6 +302,9 @@ function destinationFor(
 
 /** Use-case lanes for every nutrient the pages and catalog actually mention. */
 export function useCaseLanes(input: ProblemQueryInput): UseCaseLane[] {
+  if (input.language && !/^de(?:-|$)/i.test(input.language)) {
+    return configuredTopicLanes(input);
+  }
   const text = catalogBlob(input);
   if (!text) return [];
   const targets = targetsFromPages(input.pages);
@@ -320,6 +325,43 @@ export function useCaseLanes(input: ProblemQueryInput): UseCaseLane[] {
     }
   }
   return lanes;
+}
+
+function configuredTopicLanes(input: ProblemQueryInput): UseCaseLane[] {
+  const shops = shopNames(input);
+  const candidates = [
+    input.topic,
+    ...(input.keywords ?? []),
+    ...(input.pages ?? []).map((p) => p.keyword),
+  ];
+  const topics = new Map<string, string>();
+  for (const value of candidates) {
+    if (typeof value !== "string" || /https?:\/\/|www\.|[\w-]+\.[a-z]{2,}(?:\b|\/)/i.test(value))
+      continue;
+    const topic = stripShopNames(value, shops)
+      .replace(/\b(?:buy|shop|kaufen|bestellen)\b/gi, " ")
+      .replace(/\bforums?\s*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (
+      topic.length < 2 ||
+      topic.length > 80 ||
+      /[<>"'\\]/.test(topic) ||
+      !queryOmitsShop(topic, shops)
+    )
+      continue;
+    topics.set(topic.toLowerCase(), topics.get(topic.toLowerCase()) ?? topic);
+  }
+  const market = /^[A-Z]{2}$/.test(input.country ?? "") ? input.country! : "US";
+  return [...topics.values()].map((topic, index) => ({
+    id: `configured-${index + 1}`,
+    nutrient: topic,
+    useCase: topic,
+    query: `${topic} forum`,
+    market,
+    destinationUrl: null,
+    destinationKind: null,
+  }));
 }
 
 /** The query the computer opens. Null when the catalog has no human problem. */
@@ -354,6 +396,7 @@ export function primaryProblemQueryFromProject(project: {
   brandName?: string | null;
   topicLanes?: unknown;
   targets?: unknown;
+  markets?: unknown;
 }): string | null {
   return primaryProblemQuery(problemInputFromProject(project));
 }
@@ -385,6 +428,7 @@ export function boardTopicQueriesFromProject(project: {
   brandName?: string | null;
   topicLanes?: unknown;
   targets?: unknown;
+  markets?: unknown;
 }): string[] {
   return boardTopicQueries(problemInputFromProject(project));
 }
@@ -395,6 +439,7 @@ export function relevanceTopicFromProject(project: {
   brandName?: string | null;
   topicLanes?: unknown;
   targets?: unknown;
+  markets?: unknown;
 }): { tag: string; description: string } {
   const lane =
     Array.isArray(project.topicLanes) &&
@@ -418,6 +463,7 @@ export function relevanceTopicsFromProject(project: {
   brandName?: string | null;
   topicLanes?: unknown;
   targets?: unknown;
+  markets?: unknown;
 }): { tag: string; description: string } {
   const lanes = useCaseLanes(problemInputFromProject(project));
   const nutrients: string[] = [];
@@ -468,6 +514,7 @@ export function problemInputFromProject(project: {
   brandName?: string | null;
   topicLanes?: unknown;
   targets?: unknown;
+  markets?: unknown;
 }): ProblemQueryInput {
   const pages: { url?: string; title?: string; keyword?: string }[] = [];
   const keywords: string[] = [];
@@ -500,7 +547,10 @@ export function problemInputFromProject(project: {
       if (keyword) keywords.push(keyword);
     }
   }
+  const market = Array.isArray(project.markets) ? project.markets[0] : null;
   return {
+    ...(typeof market?.language === "string" ? { language: market.language } : {}),
+    ...(typeof market?.country === "string" ? { country: market.country } : {}),
     name: project.name,
     brandName: project.brandName,
     keywords,

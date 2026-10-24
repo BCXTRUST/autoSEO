@@ -21,6 +21,77 @@ function browserWith(links: Array<{ text: string; href: string }>): () => Promis
 }
 
 describe("discoverDueProjects", () => {
+  it("prepares a computer and opens an English non-catalog topic", async () => {
+    const events: string[] = [];
+    const visited: string[] = [];
+    const steps: unknown[] = [];
+    const project = {
+      id: "english-project",
+      workspaceId: "workspace",
+      name: "Signal Wellness",
+      brandName: "Signal Wellness",
+      status: "active",
+      archivedAt: null,
+      lastDiscoveredAt: null,
+      schedule: { timezone: "UTC" },
+      markets: [{ country: "US", language: "en", locale: "en-US", timezoneId: "America/New_York" }],
+      topicLanes: [{ id: "pemf", tag: "PEMF wellness", description: "Meditation and relaxation" }],
+      targets: [],
+      marketPolicy: "primary_first",
+      quotas: { livePerDay: 1 },
+      denyHosts: [],
+    };
+    const prisma = {
+      lbProject: {
+        findMany: async () => [project],
+        update: async () => ({}),
+        updateMany: async () => ({ count: 1 }),
+      },
+      lbHost: { findMany: async () => [], count: async () => 0 },
+      lbRun: {
+        findFirst: async () => ({ id: "run", status: "running" }),
+        update: async () => ({}),
+      },
+      lbRunStep: {
+        findMany: async () => [],
+        findFirst: async () => null,
+        count: async () => steps.length,
+        create: async (args: { data: unknown }) => {
+          steps.push(args.data);
+          return args.data;
+        },
+      },
+      lbCostEntry: { count: async () => 0, create: async () => ({}) },
+    } as unknown as PrismaClient;
+    const session = {
+      goto: async (url: string) => {
+        visited.push(url);
+      },
+      url: async () => visited.at(-1) ?? "about:blank",
+      pageText: async () => "No results",
+      listAnchors: async () => [],
+      exists: async () => false,
+      close: async () => undefined,
+    } as unknown as BrowserSession;
+    await discoverDueProjects({
+      prisma,
+      now: new Date("2026-10-23T10:00:00Z"),
+      search: { search: async () => [] } as unknown as SearchProvider,
+      prepareComputer: async () => {
+        events.push("computer");
+      },
+      openBrowser: async () => {
+        events.push("browser");
+        return session;
+      },
+    });
+    expect(events).toEqual(["computer", "browser"]);
+    const url = new URL(visited[0]!);
+    expect(url.searchParams.get("q")).toBe("PEMF wellness forum");
+    expect(url.searchParams.get("hl")).toBe("en");
+    expect(url.searchParams.get("gl")).toBe("us");
+  });
+
   const browserSearch = "LINK_BUILDER_BROWSER_SEARCH";
   const previousBrowser = process.env[browserSearch];
   beforeEach(() => {
