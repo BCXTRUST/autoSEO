@@ -3,6 +3,7 @@ import {
   type ProblemQueryInput,
   primaryProblemQuery,
   primaryProblemQueryFromProject,
+  problemInputFromProject,
   shopNames,
 } from "./problem-queries.js";
 
@@ -33,10 +34,14 @@ export function forumSearchQuery(input: ForumSearchInput): string {
 
 /** Google search for the stored topic. Never a forum host and never an example domain. */
 export function forumSearchUrl(input: ForumSearchInput): string {
-  const url = new URL(SEARCH_ORIGIN);
+  const language = input.language?.trim() || "de";
+  const country = input.country?.trim().toLowerCase() || "de";
+  const url = new URL(
+    /^de(?:-|$)/i.test(language) ? SEARCH_ORIGIN : "https://www.google.com/search",
+  );
   url.searchParams.set("q", forumSearchQuery(input));
-  url.searchParams.set("hl", "de");
-  url.searchParams.set("gl", "de");
+  url.searchParams.set("hl", language);
+  url.searchParams.set("gl", country);
   return url.toString();
 }
 
@@ -73,9 +78,11 @@ export function forumSearchUrlFromProject(project: {
   brandName?: string | null;
   topicLanes?: unknown;
   targets?: unknown;
+  markets?: unknown;
 }): string {
   const fromCatalog = primaryProblemQueryFromProject(project);
   return forumSearchUrl({
+    ...problemInputFromProject(project),
     name: project.name,
     brandName: project.brandName,
     topic: fromCatalog ?? topicFromLanes(project.topicLanes),

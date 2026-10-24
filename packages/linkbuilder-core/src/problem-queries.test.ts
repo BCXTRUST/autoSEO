@@ -4,6 +4,7 @@ import {
   matchDeepLink,
   pageKind,
   primaryProblemQuery,
+  primaryProblemQueryFromProject,
   queryOmitsShop,
   relevanceTopicFromProject,
   searchedGoogleLine,
@@ -26,6 +27,31 @@ const magnesium = {
 };
 
 describe("problem queries", () => {
+  it("uses configured English topics outside the supplement catalog", () => {
+    const project = {
+      name: "Signal Wellness",
+      brandName: "Signal Wellness",
+      markets: [{ country: "US", language: "en" }],
+      topicLanes: [{ tag: "PEMF wellness", description: "Meditation and relaxation" }],
+      targets: [{ url: "https://wellness.example/research", keywordClusters: ["PEMF research"] }],
+    };
+    expect(primaryProblemQueryFromProject(project)).toBe("PEMF wellness forum");
+    expect(
+      primaryProblemQuery({ language: "en", country: "US", keywords: ["Magnesium sleep"] }),
+    ).toBe("Magnesium sleep forum");
+  });
+
+  it("does not turn a brand or URL into an English topic", () => {
+    expect(
+      primaryProblemQuery({
+        language: "en",
+        name: "Signal Wellness",
+        brandName: "Signal Wellness",
+        keywords: ["Signal Wellness", "https://wellness.example/research", "boards.example"],
+      }),
+    ).toBeNull();
+  });
+
   it("searches the magnesium problem and leaves the shop name out", () => {
     const query = primaryProblemQuery(magnesium);
     expect(query).toBe("Magnesium Krämpfe Forum");
