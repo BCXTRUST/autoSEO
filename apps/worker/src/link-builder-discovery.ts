@@ -669,13 +669,18 @@ async function discoverByDataForSeo(args: {
       })
     : 0;
   if (dailyLimit && inspectedToday >= dailyLimit) {
-    await recordDiscoveryStep(
-      input.prisma,
-      project,
-      input.now,
-      `Research complete: ${dailyLimit} sites reviewed`,
-      null,
-    );
+    const completion = `Research complete: ${dailyLimit} sites reviewed`;
+    const recorded = await input.prisma.lbRunStep.findFirst({
+      where: {
+        run: { projectId: project.id },
+        kind: "discover",
+        startedAt: { gte: startOfZonedDay(input.now, timeZone) },
+        outcome: { path: ["lastAction"], equals: completion },
+      },
+      select: { id: true },
+    });
+    if (recorded) return 0;
+    await recordDiscoveryStep(input.prisma, project, input.now, completion, null);
     await input.prisma.lbProject.update({
       where: { id: project.id },
       data: { lastDiscoveredAt: input.now },

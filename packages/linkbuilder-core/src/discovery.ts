@@ -212,8 +212,8 @@ export async function discoverHosts(input: {
     const language = detected.language ?? hit.market.language;
     const country = detected.country ?? hit.market.country;
     const offLanguage = detected.language
-      ? detected.language !== hit.market.language
-      : hit.market.language === "en";
+      ? detected.language !== hit.market.language.split("-")[0]
+      : /^en(?:-|$)/.test(hit.market.language);
     const forum =
       facts.platform !== "unknown" || (facts.threads.length >= 5 && Boolean(facts.registerUrl));
     let status: FunnelHost["status"] = offLanguage ? "off_topic" : settled.status;
