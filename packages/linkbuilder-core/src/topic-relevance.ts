@@ -11,6 +11,7 @@ export interface TopicProject {
   brandName?: string | null;
   topicLanes?: unknown;
   targets?: unknown;
+  markets?: unknown;
 }
 
 export interface TopicPage {
@@ -170,6 +171,29 @@ export function pageMatchesTopics(page: TopicPage, project: TopicProject): boole
   const title = page.title ?? "";
   if (titleIsOffTopic(title, terms)) return false;
   const blob = [page.pageText ?? "", title].join("\n");
+  const market = Array.isArray(project.markets) ? project.markets[0] : null;
+  if (market && /^en(?:-|$)/i.test(market.language ?? "")) {
+    // Keep configured phrases intact: audio frequency alone does not establish
+    // relevance to frequency wellness, nor does a generic word in instructions.
+    const labels: string[] = [];
+    if (Array.isArray(project.topicLanes))
+      for (const lane of project.topicLanes) pushText(labels, lane?.tag);
+    if (Array.isArray(project.targets))
+      for (const target of project.targets) {
+        if (Array.isArray(target?.keywordClusters))
+          for (const keyword of target.keywordClusters) pushText(labels, keyword);
+      }
+    const phrases = labels
+      .flatMap((label) => label.split(/[,;\n]+/))
+      .map((label) =>
+        stripShopNames(label, shopNames(project))
+          .replace(/\bforums?\b/gi, "")
+          .replace(/\s+/g, " ")
+          .trim(),
+      )
+      .filter((phrase) => phrase.length >= 3 && !STOP.has(phrase.toLowerCase()));
+    if (phrases.length) return phrases.some((phrase) => hasWord(blob.replace(/\s+/g, " "), phrase));
+  }
   return terms.some((term) => hasTerm(blob, term));
 }
 

@@ -1737,68 +1737,84 @@ describe("dataforseo primary search", () => {
 });
 
 describe("daily research ceiling", () => {
-  it("does not search or open a browser after 20 sites have been reviewed", async () => {
-    const previous = process.env.LINK_BUILDER_BROWSER_SEARCH;
-    process.env.LINK_BUILDER_BROWSER_SEARCH = "off";
-    const actions: string[] = [];
-    const project = {
-      id: "research-project",
-      workspaceId: "workspace",
-      status: "active",
-      archivedAt: null,
-      lastDiscoveredAt: null,
-      name: "Signal",
-      brandName: "Signal",
-      schedule: { timezone: "UTC" },
-      markets: [{ country: "US", language: "en", locale: "en-US", timezoneId: "America/New_York" }],
-      topicLanes: [
-        { id: "meditation", tag: "Meditation", description: "Relaxation", exampleQuestions: [] },
-      ],
-      targets: [],
-      denyHosts: [],
-      marketPolicy: "primary_first",
-      quotas: { livePerDay: 1 },
-      content: { researchSiteLimit: 20, researchBeforeRegistration: true },
-    };
-    const prisma = {
-      lbProject: { findMany: async () => [project], update: async () => ({}) },
-      lbHost: {
-        findMany: async () => [],
-        count: async (args: { where: { status?: string } }) =>
-          args.where.status === "warming" ? 0 : 20,
-      },
-      lbRun: {
-        findFirst: async () => ({ id: "run", status: "running" }),
-        update: async () => ({}),
-      },
-      lbRunStep: {
-        findMany: async () => [],
-        findFirst: async () => null,
-        count: async () => 0,
-        create: async (args: { data: { outcome: { lastAction: string } } }) => {
-          actions.push(args.data.outcome.lastAction);
-          return args.data;
+  it.each([
+    { reviewed: 20, eligible: 0, searchExpected: false },
+    { reviewed: 5, eligible: 5, searchExpected: false },
+    { reviewed: 5, eligible: 1, searchExpected: true },
+  ])(
+    "respects the review ceiling and eligible goal: $reviewed reviewed, $eligible eligible",
+    async ({ reviewed, eligible, searchExpected }) => {
+      const previous = process.env.LINK_BUILDER_BROWSER_SEARCH;
+      process.env.LINK_BUILDER_BROWSER_SEARCH = "off";
+      const actions: string[] = [];
+      let searched = false;
+      const project = {
+        id: "research-project",
+        workspaceId: "workspace",
+        status: "active",
+        archivedAt: null,
+        lastDiscoveredAt: null,
+        name: "Signal",
+        brandName: "Signal",
+        schedule: { timezone: "UTC" },
+        markets: [
+          { country: "US", language: "en", locale: "en-US", timezoneId: "America/New_York" },
+        ],
+        topicLanes: [
+          { id: "meditation", tag: "Meditation", description: "Relaxation", exampleQuestions: [] },
+        ],
+        targets: [],
+        denyHosts: [],
+        marketPolicy: "primary_first",
+        quotas: { livePerDay: 1 },
+        content: {
+          researchSiteLimit: 20,
+          researchTargetCount: 5,
+          researchBeforeRegistration: true,
         },
-      },
-      lbCostEntry: { count: async () => 0 },
-    } as unknown as PrismaClient;
-    try {
-      await discoverDueProjects({
-        prisma,
-        now: new Date("2026-10-26T12:00:00Z"),
-        search: {
-          search: async () => {
-            throw new Error("Daily research ceiling was exceeded");
+      };
+      const prisma = {
+        lbProject: { findMany: async () => [project], update: async () => ({}) },
+        lbHost: {
+          findMany: async () => [],
+          count: async (args: { where: { status?: unknown } }) =>
+            args.where.status === "warming" ? 0 : args.where.status ? eligible : reviewed,
+        },
+        lbRun: {
+          findFirst: async () => ({ id: "run", status: "running" }),
+          update: async () => ({}),
+        },
+        lbRunStep: {
+          findMany: async () => [],
+          findFirst: async () => null,
+          count: async () => 0,
+          create: async (args: { data: { outcome: { lastAction: string } } }) => {
+            actions.push(args.data.outcome.lastAction);
+            return args.data;
           },
-        } as unknown as SearchProvider,
-        openBrowser: async () => {
-          throw new Error("Research should not open a browser");
         },
-      });
-      expect(actions).toContain("Research complete: 20 sites reviewed");
-    } finally {
-      if (previous === undefined) delete process.env.LINK_BUILDER_BROWSER_SEARCH;
-      else process.env.LINK_BUILDER_BROWSER_SEARCH = previous;
-    }
-  });
+        lbCostEntry: { count: async () => 0 },
+      } as unknown as PrismaClient;
+      try {
+        await discoverDueProjects({
+          prisma,
+          now: new Date("2026-10-26T12:00:00Z"),
+          search: {
+            search: async () => {
+              searched = true;
+              throw new Error("Controlled search interruption");
+            },
+          } as unknown as SearchProvider,
+          openBrowser: async () => {
+            throw new Error("Research should not open a browser");
+          },
+        });
+        expect(searched).toBe(searchExpected);
+        if (reviewed === 20) expect(actions).toContain("Research complete: 20 sites reviewed");
+      } finally {
+        if (previous === undefined) delete process.env.LINK_BUILDER_BROWSER_SEARCH;
+        else process.env.LINK_BUILDER_BROWSER_SEARCH = previous;
+      }
+    },
+  );
 });

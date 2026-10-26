@@ -117,6 +117,30 @@ describe("project language gate", () => {
     expect(queries.join(" ")).not.toContain("Registrieren");
     expect(queries.join(" ")).toContain("register");
   });
+  it("spreads English searches across topics, rotates later batches, and excludes broad platforms", () => {
+    const first = planDiscoveryQueries(
+      ["frequency wellness forum", "PEMF forum", "meditation forum"],
+      3,
+      "en",
+    );
+    expect(first.map((query) => query.split(" (")[0])).toEqual([
+      "frequency wellness",
+      "PEMF",
+      "meditation",
+    ]);
+    expect(
+      first.every((query) => query.includes("inurl:") && query.includes("-site:youtube.com")),
+    ).toBe(true);
+    expect(first.join(" ")).not.toMatch(/forum Forum/i);
+    expect(
+      planDiscoveryQueries(
+        ["frequency wellness forum", "PEMF forum", "meditation forum"],
+        3,
+        "en",
+        3,
+      ),
+    ).not.toEqual(first);
+  });
 });
 
 describe("bounded research shortlist", () => {

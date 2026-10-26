@@ -883,6 +883,7 @@ function Dashboard({
             threads={visibleThreads}
             searches={searches}
             dailyLimit={project.content?.researchSiteLimit}
+            targetCount={project.content?.researchTargetCount}
             timeZone={project.schedule?.timezone}
             currentUrl={working ? (status?.run?.currentUrl ?? null) : null}
           />

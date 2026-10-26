@@ -409,6 +409,7 @@ export type LbModelLaneOverride = z.infer<typeof LbModelLaneOverrideSchema>;
 
 export const LbContentSchema = z.object({
   researchSiteLimit: z.number().int().min(1).max(100).optional(),
+  researchTargetCount: z.number().int().min(1).max(100).optional(),
   researchBeforeRegistration: z.boolean().optional(),
   toneNotes: z.string().max(1000).default(""),
   bannedClaims: z.array(z.string().trim().min(1).max(200)).max(200).default([]),

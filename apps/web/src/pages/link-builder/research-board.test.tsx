@@ -39,6 +39,20 @@ const thread: LbThreadView = {
 };
 
 describe("research missions", () => {
+  it("counts eligible sites separately from rejected candidates", () => {
+    const html = renderToStaticMarkup(
+      <ResearchBoard
+        hosts={[host, { ...host, id: "rejected", status: "off_topic" }]}
+        threads={[]}
+        searches={1}
+        currentUrl={null}
+        dailyLimit={20}
+        targetCount={5}
+      />,
+    );
+    expect(html).toContain("1/5 eligible sites");
+    expect(html).toContain("Finding replacements for skipped sites");
+  });
   it("shows real targets, recorded evidence, decisions, and safe visit links", () => {
     const html = renderToStaticMarkup(
       <ResearchBoard
