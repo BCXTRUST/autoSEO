@@ -108,6 +108,25 @@ const identity = [
 ];
 
 describe("generic registration flow", () => {
+  it("fills a server-required birthday on retry while leaving optional birthday fields alone", () => {
+    const fields = [
+      ...identity,
+      ...["day", "month", "year"].map((part) =>
+        control({ selector: `#dob_${part}`, name: `dob_${part}`, label: "Date of birth" }),
+      ),
+    ];
+    const optional = planRegistration(fields, profile);
+    const required = planRegistration(fields, profile, { birthdayRequired: true });
+    expect(optional.ok).toBe(true);
+    expect(required.ok).toBe(true);
+    if (!optional.ok || !required.ok) return;
+    expect(optional.actions.some((action) => action.selector.startsWith("#dob_"))).toBe(false);
+    expect(
+      required.actions
+        .filter((action) => action.selector.startsWith("#dob_"))
+        .map((action) => action.value),
+    ).toEqual(["15", "6", "1990"]);
+  });
   it("uses the unknown platform driver and parks instead of guessing", () => {
     expect(boardDriverFor("unknown")?.platform).toBe("unknown");
     const tied = planRegistration(

@@ -10,6 +10,30 @@ const GERMAN_STOPWORDS = new Set([
   "auf",
   "fur",
 ]);
+const ENGLISH_STOPWORDS = new Set([
+  "the",
+  "and",
+  "that",
+  "this",
+  "with",
+  "from",
+  "have",
+  "your",
+  "you",
+  "are",
+  "for",
+  "can",
+  "what",
+  "how",
+  "about",
+  "not",
+  "was",
+  "were",
+  "they",
+  "their",
+  "our",
+  "has",
+]);
 
 function fold(value: string): string {
   return value
@@ -60,7 +84,7 @@ function countryFromHost(url: string, language: string | null): string | null {
   return null;
 }
 
-/** Language from the page markup, then German stopwords. Country from the ccTLD. */
+/** Language from markup and script evidence, then conservative text evidence. */
 export function detectLanguage(
   html: string,
   url: string,
@@ -91,6 +115,10 @@ export function detectLanguage(
     if (tokens.length > 0) {
       const german = tokens.filter((token) => GERMAN_STOPWORDS.has(token)).length / tokens.length;
       if (german >= 0.04) language = "de";
+      else if (tokens.length >= 50) {
+        const english = tokens.filter((token) => ENGLISH_STOPWORDS.has(token));
+        if (english.length / tokens.length >= 0.12 && new Set(english).size >= 8) language = "en";
+      }
     }
   }
   return { language, country: countryFromHost(url, language) };

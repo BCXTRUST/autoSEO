@@ -44,6 +44,7 @@ describe("registration notices", () => {
   it("classifies the registration answers the generic flow retries or stops on", () => {
     expect(classifyRegistration("Please enter your birthday.", true).kind).toBe("form_error");
     expect(formErrorFixable(["Please enter your birthday."])).toBe(true);
+    expect(formErrorFixable(["Please enter a valid date of birth."])).toBe(true);
     expect(formErrorFixable(["The username you entered is already in use."])).toBe(true);
     expect(
       usernameFormatRejected([

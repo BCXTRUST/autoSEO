@@ -235,7 +235,7 @@ export async function discoverHosts(input: {
       const register = await input.fetchText(preliminary.registerUrl);
       if (register !== null) pages.push({ url: preliminary.registerUrl, html: register });
     }
-    for (const path of ["/rules", "/faq", "/tos", "/guidelines"]) {
+    for (const path of ["/rules", "/faq", "/tos", "/guidelines", "/help/terms/"]) {
       const url = `${new URL(homepageUrl).origin}${path}`;
       const html = await input.fetchText(url);
       if (html !== null) pages.push({ url, html });

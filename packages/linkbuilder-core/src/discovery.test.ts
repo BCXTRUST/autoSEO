@@ -63,6 +63,23 @@ describe("footprint planning", () => {
 });
 
 describe("project language gate", () => {
+  it("checks XenForo terms before qualifying a matching English forum", async () => {
+    const hosts = await discoverHosts({
+      lanes: [{ id: "meditation", tag: "Meditation", description: "", exampleQuestions: [] }],
+      markets: [{ country: "US", language: "en", locale: "en-US", timezoneId: "America/New_York" }],
+      policy: "primary_only",
+      supply: {},
+      need: 1,
+      search: async () => [
+        { url: "https://board.example/threads/meditation.123/", title: "Meditation", snippet: "" },
+      ],
+      fetchText: async (url) =>
+        url.endsWith("/help/terms/")
+          ? '<html lang="en"><p>You may not automate access to the forum.</p></html>'
+          : '<html lang="en"><body data-xf-init=""><a href="/register/">Register</a><p>Meditation discussion</p></body></html>',
+    });
+    expect(hosts[0]).toMatchObject({ status: "denied", reason: "automation_forbidden" });
+  });
   it("keeps the forum subdomain instead of visiting the marketing homepage", async () => {
     const visited: string[] = [];
     const hosts = await discoverHosts({

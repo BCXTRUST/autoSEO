@@ -23,6 +23,25 @@ const lane = {
 };
 
 describe("detectLanguage", () => {
+  it("recognizes substantial English discussion text without a language tag", () => {
+    const text =
+      "This is our community where you can share your experience with others. What have you tried and how has that worked for you? We are here to learn from their questions about sleep and meditation, and not to offer medical advice. The discussion should include what you know about the research and how this can help our understanding.";
+    expect(
+      detectLanguage(`<html><body>${text}</body></html>`, "https://board.example/").language,
+    ).toBe("en");
+  });
+  it.each([
+    "Checking your browser. Please wait.",
+    "Please enable JavaScript to continue.",
+    "meditation frequency wellness PEMF research technology ".repeat(20),
+    "Bienvenue sur notre communauté pour discuter de votre santé et partager vos expériences avec les autres membres. ".repeat(
+      8,
+    ),
+  ])("does not infer English from insufficient or unrelated text", (text) => {
+    expect(
+      detectLanguage(`<html><body>${text}</body></html>`, "https://board.example/").language,
+    ).not.toBe("en");
+  });
   it("rejects a misleading English tag when the visible page is Chinese", () => {
     expect(
       detectLanguage(
