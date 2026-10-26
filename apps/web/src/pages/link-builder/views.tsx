@@ -35,7 +35,7 @@ import { BrowserOnlyFrame } from "./browser-only-frame.js";
 export type ScreenState = "off" | "starting" | "no_browser" | "live";
 
 const SCREEN_PANE_STATUS: Record<Exclude<ScreenState, "live">, string> = {
-  off: "Computer is off",
+  off: "Browser idle",
   starting: "Starting",
   no_browser: "Opening the browser",
 };
@@ -48,6 +48,8 @@ function recordedPaneSentence(action: string | null, projectStatus: string | nul
   if (
     /^Skipped \d+ denied forums$/.test(text) ||
     text.startsWith("Search failed:") ||
+    text.startsWith("Browser search failed:") ||
+    text === "Researching with search service" ||
     text.startsWith("Working on ") ||
     text.startsWith("Found forum ") ||
     text === "No topics to search" ||
@@ -797,24 +799,45 @@ function Dashboard({
   });
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-4" aria-label="Dashboard">
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1.55fr)_minmax(240px,380px)] gap-4">
-        <ComputerPane
-          working={working}
-          action={cornerLabel(action, WORK_STAGE_LABELS[stage])}
-          stage={stage}
-          frame={frame}
-          screenState={screenState}
-          screenError={screenError}
-          screenPending={screenPending}
-          loadArtifact={loadArtifact}
-          projectStatus={status?.projectStatus ?? null}
-          runLastAction={status?.run?.lastAction ?? null}
-        />
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1.55fr)_minmax(280px,1fr)] gap-4">
+        <details className="min-h-0 lg:col-start-2 lg:row-start-1">
+          <summary className="cursor-pointer pb-3 font-mono text-sm">Live browser</summary>
+          <ComputerPane
+            working={working}
+            action={cornerLabel(action, WORK_STAGE_LABELS[stage])}
+            stage={stage}
+            frame={frame}
+            screenState={screenState}
+            screenError={screenError}
+            screenPending={screenPending}
+            loadArtifact={loadArtifact}
+            projectStatus={status?.projectStatus ?? null}
+            runLastAction={status?.run?.lastAction ?? null}
+          />
+        </details>
         <div
           ref={taskColumn}
           data-task-column=""
-          className="rk-scroll flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain"
+          className="rk-scroll flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain lg:col-start-1 lg:row-start-1"
         >
+          <BuiCard>
+            <div className="p-4" role="status">
+              <p className="text-lg font-medium">Campaign activity</p>
+              <p className="mt-2 text-sm">
+                {status?.run?.lastAction?.startsWith("Browser search failed:")
+                  ? "Browser unavailable — restart the campaign to retry"
+                  : status?.run?.lastError
+                    ? "Campaign needs attention — check recent activity"
+                    : status?.projectStatus === "active" &&
+                        status?.run?.lastAction === "Researching with search service"
+                      ? "Researching — no browser needed"
+                      : status?.activityLabel || "Ready to start"}
+              </p>
+              <p className="mt-2 text-sm text-[#A8A398]">
+                Research can run without a browser. Open Live browser to watch site visits.
+              </p>
+            </div>
+          </BuiCard>
           <ActivityFeed items={shown} />
         </div>
       </div>
@@ -969,8 +992,18 @@ function ComputerPane({
   const frameUrl = frame?.kind === "url" ? frame.url : "";
   const waiting = frame?.kind !== "url" && frame?.kind !== "artifact";
   const errorStatus = screenError && !isMailSendFailure(screenError) ? screenError : null;
+  const recordedStatus = recordedPaneSentence(runLastAction, projectStatus);
+  const browserFailure = recordedStatus?.startsWith("Browser search failed:")
+    ? "Browser unavailable — restart the campaign to retry"
+    : null;
+  const backgroundResearch = recordedStatus === "Researching with search service";
   const serverStatus =
-    screenState && screenState !== "live" ? SCREEN_PANE_STATUS[screenState] : null;
+    browserFailure ||
+    (screenState && screenState !== "live"
+      ? backgroundResearch && screenState === "off"
+        ? "Researching — no browser needed"
+        : SCREEN_PANE_STATUS[screenState]
+      : null);
   const showLive = Boolean(frameUrl) && (screenState == null || screenState === "live");
   const runSentence =
     !showLive && !serverStatus && !errorStatus && waiting
@@ -986,7 +1019,7 @@ function ComputerPane({
           ? "Reconnecting"
           : runSentence
             ? runSentence
-            : "Computer is off";
+            : "Browser idle";
   useEffect(() => {
     setStripStatus(null);
   }, [frameUrl]);
@@ -996,7 +1029,7 @@ function ComputerPane({
       data-frame={frame?.kind ?? "pending"}
       data-stage={stage}
       data-session={session}
-      className="relative flex min-h-0 flex-col overflow-hidden border-2 border-[#3A382F] bg-[#0c0c0e] shadow-[4px_4px_0_#2A2820]"
+      className="relative flex min-h-[320px] flex-col overflow-hidden border-2 border-[#3A382F] bg-[#0c0c0e] shadow-[4px_4px_0_#2A2820]"
     >
       <div className="flex h-11 items-center gap-3 border-b-2 border-[#3A382F] bg-[#1C1B16] px-3">
         <span className="h-2 w-2 shrink-0 bg-[#8FDBA2]" style={{ opacity: working ? 1 : 0.35 }} />

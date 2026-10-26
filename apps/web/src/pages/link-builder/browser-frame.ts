@@ -36,7 +36,7 @@ export function livePaneView(connection: string | null, crop: BrowserCrop | null
 export function livePaneStatus(text: string): string | null {
   const value = text.replace(/\s+/g, " ").trim();
   if (!value) return null;
-  if (/sandbox is probably not running anymore/i.test(value)) return "Computer is off";
+  if (/sandbox is probably not running anymore/i.test(value)) return "Browser session expired";
   if (value.length > 180) return null;
   if (/\breconnecting\b/i.test(value) || /\bconnecting\b/i.test(value)) return "Reconnecting";
   if (/\bdisconnected\b/i.test(value)) return "Reconnecting";

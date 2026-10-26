@@ -21,9 +21,8 @@ import {
   oxylabsPreset,
   RecordedSearchProvider,
   recordedSerpDir,
-  toComputerRef,
 } from "@rakazo/adapters";
-import { type PrismaClient, ensureComputerRecord } from "@rakazo/db";
+import { ensureComputerRecord, type PrismaClient } from "@rakazo/db";
 import {
   camoufoxExecutable,
   LocalBrowserSessionFactory,
@@ -46,8 +45,8 @@ function dirs(value: string | undefined): string[] {
  * `LINK_BUILDER_ALLOW_LOCAL_BROWSER=true`.
  */
 /**
- * A running computer is used as-is. A suspended or stopped one is resumed through the sandbox
- * so a paused project can continue after the desktop sleeps.
+ * Reconcile with the provider even when the database says running. Cloud sandboxes
+ * can expire independently; provision reconnects a live sandbox or replaces a dead one.
  */
 export async function resolvePersonaComputer(input: {
   prisma: PrismaClient;
@@ -74,7 +73,6 @@ export async function resolvePersonaComputer(input: {
       kind: process.env.SANDBOX_PROVIDER?.trim() || "e2b",
     });
   }
-  if (computer.state === "running" || computer.state === "booting") return toComputerRef(computer);
   const ref = await input.sandbox.provision(
     {
       botId: computer.homeKey,
@@ -86,7 +84,12 @@ export async function resolvePersonaComputer(input: {
   );
   await input.prisma.computer.update({
     where: { id: computer.id },
-    data: { state: "running", providerRef: ref.providerRef, kind: ref.kind },
+    data: {
+      state: "running",
+      providerRef: ref.providerRef,
+      kind: ref.kind,
+      ...(ref.providerRef !== computer.providerRef ? { screenUrl: null } : {}),
+    },
   });
   return ref;
 }

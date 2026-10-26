@@ -2,7 +2,11 @@ import type { AdapterContext, SandboxProvider } from "@rakazo/adapter-kit";
 import type { EncryptedSecretStore } from "@rakazo/adapters";
 import type { PrismaClient } from "@rakazo/db";
 import { describe, expect, it, vi } from "vitest";
-import { releasePersonaComputer, searchCredentialsForContext } from "./link-builder-real-wiring.js";
+import {
+  releasePersonaComputer,
+  resolvePersonaComputer,
+  searchCredentialsForContext,
+} from "./link-builder-real-wiring.js";
 
 const context = {
   operationId: "link-builder.release",
@@ -96,4 +100,53 @@ describe("search credentials", () => {
       }),
     ).rejects.toThrow("missing search credentials");
   });
+});
+
+describe("persona computer recovery", () => {
+  it.each(["running", "booting", "stopped"])(
+    "reconciles a %s record with the provider and clears an expired screen",
+    async (state) => {
+      const update = vi.fn(async () => ({}));
+      const provision = vi.fn(async () => ({
+        id: "new-box",
+        botId: "team-1",
+        kind: "e2b",
+        providerRef: "new-box",
+        fresh: true,
+      }));
+      const ref = await resolvePersonaComputer({
+        prisma: {
+          lbProject: {
+            findUnique: async () => ({ workspaceId: "workspace-1", createdByUserId: "user-1" }),
+          },
+          computer: {
+            findMany: async () => [
+              {
+                id: "computer-1",
+                homeKey: "team-1",
+                kind: "e2b",
+                providerRef: "expired-box",
+                state,
+                mode: "team",
+              },
+            ],
+            update,
+          },
+        } as unknown as PrismaClient,
+        sandbox: { provision } as unknown as SandboxProvider,
+        projectId: "project-1",
+        context,
+        dataDir: "/tmp/persona-test",
+      });
+      expect(provision).toHaveBeenCalledWith(
+        expect.objectContaining({ providerRef: "expired-box", providerKind: "e2b" }),
+        context,
+      );
+      expect(ref.providerRef).toBe("new-box");
+      expect(update).toHaveBeenCalledWith({
+        where: { id: "computer-1" },
+        data: { state: "running", providerRef: "new-box", kind: "e2b", screenUrl: null },
+      });
+    },
+  );
 });
