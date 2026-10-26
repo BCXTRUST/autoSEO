@@ -66,6 +66,26 @@ export function detectLanguage(
   url: string,
 ): { language: string | null; country: string | null } {
   let language = declaredLanguage(html);
+  const visible = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ");
+  const letters = visible.match(/\p{L}/gu) ?? [];
+  if (letters.length >= 40 && (!language || language === "en" || language === "de")) {
+    const scripts: [RegExp, string][] = [
+      [/\p{Script=Han}/u, "zh"],
+      [/\p{Script=Hiragana}|\p{Script=Katakana}/u, "ja"],
+      [/\p{Script=Hangul}/u, "ko"],
+      [/\p{Script=Arabic}/u, "ar"],
+      [/\p{Script=Cyrillic}/u, "ru"],
+    ];
+    for (const [script, code] of scripts) {
+      if (letters.filter((letter) => script.test(letter)).length / letters.length > 0.1) {
+        language = code;
+        break;
+      }
+    }
+  }
   if (!language) {
     const tokens = visibleTokens(html);
     if (tokens.length > 0) {

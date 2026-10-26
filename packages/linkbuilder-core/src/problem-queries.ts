@@ -335,7 +335,9 @@ function configuredTopicLanes(input: ProblemQueryInput): UseCaseLane[] {
     ...(input.pages ?? []).map((p) => p.keyword),
   ];
   const topics = new Map<string, string>();
-  for (const value of candidates) {
+  for (const value of candidates.flatMap((value) =>
+    typeof value === "string" ? value.split(/[,;\n]+/) : [],
+  )) {
     if (typeof value !== "string" || /https?:\/\/|www\.|[\w-]+\.[a-z]{2,}(?:\b|\/)/i.test(value))
       continue;
     const topic = stripShopNames(value, shops)

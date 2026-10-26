@@ -23,6 +23,14 @@ const lane = {
 };
 
 describe("detectLanguage", () => {
+  it("rejects a misleading English tag when the visible page is Chinese", () => {
+    expect(
+      detectLanguage(
+        `<html lang="en-US"><body>${"教育學習研究醫護數位跨域專業人才 ".repeat(15)}</body></html>`,
+        "https://college.example/",
+      ).language,
+    ).toBe("zh");
+  });
   it("reads English from the fitness.com register page", () => {
     const html = readFileSync(
       path.resolve(here, "../../../apps/worker/test/fixtures/forums/fitness.com/register.html"),

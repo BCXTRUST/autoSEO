@@ -9,6 +9,7 @@ import type {
 } from "@rakazo/contracts";
 import { useState } from "react";
 import { emptyDraft, WIZARD_STEPS } from "./model.js";
+import { ResearchBoard } from "./research-board";
 import { DashboardView, OperatorView, ProjectView, WizardView } from "./views.js";
 
 const card: LbProjectCard = {
@@ -104,6 +105,35 @@ const vitaminexpressProject = {
 /** Dev-only fixture screens for visual checks. Not linked from the product. */
 export function LinkBuilderPreview({ screen }: { screen: string }) {
   const [current, setCurrent] = useState(screen);
+  if (current === "research") {
+    const pages: LbThreadView[] = (["candidate", "selected", "posted", "rejected"] as const).map(
+      (status, index) => ({
+        id: `demo-${index}`,
+        hostId: `host-${index}`,
+        domain: "community.example.org",
+        url: `https://community.example.org/discussion/${index}`,
+        title: [
+          "Building a meditation habit",
+          "Discussing wellness research",
+          "Understanding study quality",
+          "Off-topic discussion",
+        ][index]!,
+        excerpt: "Development preview data: inspect the recorded reason and open the page.",
+        status,
+        relevance: 0.9 - index * 0.2,
+        openQuestion: true,
+        laneId: null,
+        rejectReason: status === "rejected" ? "Outside the configured topic" : null,
+      }),
+    );
+    return (
+      <main className="mx-auto min-h-screen max-w-5xl bg-[#050506] p-5">
+        <p className="mb-4 text-xs text-[#A39E90]">Development preview · sample data</p>
+        <ResearchBoard hosts={[]} threads={pages} searches={0} currentUrl={null} dailyLimit={20} />
+      </main>
+    );
+  }
+
   if (current === "computer") {
     return <VitaminexpressComputer onProjects={() => setCurrent("dashboard")} />;
   }
@@ -481,8 +511,10 @@ export function LinkBuilderPreview({ screen }: { screen: string }) {
     );
   }
   if (current === "tasks") {
-    const longPost = Array.from({ length: 12 }, () =>
-      "Durch das Registrieren auf diesem Board erklärst du dich mit den Nutzungsbedingungen einverstanden. Bitte lies den gesamten Text, bevor du fortfährst.",
+    const longPost = Array.from(
+      { length: 12 },
+      () =>
+        "Durch das Registrieren auf diesem Board erklärst du dich mit den Nutzungsbedingungen einverstanden. Bitte lies den gesamten Text, bevor du fortfährst.",
     ).join(" ");
     const hosts = [
       ["frauenselbsthilfe.de", "pending_email"],
@@ -497,11 +529,13 @@ export function LinkBuilderPreview({ screen }: { screen: string }) {
         <ProjectView
           project={{ name: "Vitaminexpress", slug: "vitaminexpress" } as LbProjectDetail}
           status={null}
-          hosts={hosts.map(([domain, status], index) => ({
-            id: `host-${index}`,
-            registrableDomain: domain,
-            status,
-          })) as unknown as LbHostView[]}
+          hosts={
+            hosts.map(([domain, status], index) => ({
+              id: `host-${index}`,
+              registrableDomain: domain,
+              status,
+            })) as unknown as LbHostView[]
+          }
           placements={[]}
           steps={Array.from({ length: 18 }, (_, index) => ({
             id: `step-${index}`,

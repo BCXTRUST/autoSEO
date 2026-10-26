@@ -74,7 +74,11 @@ export function planFootprintQueries(input: {
 }
 
 /** Up to eight problem queries for one DataForSEO pass. The shop name is never added here. */
-export function planDiscoveryQueries(problems: readonly string[], limit = 8): string[] {
+export function planDiscoveryQueries(
+  problems: readonly string[],
+  limit = 8,
+  language = "de",
+): string[] {
   const queries: string[] = [];
   for (const problem of problems) {
     const cleaned = problem.replace(/"/g, "").trim();
@@ -82,7 +86,7 @@ export function planDiscoveryQueries(problems: readonly string[], limit = 8): st
     for (const query of [
       `${cleaned} Forum`,
       `${cleaned} (inurl:viewtopic OR inurl:showthread OR inurl:forum/thread)`,
-      `"Registrieren" ${cleaned}`,
+      `${language === "de" ? '"Registrieren"' : '"register"'} ${cleaned}`,
     ]) {
       if (queries.length >= limit) return queries;
       queries.push(query);
@@ -204,14 +208,16 @@ export async function discoverHosts(input: {
     }
     const facts = probePages({ homepageUrl, sampleUrl: hit.url, pages });
     const settled = settleProbe(facts, home !== null);
-    const detected = detectLanguage(pages.map((page) => page.html).join("\n"), homepageUrl);
+    const detected = detectLanguage(home ?? pages.map((page) => page.html).join("\n"), homepageUrl);
     const language = detected.language ?? hit.market.language;
     const country = detected.country ?? hit.market.country;
-    const offLanguage = Boolean(detected.language) && detected.language !== "de";
+    const offLanguage = detected.language
+      ? detected.language !== hit.market.language
+      : hit.market.language === "en";
     const forum =
       facts.platform !== "unknown" || (facts.threads.length >= 5 && Boolean(facts.registerUrl));
     let status: FunnelHost["status"] = offLanguage ? "off_topic" : settled.status;
-    let reason = offLanguage ? `language:${language}` : settled.reason;
+    let reason = offLanguage ? `language:${detected.language ?? "unknown"}` : settled.reason;
     if (!offLanguage && !forum) {
       status = "off_topic";
       reason = "not_forum";
