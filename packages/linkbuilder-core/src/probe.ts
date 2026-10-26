@@ -34,6 +34,7 @@ export interface ProbeFacts {
   signatureLinks: boolean;
   minPostsForLinks: number | null;
   commercialLinksForbidden: boolean;
+  automationForbidden?: boolean;
   rulesExcerpt: string;
   threads: ProbeThread[];
   score: number;
@@ -85,6 +86,10 @@ export function probePages(input: {
   const registerUrl = findRegisterUrl(html, origin) ?? defaultRegister(origin, platform);
   const rulesExcerpt = excerptRules(html);
   const commercialLinksForbidden = commercialBan(rulesExcerpt) || commercialBan(html);
+  const automationForbidden =
+    /you may not automate access|automated (?:access|registration|posting) (?:is|are) (?:not allowed|prohibited|forbidden)/i.test(
+      html.replace(/<[^>]+>/g, " "),
+    );
   const after = afterPosts(html);
   const posts = lowPostAnchors(html);
   let hrefForNewMembers: LbHrefForNewMembers = "unknown";
@@ -117,6 +122,7 @@ export function probePages(input: {
     signatureLinks,
     minPostsForLinks,
     commercialLinksForbidden,
+    automationForbidden,
     rulesExcerpt,
     threads,
     score,
@@ -135,6 +141,8 @@ export function settleProbe(facts: ProbeFacts, fetched: boolean): SettledProbe {
     const state = transitionHost("discovered", "failed");
     return { status: state.status, reason: "fetch_failed", score: 0 };
   }
+  if (facts.automationForbidden)
+    return { status: "denied", reason: "automation_forbidden", score: facts.score };
   if (facts.captchaUnsupported) {
     const state = transitionHost("discovered", "unsupported_captcha");
     return { status: state.status, reason: "unsupported_captcha", score: facts.score };
@@ -279,7 +287,7 @@ function afterPosts(html: string): number | null {
 }
 
 function commercialBan(text: string): boolean {
-  return /keine kommerziellen links|keine werblichen links|werbung verboten|no commercial links|commercial links are (?:not allowed|forbidden)/i.test(
+  return /keine kommerziellen links|keine werblichen links|werbung verboten|no commercial links|commercial links are (?:not allowed|forbidden)|advertising for personal gain[^.]{0,100}not permitted|commercial spam[^.]{0,80}ban|you may not send advertisements/i.test(
     text,
   );
 }

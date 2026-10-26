@@ -13,11 +13,18 @@ export function clickControl(selector: string): boolean {
     return false;
   }
   if (!node || typeof node.click !== "function") return false;
-  if (challengeActivate(doc, node)) {
-    node.click();
-    return true;
+  // This function is serialized into the page: all runtime helpers must be local.
+  if (node.getAttribute?.("id") === "activate-account-button") {
+    if (doc.querySelector("#data-activate-account")) {
+      node.click();
+      return true;
+    }
+    const activationForm = doc.querySelector("#activate-account-form");
+    if (activationForm && typeof activationForm.requestSubmit === "function") {
+      activationForm.requestSubmit();
+      return true;
+    }
   }
-  if (submitActivateForm(doc, node)) return true;
   const tag = (node.tagName ?? "").toUpperCase();
   const type = (node.getAttribute?.("type") ?? (tag === "BUTTON" ? "submit" : "")).toLowerCase();
   const form = node.closest?.("form") ?? null;
@@ -47,11 +54,18 @@ export function clickControlHeld(selector: string): boolean {
     return false;
   }
   if (!node) return false;
-  if (challengeActivate(doc, node)) {
-    node.click?.();
-    return true;
+  // Keep activation behavior self-contained for Playwright's page.evaluate.
+  if (node.getAttribute?.("id") === "activate-account-button") {
+    if (doc.querySelector("#data-activate-account")) {
+      node.click?.();
+      return true;
+    }
+    const activationForm = doc.querySelector("#activate-account-form");
+    if (activationForm && typeof activationForm.requestSubmit === "function") {
+      activationForm.requestSubmit();
+      return true;
+    }
   }
-  if (submitActivateForm(doc, node)) return true;
   const tag = (node.tagName ?? "").toUpperCase();
   const type = (node.getAttribute?.("type") ?? (tag === "BUTTON" ? "submit" : "")).toLowerCase();
   const form = node.closest?.("form") ?? null;
@@ -80,28 +94,6 @@ export function clickControlHeld(selector: string): boolean {
     return true;
   }
   fire("click");
-  return true;
-}
-
-/**
- * Discourse binds this button after load. The handler fetches a challenge, fills two
- * hidden fields, and only then submits. Posting the form before that handler runs
- * sends an empty challenge.
- */
-function challengeActivate(doc: ClickDocument, node: ClickNode): boolean {
-  return (
-    node.getAttribute?.("id") === "activate-account-button" &&
-    doc.querySelector("#data-activate-account") !== null
-  );
-}
-
-/** The Discourse activate button sits outside its form, so a bare click does not POST. */
-function submitActivateForm(doc: ClickDocument, node: ClickNode): boolean {
-  if (node.getAttribute?.("id") !== "activate-account-button") return false;
-  if (doc.querySelector("#data-activate-account")) return false;
-  const form = doc.querySelector("#activate-account-form");
-  if (!form || typeof form.requestSubmit !== "function") return false;
-  form.requestSubmit();
   return true;
 }
 

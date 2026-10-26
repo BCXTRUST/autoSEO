@@ -22,6 +22,8 @@ export type FixtureRel = "follow" | "nofollow" | "ugc";
 
 export interface PhpbbFixtureOptions {
   boardName?: string;
+  topicTitle?: string;
+  topicBody?: string;
   /** The answer behind every captcha image. */
   captchaAnswer?: string;
   /** `tiny` serves a PNG under 100 bytes so the crop path must re-crop or park. */
@@ -201,7 +203,7 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
   const topics = [
     {
       id: 1,
-      title: "Which software do you use for club membership lists?",
+      title: options.topicTitle ?? "Which software do you use for club membership lists?",
       postIds: [1],
     },
   ];
@@ -209,7 +211,9 @@ export async function startPhpbbFixture(options: PhpbbFixtureOptions): Promise<P
     id: 1,
     topicId: 1,
     author: "anna_k",
-    body: "We are a small sports club and still keep members in a spreadsheet. What do you use for dues and member lists?",
+    body:
+      options.topicBody ??
+      "We are a small sports club and still keep members in a spreadsheet. What do you use for dues and member lists?",
   });
   let nextPostId = 2;
   let nextUserId = 2;
