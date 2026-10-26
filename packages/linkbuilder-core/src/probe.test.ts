@@ -15,6 +15,30 @@ const platforms = [
 ] as const;
 
 describe("probePages", () => {
+  it("does not mistake image CDN paths or external discussions for a forum", () => {
+    const facts = probePages({
+      homepageUrl: "https://wellness.example/",
+      pages: [{
+        url: "https://wellness.example/",
+        html: `<meta property="og:image" content="https://cdn.example/t/asset/12345/logo.jpg">
+          <img src="/t/asset/12345/logo.jpg">
+          <script>const sample = "/t/example/12345";</script>
+          <a href="https://other.example/t/topic/12345">External discussion</a>
+          <a href="/join-the-community">Join the community</a>`,
+      }],
+    });
+    expect(facts.platform).toBe("unknown");
+    expect(facts.registerUrl).toBeNull();
+    expect(settleProbe(facts, true).status).not.toBe("qualified");
+  });
+
+  it("recognizes same-site discussion navigation without a generator marker", () => {
+    const facts = probePages({
+      homepageUrl: "https://board.example/",
+      pages: [{ url: "https://board.example/", html: '<a href="/t/research/12345">Research discussion</a>' }],
+    });
+    expect(facts.platform).toBe("discourse");
+  });
   it.each([
     ["You may not automate access to the forum.", "automation_forbidden"],
     [

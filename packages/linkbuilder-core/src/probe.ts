@@ -78,8 +78,22 @@ export function probePages(input: {
 }): ProbeFacts {
   const html = input.pages.map((page) => page.html).join("\n");
   const urls = [input.homepageUrl, input.sampleUrl ?? "", ...input.pages.map((page) => page.url)];
-  const blob = `${html}\n${urls.join("\n")}`;
-  const platform = detectPlatform(html, blob);
+  // Asset paths and scripts can resemble thread URLs (for example a CDN's
+  // /t/<asset-id>/<timestamp>). Only page URLs and same-site navigation count.
+  const navigation: string[] = [...urls];
+  const markup = html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "");
+  for (const page of input.pages) {
+    const links = page.html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "");
+    for (const match of links.matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)) {
+      try {
+        const link = new URL(match[1]!, page.url);
+        if (link.origin === new URL(page.url).origin) navigation.push(link.href);
+      } catch {
+        // Invalid links provide no platform evidence.
+      }
+    }
+  }
+  const platform = detectPlatform(markup, navigation.join("\n"));
   const unsupported = detectUnsupported(html);
   const captchaType = unsupported ? "unsupported" : detectCaptcha(html);
   const origin = originOf(input.homepageUrl);
