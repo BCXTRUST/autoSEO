@@ -57,6 +57,7 @@ import {
   type RealPlan,
   type RealStepKind,
   redactSecrets,
+  startOfZonedDay,
   transitionRun,
 } from "@rakazo/linkbuilder-core";
 import { deliverStuckAlertEmail } from "./link-builder-alerts.js";
@@ -170,6 +171,7 @@ const RECORDED_WAIT_ACTION: Record<string, string> = {
   no_workable_host: "No forum left to work on",
   registration_cap: "Registration cap",
   research: "Reading the forum first",
+  research_batch: "Researching candidate sites before registration",
   nothing_today: "Nothing left today",
   mail_pending: "Waiting for the confirmation mail",
 };
@@ -622,6 +624,16 @@ export class LinkBuilderRealRunner {
     const liveMet = isLiveMet(ctx.run.counters, quotas);
     const schedule = isWithinWindow(ctx.now, ctx.project.schedule, { liveMet });
     if (!schedule.active && !liveMet) return { kind: "close" };
+    if (ctx.project.content.researchBeforeRegistration && ctx.project.content.researchSiteLimit) {
+      const reviewed = await this.deps.prisma.lbHost.count({
+        where: {
+          projectId: ctx.project.id,
+          lastProbeAt: { gte: startOfZonedDay(ctx.now, ctx.project.schedule.timezone) },
+        },
+      });
+      if (reviewed < ctx.project.content.researchSiteLimit)
+        return { kind: "wait", reason: "research_batch" };
+    }
     const entry = this.pool.get(ctx.project.id);
     const host = ctx.host;
     const minPostsBeforeLink = postsRequiredBeforeLink(

@@ -31,6 +31,7 @@ import {
 } from "../../components/beautiful-ui/primitives";
 import { LIVE_PANE_BG } from "./browser-frame.js";
 import { BrowserOnlyFrame } from "./browser-only-frame.js";
+import { ResearchBoard } from "./research-board.js";
 
 export type ScreenState = "off" | "starting" | "no_browser" | "live";
 
@@ -838,6 +839,14 @@ function Dashboard({
               </p>
             </div>
           </BuiCard>
+          <ResearchBoard
+            hosts={forums}
+            threads={visibleThreads}
+            searches={searches}
+            dailyLimit={project.content?.researchSiteLimit}
+            timeZone={project.schedule?.timezone}
+            currentUrl={working ? (status?.run?.currentUrl ?? null) : null}
+          />
           <ActivityFeed items={shown} />
         </div>
       </div>

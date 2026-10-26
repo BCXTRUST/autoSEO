@@ -15,6 +15,24 @@ const platforms = [
 ] as const;
 
 describe("probePages", () => {
+  it.each([
+    ["You may not automate access to the forum.", "automation_forbidden"],
+    [
+      "Advertising for personal gain of any kind is not permitted. Commercial spam will result in an immediate ban.",
+      "commercial_links_forbidden",
+    ],
+  ])("rejects a publisher restriction: %s", (rule, reason) => {
+    const facts = probePages({
+      homepageUrl: "https://board.example/",
+      pages: [
+        {
+          url: "https://board.example/tos",
+          html: `${sampleForumHtml({ platform: "phpbb" })}<p>${rule}</p>`,
+        },
+      ],
+    });
+    expect(settleProbe(facts, true)).toMatchObject({ status: "denied", reason });
+  });
   it.each(platforms)("detects %s from its footprint", (platform) => {
     const html = sampleForumHtml({ platform });
     const facts = probePages({

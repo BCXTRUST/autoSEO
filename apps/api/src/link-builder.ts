@@ -719,6 +719,7 @@ export async function listLbHosts(deps: RouterDeps, actor: Actor, projectId: str
       status: LbHostStatusSchema.parse(host.status),
       parkedFrom: host.parkedFrom ? LbParkableHostStatusSchema.parse(host.parkedFrom) : null,
       qualityScore: host.qualityScore,
+      lastProbeAt: host.lastProbeAt?.toISOString() ?? null,
       topicTags: host.topicTags,
       captchaType: host.captchaType ? LbCaptchaTypeSchema.parse(host.captchaType) : null,
       hrefForNewMembers: LbHrefForNewMembersSchema.parse(host.hrefForNewMembers),

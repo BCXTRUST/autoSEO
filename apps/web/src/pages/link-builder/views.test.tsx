@@ -953,7 +953,7 @@ describe("link builder screens", () => {
     expect(html).toContain(">0</span> registered");
     expect(html).toContain(">0</span> posted");
     expect(html).toContain(">0</span> skipped");
-    expect(html).not.toContain("Filter");
+    expect(html).toContain("Filter research stage");
     expect(html).not.toContain("waiting for an admin. Expected");
   });
 

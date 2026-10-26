@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { footprintQuery, planDiscoveryQueries, planFootprintQueries } from "./discovery.js";
+import {
+  discoverHosts,
+  footprintQuery,
+  planDiscoveryQueries,
+  planFootprintQueries,
+} from "./discovery.js";
 
 const de = {
   country: "DE" as const,
@@ -53,5 +58,62 @@ describe("footprint planning", () => {
     expect(queries[0]).toBe("Magnesium Schlaf Forum");
     expect(queries.some((query) => query.includes("Registrieren"))).toBe(true);
     expect(queries.some((query) => /vitaminexpress/i.test(query))).toBe(false);
+  });
+});
+
+describe("project language gate", () => {
+  it("keeps the forum subdomain instead of visiting the marketing homepage", async () => {
+    const visited: string[] = [];
+    const hosts = await discoverHosts({
+      lanes: [
+        { id: "wellness", tag: "Meditation", description: "Relaxation", exampleQuestions: [] },
+      ],
+      markets: [{ country: "US", language: "en", locale: "en-US", timezoneId: "America/New_York" }],
+      policy: "primary_only",
+      supply: {},
+      need: 1,
+      search: async () => [
+        {
+          url: "https://forum.community.example/viewtopic.php?t=1",
+          title: "Meditation",
+          snippet: "",
+        },
+      ],
+      fetchText: async (url) => {
+        visited.push(url);
+        return '<html lang="en"><body>phpBB <a href="/ucp.php?mode=register">Register</a></body></html>';
+      },
+    });
+    expect(visited[0]).toBe("https://forum.community.example/");
+    expect(hosts[0]?.homepageUrl).toBe("https://forum.community.example/");
+    expect(hosts[0]?.facts.registerUrl).toContain("https://forum.community.example/");
+  });
+  it.each(["en", "de", "fr", null])(
+    "checks a %s page against the English market",
+    async (language) => {
+      const hosts = await discoverHosts({
+        lanes: [
+          { id: "wellness", tag: "Meditation", description: "Relaxation", exampleQuestions: [] },
+        ],
+        markets: [
+          { country: "US", language: "en", locale: "en-US", timezoneId: "America/New_York" },
+        ],
+        policy: "primary_only",
+        supply: {},
+        need: 1,
+        search: async () => [
+          { url: "https://forum.example/viewtopic.php?t=1", title: "Meditation", snippet: "" },
+        ],
+        fetchText: async () =>
+          `<html ${language ? `lang="${language}"` : ""}><body>phpBB <a href="/ucp.php?mode=register">Register</a><a href="/viewtopic.php?t=1">Meditation questions</a></body></html>`,
+      });
+      expect(hosts[0]?.reason).toBe(language === "en" ? null : `language:${language ?? "unknown"}`);
+      expect(hosts[0]?.status).toBe(language === "en" ? "qualified" : "off_topic");
+    },
+  );
+  it("does not use German registration terms for English searches", () => {
+    const queries = planDiscoveryQueries(["Meditation"], 8, "en");
+    expect(queries.join(" ")).not.toContain("Registrieren");
+    expect(queries.join(" ")).toContain("register");
   });
 });

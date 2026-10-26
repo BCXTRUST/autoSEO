@@ -237,6 +237,7 @@ export const LbHostViewSchema = z.object({
   status: LbHostStatusSchema,
   parkedFrom: LbParkableHostStatusSchema.nullable(),
   qualityScore: z.number(),
+  lastProbeAt: IsoDate.nullable().optional(),
   topicTags: z.array(z.string()),
   captchaType: LbCaptchaTypeSchema.nullable(),
   hrefForNewMembers: LbHrefForNewMembersSchema,

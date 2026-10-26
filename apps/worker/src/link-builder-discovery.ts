@@ -132,7 +132,11 @@ export async function discoverDueProjects(input: {
     const schedule = project.schedule as { timezone?: string } | null;
     const timeZone = schedule?.timezone || "Europe/Berlin";
     const due = shouldDiscover(project.lastDiscoveredAt, input.now, timeZone);
-    if (!due) {
+    const research = project.content as {
+      researchSiteLimit?: number;
+      researchBeforeRegistration?: boolean;
+    } | null;
+    if (!due && !research?.researchBeforeRegistration) {
       if (await browserSearchRecent(input.prisma, project.id, input.now)) continue;
       if (!followWarmup && (await storedSearchRows(input.prisma, project.id))) continue;
       if (!followWarmup) {
@@ -644,6 +648,7 @@ async function discoverByDataForSeo(args: {
     brandName?: string | null;
     topicLanes?: unknown;
     targets?: unknown;
+    content?: unknown;
   };
   market: LbMarket;
   lanes: Parameters<typeof discoverHosts>[0]["lanes"];
@@ -653,6 +658,36 @@ async function discoverByDataForSeo(args: {
   timeZone: string;
 }): Promise<number> {
   const { input, project, market, timeZone } = args;
+  const research = project.content as { researchSiteLimit?: number } | null;
+  const dailyLimit = research?.researchSiteLimit;
+  const inspectedToday = dailyLimit
+    ? await input.prisma.lbHost.count({
+        where: {
+          projectId: project.id,
+          lastProbeAt: { gte: startOfZonedDay(input.now, timeZone) },
+        },
+      })
+    : 0;
+  if (dailyLimit && inspectedToday >= dailyLimit) {
+    const completion = `Research complete: ${dailyLimit} sites reviewed`;
+    const recorded = await input.prisma.lbRunStep.findFirst({
+      where: {
+        run: { projectId: project.id },
+        kind: "discover",
+        startedAt: { gte: startOfZonedDay(input.now, timeZone) },
+        outcome: { path: ["lastAction"], equals: completion },
+      },
+      select: { id: true },
+    });
+    if (recorded) return 0;
+    await recordDiscoveryStep(input.prisma, project, input.now, completion, null);
+    await input.prisma.lbProject.update({
+      where: { id: project.id },
+      data: { lastDiscoveredAt: input.now },
+    });
+    return 0;
+  }
+
   const used = await searchesToday(input.prisma, project.id, timeZone, input.now);
   if (used >= SEARCHES_PER_DAY) {
     await recordDiscoveryStep(input.prisma, project, input.now, "Search budget reached", null);
@@ -665,6 +700,7 @@ async function discoverByDataForSeo(args: {
   const queries = planDiscoveryQueries(
     problemQueries(project),
     Math.min(8, SEARCHES_PER_DAY - used),
+    market.language,
   ).filter((query) => !/vitaminexpress/i.test(query));
   await recordDiscoveryStep(
     input.prisma,
@@ -696,12 +732,42 @@ async function discoverByDataForSeo(args: {
       message,
       `Search failed: ${message}`,
     );
-    await pauseAfterEmptySearch(input, project);
-    return 0;
+    if (urls.length === 0) {
+      if (message.includes("40101")) {
+        await input.prisma.lbProject.update({
+          where: { id: project.id },
+          data: { lastDiscoveredAt: input.now },
+        });
+      } else await pauseAfterEmptySearch(input, project);
+      return 0;
+    }
+    await recordPartialResults(
+      input.prisma,
+      project,
+      input.now,
+      "Search service interrupted; reviewing saved results",
+    );
   }
+  const seen = dailyLimit
+    ? await input.prisma.lbHost.findMany({
+        where: { projectId: project.id },
+        select: { registrableDomain: true },
+      })
+    : [];
+  const unique = new Set(seen.map((host) => host.registrableDomain));
+  const limitedUrls = dailyLimit
+    ? urls
+        .filter((url) => {
+          const domain = registrableDomain(url);
+          if (!domain || unique.has(domain)) return false;
+          unique.add(domain);
+          return true;
+        })
+        .slice(0, dailyLimit - inspectedToday)
+    : urls;
   const paid = (
     await probeResultUrls({
-      urls,
+      urls: limitedUrls,
       lanes: args.lanes,
       market,
       denyHosts: args.denyHosts,

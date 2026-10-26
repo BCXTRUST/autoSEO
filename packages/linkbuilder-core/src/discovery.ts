@@ -74,7 +74,11 @@ export function planFootprintQueries(input: {
 }
 
 /** Up to eight problem queries for one DataForSEO pass. The shop name is never added here. */
-export function planDiscoveryQueries(problems: readonly string[], limit = 8): string[] {
+export function planDiscoveryQueries(
+  problems: readonly string[],
+  limit = 8,
+  language = "de",
+): string[] {
   const queries: string[] = [];
   for (const problem of problems) {
     const cleaned = problem.replace(/"/g, "").trim();
@@ -82,7 +86,7 @@ export function planDiscoveryQueries(problems: readonly string[], limit = 8): st
     for (const query of [
       `${cleaned} Forum`,
       `${cleaned} (inurl:viewtopic OR inurl:showthread OR inurl:forum/thread)`,
-      `"Registrieren" ${cleaned}`,
+      `${language === "de" ? '"Registrieren"' : '"register"'} ${cleaned}`,
     ]) {
       if (queries.length >= limit) return queries;
       queries.push(query);
@@ -184,7 +188,7 @@ export async function discoverHosts(input: {
   for (const hit of unique) {
     const domain = registrableDomain(hit.url);
     if (!domain) continue;
-    const homepageUrl = `https://${domain}/`;
+    const homepageUrl = `${new URL(hit.url).origin}/`;
     const pages: ProbePage[] = [];
     const home = await input.fetchText(homepageUrl);
     if (home !== null) pages.push({ url: homepageUrl, html: home });
@@ -197,21 +201,23 @@ export async function discoverHosts(input: {
       const register = await input.fetchText(preliminary.registerUrl);
       if (register !== null) pages.push({ url: preliminary.registerUrl, html: register });
     }
-    for (const path of ["/rules", "/faq"]) {
-      const url = `https://${domain}${path}`;
+    for (const path of ["/rules", "/faq", "/tos", "/guidelines"]) {
+      const url = `${new URL(homepageUrl).origin}${path}`;
       const html = await input.fetchText(url);
       if (html !== null) pages.push({ url, html });
     }
     const facts = probePages({ homepageUrl, sampleUrl: hit.url, pages });
     const settled = settleProbe(facts, home !== null);
-    const detected = detectLanguage(pages.map((page) => page.html).join("\n"), homepageUrl);
+    const detected = detectLanguage(home ?? pages.map((page) => page.html).join("\n"), homepageUrl);
     const language = detected.language ?? hit.market.language;
     const country = detected.country ?? hit.market.country;
-    const offLanguage = Boolean(detected.language) && detected.language !== "de";
+    const offLanguage = detected.language
+      ? detected.language !== hit.market.language.split("-")[0]
+      : /^en(?:-|$)/.test(hit.market.language);
     const forum =
       facts.platform !== "unknown" || (facts.threads.length >= 5 && Boolean(facts.registerUrl));
     let status: FunnelHost["status"] = offLanguage ? "off_topic" : settled.status;
-    let reason = offLanguage ? `language:${language}` : settled.reason;
+    let reason = offLanguage ? `language:${detected.language ?? "unknown"}` : settled.reason;
     if (!offLanguage && !forum) {
       status = "off_topic";
       reason = "not_forum";

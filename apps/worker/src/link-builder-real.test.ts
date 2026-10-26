@@ -244,8 +244,12 @@ describe("link builder real driver wiring", () => {
       },
     } as unknown as PrismaClient;
     const sandbox = {
-      provision: async (request: { botId: string; providerKind?: string }) => {
-        provisions += 1;
+      provision: async (request: {
+        botId: string;
+        providerKind?: string;
+        providerRef?: string;
+      }) => {
+        if (!request.providerRef) provisions += 1;
         return {
           id: "sb-new",
           botId: request.botId,

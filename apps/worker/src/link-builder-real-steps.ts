@@ -418,6 +418,11 @@ function personaFor(
 }
 
 export function marketOf(project: ProjectConfig, host: HostRow): LbMarket {
+  if (
+    !project.markets.some((market) => market.language.split("-")[0] === host.language.split("-")[0])
+  ) {
+    throw new StepFailure("Site language is outside the project markets");
+  }
   const market =
     marketForHost(project.markets, {
       country: host.country,
