@@ -84,7 +84,35 @@ export function planDiscoveryQueries(
   problems: readonly string[],
   limit = 8,
   language = "de",
+  offset = 0,
 ): string[] {
+  if (/^en(?:-|$)/i.test(language)) {
+    const topics = [
+      ...new Set(
+        problems
+          .map((problem) =>
+            problem
+              .replace(/"/g, "")
+              .replace(/\bforums?\b/gi, "")
+              .replace(/\s+/g, " ")
+              .trim(),
+          )
+          .filter(Boolean),
+      ),
+    ];
+    const variants = [
+      "(inurl:forum OR inurl:community OR inurl:viewtopic OR inurl:threads OR inurl:/t/)",
+      "discussion forum experiences",
+      "forum register discussion",
+    ];
+    const planned = variants.flatMap((variant) =>
+      topics.map(
+        (topic) => `${topic} ${variant} -site:facebook.com -site:youtube.com -site:eventbrite.com`,
+      ),
+    );
+    const start = planned.length ? offset % planned.length : 0;
+    return [...planned.slice(start), ...planned.slice(0, start)].slice(0, limit);
+  }
   const queries: string[] = [];
   for (const problem of problems) {
     const cleaned = problem.replace(/"/g, "").trim();

@@ -631,7 +631,29 @@ export class LinkBuilderRealRunner {
           lastProbeAt: { gte: startOfZonedDay(ctx.now, ctx.project.schedule.timezone) },
         },
       });
-      if (reviewed < ctx.project.content.researchSiteLimit)
+      const targetCount = ctx.project.content.researchTargetCount;
+      const eligible = targetCount
+        ? await this.deps.prisma.lbHost.count({
+            where: {
+              projectId: ctx.project.id,
+              status: {
+                in: [
+                  "qualified",
+                  "registering",
+                  "pending_email",
+                  "pending_admin",
+                  "ready",
+                  "warming",
+                  "used",
+                ],
+              },
+            },
+          })
+        : 0;
+      if (
+        reviewed < ctx.project.content.researchSiteLimit &&
+        (!targetCount || eligible < targetCount)
+      )
         return { kind: "wait", reason: "research_batch" };
     }
     const entry = this.pool.get(ctx.project.id);

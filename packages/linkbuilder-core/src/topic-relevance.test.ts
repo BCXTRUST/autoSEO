@@ -23,6 +23,29 @@ const project = {
 };
 
 describe("topic relevance", () => {
+  it("requires an English configured phrase rather than an ambiguous fragment", () => {
+    const english = {
+      markets: [{ language: "en" }],
+      topicLanes: [
+        { tag: "frequency wellness, PEMF", description: "Research relevant forum technology" },
+      ],
+    };
+    expect(
+      pageMatchesTopics(
+        { title: "Music production", pageText: "Frequency technology and audio forum research" },
+        english,
+      ),
+    ).toBe(false);
+    expect(
+      pageMatchesTopics(
+        { title: "Wellness discussion", pageText: "Experiences with PEMF devices" },
+        english,
+      ),
+    ).toBe(true);
+    expect(
+      pageMatchesTopics({ title: "Research", pageText: "Frequency wellness discussion" }, english),
+    ).toBe(true);
+  });
   it("rejects a car title and a shop-only page, and keeps a health page", () => {
     const car = {
       title: "Community und Forum für BMW und Tuning",

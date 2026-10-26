@@ -52,6 +52,7 @@ export function ResearchBoard({
   searches,
   currentUrl,
   dailyLimit,
+  targetCount,
   timeZone = "UTC",
 }: {
   hosts: LbHostView[];
@@ -59,12 +60,16 @@ export function ResearchBoard({
   searches: number;
   currentUrl: string | null;
   dailyLimit?: number;
+  targetCount?: number;
   timeZone?: string;
 }) {
   const reviewedToday = hosts.filter(
     (host) =>
       host.lastProbeAt &&
       localDateKey(new Date(host.lastProbeAt), timeZone) === localDateKey(new Date(), timeZone),
+  ).length;
+  const eligibleCount = hosts.filter((host) =>
+    ["picked", "working", "done"].includes(hostLane(host.status)),
   ).length;
   const [filter, setFilter] = useState<Lane | "all">("all");
   const [query, setQuery] = useState("");
@@ -156,6 +161,16 @@ export function ResearchBoard({
             className="h-2 w-full accent-[#FFE14A]"
           />
         </div>
+      ) : null}
+      {targetCount ? (
+        <p className="text-sm text-[#FFE14A]" role="status">
+          {eligibleCount}/{targetCount} eligible sites ·{" "}
+          {eligibleCount >= targetCount
+            ? "Shortlist ready for registration"
+            : dailyLimit && reviewedToday >= dailyLimit
+              ? "Research limit reached before the shortlist was filled"
+              : "Finding replacements for skipped sites"}
+        </p>
       ) : null}
       {targets.length > 0 && targets.every((target) => target.lane === "skipped") ? (
         <BuiCard className="border-[#E6C07B] p-3 text-sm text-[#E6C07B]">

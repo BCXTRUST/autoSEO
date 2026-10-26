@@ -659,8 +659,30 @@ async function discoverByDataForSeo(args: {
   timeZone: string;
 }): Promise<number> {
   const { input, project, market, timeZone } = args;
-  const research = project.content as { researchSiteLimit?: number } | null;
+  const research = project.content as {
+    researchSiteLimit?: number;
+    researchTargetCount?: number;
+  } | null;
   const dailyLimit = research?.researchSiteLimit;
+  if (research?.researchTargetCount) {
+    const eligible = await input.prisma.lbHost.count({
+      where: {
+        projectId: project.id,
+        status: {
+          in: [
+            "qualified",
+            "registering",
+            "pending_email",
+            "pending_admin",
+            "ready",
+            "warming",
+            "used",
+          ],
+        },
+      },
+    });
+    if (eligible >= research.researchTargetCount) return 0;
+  }
   const inspectedToday = dailyLimit
     ? await input.prisma.lbHost.count({
         where: {
@@ -702,7 +724,9 @@ async function discoverByDataForSeo(args: {
     problemQueries(project),
     Math.min(8, SEARCHES_PER_DAY - used),
     market.language,
+    /^en(?:-|$)/i.test(market.language) ? used : 0,
   ).filter((query) => !/vitaminexpress/i.test(query));
+  if (queries.length === 0) return 0;
   await recordDiscoveryStep(
     input.prisma,
     project,
