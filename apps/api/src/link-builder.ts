@@ -276,6 +276,7 @@ export async function listLbProjects(deps: RouterDeps, actor: Actor) {
     const activity = projectActivity({
       projectStatus: readProjectStatus(project.status),
       runStatus,
+      lastAction: todayRun?.lastAction ?? null,
       openTickets: 0,
       schedule: scheduleState(
         schedule,
@@ -291,6 +292,7 @@ export async function listLbProjects(deps: RouterDeps, actor: Actor) {
       brandName: project.brandName,
       activity: activity.activity,
       activityLabel: activity.label,
+      stage: stageFromActivity({ runStatus, lastAction: todayRun?.lastAction ?? null }),
       ...customerCounters(
         project.slug,
         todayRun,
@@ -629,6 +631,7 @@ export async function statusLbProject(deps: RouterDeps, actor: Actor, projectId:
   const activity = projectActivity({
     projectStatus: readProjectStatus(row.status),
     runStatus,
+    lastAction: todayRun?.lastAction ?? null,
     openTickets: 0,
     schedule: scheduleView,
   });

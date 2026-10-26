@@ -142,6 +142,7 @@ export function DashboardView({
           const status = homeStatus({
             activity: card.activity,
             activityLabel: card.activityLabel,
+            stage: card.stage,
             needsYou: Boolean(help),
           });
           return (
@@ -489,6 +490,7 @@ export function ProjectView({
   const statusWord = homeStatus({
     activity: status?.activity ?? null,
     activityLabel: status?.activityLabel ?? null,
+    stage: status?.stage ?? null,
     intent,
     needsYou: Boolean(help) || Boolean(needed),
   });
@@ -832,10 +834,47 @@ function Dashboard({
                     : status?.projectStatus === "active" &&
                         status?.run?.lastAction === "Researching with search service"
                       ? "Researching — no browser needed"
-                      : status?.activityLabel || "Ready to start"}
+                      : working
+                        ? {
+                            research: "Researching candidate sites",
+                            register: "Registering an account",
+                            warmup: "Preparing a contribution",
+                            place: "Submitting a post",
+                            verify: "Verifying a published link",
+                          }[stage]
+                        : status?.activityLabel || "Ready to start"}
               </p>
+              <ol
+                aria-label="Campaign progress"
+                className="mt-3 flex flex-wrap gap-2 font-mono text-xs"
+              >
+                {WORK_STAGES.map((name, index) => (
+                  <li
+                    key={name}
+                    aria-current={name === stage ? "step" : undefined}
+                    className={name === stage ? "text-[#FFE14A]" : "text-[#A39E90]"}
+                  >
+                    {index + 1}.{" "}
+                    {
+                      {
+                        research: "Research",
+                        register: "Register",
+                        warmup: "Prepare",
+                        place: "Publish",
+                        verify: "Verify",
+                      }[name]
+                    }
+                  </li>
+                ))}
+              </ol>
               <p className="mt-2 text-sm text-[#A8A398]">
-                Research can run without a browser. Open Live browser to watch site visits.
+                {working
+                  ? "The builder is active. Progress and saved pages appear below; the browser opens for site visits."
+                  : status?.run?.lastAction === "Draft waiting for approval"
+                    ? "Open Details to review the draft. Publication starts only after approval."
+                    : status?.run?.lastAction === "No forum left to work on"
+                      ? "Research has no eligible sites to use. Rejected pages and reasons are shown below; no account or post is being created."
+                      : "The builder is not performing a browser action. Check the activity log and research results below."}
               </p>
             </div>
           </BuiCard>

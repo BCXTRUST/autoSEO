@@ -4,6 +4,7 @@ import {
   footprintQuery,
   planDiscoveryQueries,
   planFootprintQueries,
+  prioritizeResearchUrls,
 } from "./discovery.js";
 
 const de = {
@@ -115,5 +116,38 @@ describe("project language gate", () => {
     const queries = planDiscoveryQueries(["Meditation"], 8, "en");
     expect(queries.join(" ")).not.toContain("Registrieren");
     expect(queries.join(" ")).toContain("register");
+  });
+});
+
+describe("bounded research shortlist", () => {
+  it("prefers discussion URLs and deduplicates their marketing domains before applying the cap", () => {
+    expect(
+      prioritizeResearchUrls(
+        [
+          "https://shop.example/",
+          "https://brand.example/",
+          "https://forum.brand.example/viewtopic.php?t=1",
+          "https://community.other.example/questions",
+        ],
+        [],
+        2,
+      ),
+    ).toEqual([
+      "https://forum.brand.example/viewtopic.php?t=1",
+      "https://community.other.example/questions",
+    ]);
+  });
+  it("does not spend the batch on excluded or previously reviewed sites", () => {
+    expect(
+      prioritizeResearchUrls(
+        [
+          "https://forum.brand.example/viewtopic.php?t=1",
+          "https://forum.other.example/viewtopic.php?t=2",
+          "javascript:alert(1)",
+        ],
+        ["brand.example"],
+        20,
+      ),
+    ).toEqual(["https://forum.other.example/viewtopic.php?t=2"]);
   });
 });

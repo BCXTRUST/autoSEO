@@ -28,6 +28,7 @@ import {
   localDateKey,
   planDiscoveryQueries,
   primaryProblemQuery,
+  prioritizeResearchUrls,
   probePages,
   problemInputFromProject,
   queryOmitsShop,
@@ -754,16 +755,12 @@ async function discoverByDataForSeo(args: {
         select: { registrableDomain: true },
       })
     : [];
-  const unique = new Set(seen.map((host) => host.registrableDomain));
   const limitedUrls = dailyLimit
-    ? urls
-        .filter((url) => {
-          const domain = registrableDomain(url);
-          if (!domain || unique.has(domain)) return false;
-          unique.add(domain);
-          return true;
-        })
-        .slice(0, dailyLimit - inspectedToday)
+    ? prioritizeResearchUrls(
+        urls,
+        [...seen.map((host) => host.registrableDomain), ...args.denyHosts],
+        dailyLimit - inspectedToday,
+      )
     : urls;
   const paid = (
     await probeResultUrls({

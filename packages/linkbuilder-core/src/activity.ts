@@ -26,13 +26,17 @@ export function projectActivity(input: {
   runStatus: LbRunStatus | null;
   openTickets: number;
   schedule: ScheduleState;
+  lastAction?: string | null;
 }): ProjectActivity {
   const operatorCount = Math.max(0, Math.floor(input.openTickets));
   const activity = resolveActivity(input, operatorCount);
   return {
     activity,
     operatorCount,
-    label: activityLabel(activity, operatorCount, input.runStatus),
+    label:
+      activity === "idle" && waitLabel(input.lastAction)
+        ? waitLabel(input.lastAction)!
+        : activityLabel(activity, operatorCount, input.runStatus),
   };
 }
 
@@ -41,6 +45,7 @@ function resolveActivity(
     projectStatus: LbProjectStatus;
     runStatus: LbRunStatus | null;
     schedule: ScheduleState;
+    lastAction?: string | null;
   },
   operatorCount: number,
 ): LbActivity {
@@ -48,6 +53,7 @@ function resolveActivity(
   if (input.projectStatus === "archived" || input.projectStatus === "stopped") return "stopped";
   if (operatorCount > 0) return "needs_operator";
   if (input.projectStatus === "paused") return "paused";
+  if (waitLabel(input.lastAction)) return input.schedule.active ? "idle" : "out_of_window";
   if (input.runStatus === "overtime") return "overtime";
   if (input.runStatus === "running" || input.runStatus === "queued") return "running";
   if (!input.schedule.active) return "out_of_window";
@@ -83,4 +89,14 @@ export function activityLabel(
         ? runStatus
         : "idle";
   }
+}
+
+function waitLabel(action?: string | null): string | null {
+  if (action === "Draft waiting for approval") return "Waiting for draft approval";
+  if (action === "No forum left to work on") return "Waiting for eligible sites";
+  if (action === "Waiting for a site admin") return "Waiting for site approval";
+  if (action === "Waiting for the confirmation" || action === "Waiting for the confirmation email")
+    return "Waiting for email verification";
+  if (action?.startsWith("Search failed:")) return "Research interrupted — check activity";
+  return null;
 }

@@ -3304,18 +3304,6 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
   }> = [];
   let drafted = 0;
   for (const thread of threads) {
-    const approved = warmup
-      ? null
-      : await prisma.lbDraft.findFirst({
-          where: {
-            projectId: ctx.project.id,
-            status: "approved",
-            threadCandidate: {
-              hostId: host.id,
-              url: { in: [thread.url, threadKey(thread.url)] },
-            },
-          },
-        });
     let opened = false;
     let discussion = "";
     let meta: Awaited<ReturnType<NonNullable<BoardDriver["readThreadMeta"]>>> | null = null;
@@ -3441,7 +3429,18 @@ async function publish(ctx: StepContext, warmup: boolean): Promise<StepResult> {
     rule = driver.probePageLinkRule
       ? await driver.probePageLinkRule(entry.session)
       : driver.probeLinkRule(pageText);
-    if (draftedToday + drafted >= selectionBudget) break;
+    const approved = await prisma.lbDraft.findFirst({
+      where: {
+        projectId: ctx.project.id,
+        status: "approved",
+        ...(warmup ? { linkSlot: "none", targetUrl: null } : {}),
+        threadCandidate: {
+          hostId: host.id,
+          url: { in: [thread.url, threadKey(thread.url)] },
+        },
+      },
+    });
+    if (!approved && draftedToday + drafted >= selectionBudget) continue;
     if (approved) {
       chosenProof = proofPage;
       chosen = {

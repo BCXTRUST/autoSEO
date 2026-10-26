@@ -157,6 +157,22 @@ export function ResearchBoard({
           />
         </div>
       ) : null}
+      {targets.length > 0 && targets.every((target) => target.lane === "skipped") ? (
+        <BuiCard className="border-[#E6C07B] p-3 text-sm text-[#E6C07B]">
+          <p>No eligible sites in this batch.</p>
+          <p className="mt-1 text-xs">
+            Nothing is being registered or posted. Inspect a skipped target to see its reason.
+          </p>
+        </BuiCard>
+      ) : null}
+      {dailyLimit && reviewedToday >= dailyLimit ? (
+        <p className="text-xs text-[#E6C07B]">
+          {reviewedToday > dailyLimit
+            ? "Today's total exceeds the current cap. "
+            : "Daily research cap reached. "}
+          Further research is on hold for today.
+        </p>
+      ) : null}
       <fieldset className="flex flex-wrap gap-2" aria-label="Filter research stage">
         <BuiButton onClick={() => setFilter("all")} aria-pressed={filter === "all"}>
           All {targets.length}
