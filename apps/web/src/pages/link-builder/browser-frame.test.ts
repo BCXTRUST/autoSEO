@@ -10,7 +10,9 @@ import {
 
 describe("live pane status", () => {
   it("turns the dead sandbox sentence into a short status", () => {
-    expect(livePaneStatus("Sandbox is probably not running anymore")).toBe("Computer is off");
+    expect(livePaneStatus("Sandbox is probably not running anymore")).toBe(
+      "Browser session expired",
+    );
     expect(connectionStatusText("", "Sandbox is probably not running anymore")).toContain(
       "not running",
     );

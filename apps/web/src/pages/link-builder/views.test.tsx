@@ -662,7 +662,7 @@ describe("link builder screens", () => {
       [],
     );
     expect(active).toContain("Skipped 2 denied forums");
-    expect(active).not.toContain("Computer is off");
+    expect(active).not.toContain("Browser idle");
     const paused = renderOverview(
       statusView({
         projectStatus: "paused",
@@ -672,7 +672,7 @@ describe("link builder screens", () => {
       }),
       [],
     );
-    expect(paused).toContain("Computer is off");
+    expect(paused).toContain("Browser idle");
     expect(paused).not.toContain("Skipped 2 denied forums");
   });
 
@@ -681,16 +681,59 @@ describe("link builder screens", () => {
       statusView({ activity: "paused", activityLabel: "paused", run: null }),
       [],
     );
-    expect(html).toContain("Computer is off");
-    expect(html).not.toContain("Computer is off. It turns on when a post is being made.");
+    expect(html).toContain("Browser idle");
+    expect(html).not.toContain("Browser idle. It turns on when a post is being made.");
     expect(html).not.toContain("Failed to connect to server");
     expect(html).not.toContain("Connecting the computer");
+  });
+
+  it("distinguishes background research from a failed browser", () => {
+    const run = {
+      id: "run-1",
+      date: "2026-10-16",
+      status: "running" as const,
+      newToday: 0,
+      liveToday: 0,
+      liveWeek: 0,
+      uniqueHosts: 0,
+      lastAction: "Researching with search service",
+      lastError: null,
+    };
+    const research = renderOverview(
+      statusView({ projectStatus: "active", run }),
+      [],
+      [],
+      null,
+      [],
+      [],
+      "off",
+    );
+    expect(research).toContain("Researching — no browser needed");
+    expect(research).toContain("Campaign activity");
+    expect(research).toContain("Live browser");
+    const failure = renderOverview(
+      statusView({
+        projectStatus: "active",
+        run: {
+          ...run,
+          lastAction: "Browser search failed: Sandbox is probably not running anymore",
+        },
+      }),
+      [],
+      [],
+      null,
+      [],
+      [],
+      "off",
+    );
+    expect(failure).toContain("Browser unavailable");
+    expect(failure).not.toContain("Researching — no browser needed");
   });
 
   it("renders the computer from server screen state", () => {
     const stream = "https://app.autoseo.run/novnc/remote/view/9.abc/vnc.html";
     const states = [
-      ["off", "Computer is off"],
+      ["off", "Browser idle"],
       ["starting", "Starting"],
       ["no_browser", "Opening the browser"],
     ] as const;

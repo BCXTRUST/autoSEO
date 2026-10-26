@@ -666,6 +666,13 @@ async function discoverByDataForSeo(args: {
     problemQueries(project),
     Math.min(8, SEARCHES_PER_DAY - used),
   ).filter((query) => !/vitaminexpress/i.test(query));
+  await recordDiscoveryStep(
+    input.prisma,
+    project,
+    input.now,
+    "Researching with search service",
+    null,
+  );
   const context = { ...adapter, workspaceId: project.workspaceId };
   const urls: string[] = [];
   try {
