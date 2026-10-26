@@ -799,8 +799,8 @@ function Dashboard({
   });
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-4" aria-label="Dashboard">
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1.55fr)_minmax(280px,1fr)] gap-4">
-        <details className="min-h-0 lg:col-start-2 lg:row-start-1">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto lg:grid lg:grid-cols-[minmax(0,1.55fr)_minmax(280px,1fr)] lg:overflow-hidden">
+        <details className="order-2 min-h-0 shrink-0 lg:col-start-2 lg:row-start-1">
           <summary className="cursor-pointer pb-3 font-mono text-sm">Live browser</summary>
           <ComputerPane
             working={working}
@@ -818,7 +818,7 @@ function Dashboard({
         <div
           ref={taskColumn}
           data-task-column=""
-          className="rk-scroll flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain lg:col-start-1 lg:row-start-1"
+          className="rk-scroll order-1 flex min-h-0 shrink-0 flex-col gap-3 overscroll-contain lg:col-start-1 lg:row-start-1 lg:shrink lg:overflow-y-auto"
         >
           <BuiCard>
             <div className="p-4" role="status">
