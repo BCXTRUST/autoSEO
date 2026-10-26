@@ -62,6 +62,32 @@ describe("footprint planning", () => {
 });
 
 describe("project language gate", () => {
+  it("keeps the forum subdomain instead of visiting the marketing homepage", async () => {
+    const visited: string[] = [];
+    const hosts = await discoverHosts({
+      lanes: [
+        { id: "wellness", tag: "Meditation", description: "Relaxation", exampleQuestions: [] },
+      ],
+      markets: [{ country: "US", language: "en", locale: "en-US", timezoneId: "America/New_York" }],
+      policy: "primary_only",
+      supply: {},
+      need: 1,
+      search: async () => [
+        {
+          url: "https://forum.community.example/viewtopic.php?t=1",
+          title: "Meditation",
+          snippet: "",
+        },
+      ],
+      fetchText: async (url) => {
+        visited.push(url);
+        return '<html lang="en"><body>phpBB <a href="/ucp.php?mode=register">Register</a></body></html>';
+      },
+    });
+    expect(visited[0]).toBe("https://forum.community.example/");
+    expect(hosts[0]?.homepageUrl).toBe("https://forum.community.example/");
+    expect(hosts[0]?.facts.registerUrl).toContain("https://forum.community.example/");
+  });
   it.each(["en", "de", "fr", null])(
     "checks a %s page against the English market",
     async (language) => {

@@ -188,7 +188,7 @@ export async function discoverHosts(input: {
   for (const hit of unique) {
     const domain = registrableDomain(hit.url);
     if (!domain) continue;
-    const homepageUrl = `https://${domain}/`;
+    const homepageUrl = `${new URL(hit.url).origin}/`;
     const pages: ProbePage[] = [];
     const home = await input.fetchText(homepageUrl);
     if (home !== null) pages.push({ url: homepageUrl, html: home });
