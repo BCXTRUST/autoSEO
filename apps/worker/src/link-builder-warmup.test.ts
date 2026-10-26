@@ -644,6 +644,68 @@ describe("R1 host rotation and unproven replies", () => {
     expect(done).toEqual({ kind: "wait", reason: "nothing_today" });
   });
 
+  it("posts an approved link-free first contribution without redrafting or counting an unverified link", async () => {
+    const body =
+      "Bei der Frage zu Magnesium und Schlaf lohnt es sich, Studienpopulation, Vergleichsgruppe und gemessene Endpunkte getrennt zu prüfen.";
+    const created: Array<{ data: { status: string; qualityChecks: { verified?: boolean } } }> = [];
+    const accountUpdates: Array<{ data: { lastPostAt?: Date } }> = [];
+    const placements: unknown[] = [];
+    const ctx = proofContext({ warmup: true, created, accountUpdates, placements, body });
+    ctx.project.disclosureMode = "drafts_only";
+    let approvedQueries = 0;
+    let submits = 0;
+    let filled = "";
+    ctx.services.prisma.lbDraft.findFirst = (async (args: {
+      where: { status: string; linkSlot?: string; targetUrl?: string | null };
+    }) => {
+      expect(args.where).toMatchObject({ status: "approved", linkSlot: "none", targetUrl: null });
+      approvedQueries += 1;
+      return {
+        id: "approved-draft",
+        body,
+        linkSlot: "none",
+        targetUrl: null,
+        anchorText: null,
+        modelLane: "draft",
+        modelId: "human-approved",
+        confidence: 1,
+        qualityChecks: {},
+      };
+    }) as never;
+    ctx.services.prisma.lbDraft.findMany = (async (args: { where: { status?: unknown } }) =>
+      args.where.status
+        ? []
+        : Array.from({ length: 4 }, (_, i) => ({
+            body: `prior draft ${i}`,
+            status: "drafted",
+            createdAt: now,
+            modelId: "m",
+            qualityChecks: {},
+            threadCandidate: { url: `https://forum.example/viewtopic.php?t=${i + 100}` },
+          }))) as never;
+    ctx.services.textModel!.complete = async () => {
+      throw new Error("Approved content must not be regenerated");
+    };
+    const entry = ctx.pool()!;
+    ctx.pool = () => entry;
+    entry.driver!.fillReply = async (_session, text) => {
+      filled = text;
+    };
+    entry.driver!.submitReply = async () => {
+      submits += 1;
+      return { kind: "posted", permalink: "https://forum.example/viewtopic.php?t=9#p100" };
+    };
+    const result = await REAL_STEP_HANDLERS.warmup_post(ctx);
+    expect(approvedQueries).toBe(1);
+    expect(filled).toBe(body);
+    expect(submits).toBe(1);
+    expect(result).toMatchObject({ kind: "step", lastAction: "Reply not visible" });
+    if (result.kind !== "step") return;
+    await result.apply?.(proofTx(created, accountUpdates, placements) as never);
+    expect(created[0]?.data.qualityChecks.verified).toBe(false);
+    expect(placements).toEqual([]);
+  });
+
   it("stores a draft when the submitted reply is not on the public page", async () => {
     const body =
       "Ich kenne das aus dem Alltag und bei mir hat eine ruhige Abendroutine mehr gebracht als noch ein weiteres Mittel auszuprobieren, gerade wenn der Schlaf unruhig bleibt.";

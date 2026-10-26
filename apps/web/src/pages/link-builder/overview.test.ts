@@ -51,9 +51,11 @@ function step(index: number, lastAction: string, artifactIds: string[] = []): Lb
 
 describe("overview feed", () => {
   it("names the home as posting, waiting, needs you, or paused", () => {
-    expect(homeStatus({ activity: "running" })).toBe("Posting");
-    expect(homeStatus({ activity: "overtime" })).toBe("Posting");
-    expect(homeStatus({ intent: "working" })).toBe("Posting");
+    expect(homeStatus({ activity: "running" })).toBe("Working");
+    expect(homeStatus({ activity: "running", stage: "research" })).toBe("Researching");
+    expect(homeStatus({ activity: "running", stage: "place" })).toBe("Posting");
+    expect(homeStatus({ activity: "overtime" })).toBe("Working");
+    expect(homeStatus({ intent: "working" })).toBe("Working");
     expect(homeStatus({ activity: "paused" })).toBe("Paused");
     expect(homeStatus({ intent: "paused", activity: "running" })).toBe("Paused");
     expect(homeStatus({ activity: "needs_operator" })).toBe("Needs you");

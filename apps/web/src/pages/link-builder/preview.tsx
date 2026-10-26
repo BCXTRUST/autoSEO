@@ -18,6 +18,7 @@ const card: LbProjectCard = {
   slug: "nordlicht-wellness",
   status: "active",
   brandName: "Nordlicht",
+  stage: "place",
   activity: "running",
   activityLabel: "running",
   newToday: 1,
@@ -54,6 +55,7 @@ const vitaminexpressCard: LbProjectCard = {
   slug: "vitaminexpress",
   status: "active",
   brandName: "Vitaminexpress",
+  stage: "place",
   activity: "running",
   activityLabel: "running",
   newToday: 0,
@@ -447,12 +449,12 @@ export function LinkBuilderPreview({ screen }: { screen: string }) {
       </div>
     );
   }
-  if (current === "overview") {
+  if (current === "overview" || current === "waiting") {
     const status: LbProjectStatusView = {
       projectId: "demo",
       projectStatus: "active",
-      activity: "out_of_window",
-      activityLabel: "out of window",
+      activity: current === "waiting" ? "idle" : "out_of_window",
+      activityLabel: current === "waiting" ? "Waiting for eligible sites" : "out of window",
       run: {
         id: "run-1",
         date: "2026-10-05",
@@ -461,7 +463,7 @@ export function LinkBuilderPreview({ screen }: { screen: string }) {
         liveToday: 1,
         liveWeek: 1,
         uniqueHosts: 2,
-        lastAction: "Day closed",
+        lastAction: current === "waiting" ? "No forum left to work on" : "Day closed",
         lastError: null,
       },
       whyNot: {
@@ -617,6 +619,7 @@ function VitaminexpressComputer({ onProjects }: { onProjects: () => void }) {
   const status: LbProjectStatusView = {
     projectId: "vitaminexpress",
     projectStatus: "active",
+    stage: "place",
     activity: "running",
     activityLabel: "running",
     run: {

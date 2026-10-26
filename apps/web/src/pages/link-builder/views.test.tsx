@@ -687,6 +687,35 @@ describe("link builder screens", () => {
     expect(html).not.toContain("Connecting the computer");
   });
 
+  it("shows a waiting builder and its step sequence when there is no eligible site", () => {
+    const run = {
+      id: "run-wait",
+      date: "2026-10-26",
+      status: "running" as const,
+      newToday: 0,
+      liveToday: 0,
+      liveWeek: 0,
+      uniqueHosts: 0,
+      lastAction: "No forum left to work on",
+      lastError: null,
+    };
+    const html = renderOverview(
+      statusView({
+        projectStatus: "active",
+        activity: "idle",
+        activityLabel: "Waiting for eligible sites",
+        run,
+        stage: "research",
+      }),
+      [],
+    );
+    expect(html).toContain("Waiting for eligible sites");
+    expect(html).toContain("no account or post is being created");
+    expect(html).toContain('aria-label="Campaign progress"');
+    expect(html).not.toContain(">Posting<");
+    expect(html).not.toContain("The builder is active.");
+  });
+
   it("distinguishes background research from a failed browser", () => {
     const run = {
       id: "run-1",

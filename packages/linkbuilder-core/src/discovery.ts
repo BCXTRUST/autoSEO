@@ -2,7 +2,13 @@ import type { LbMarket, LbMarketPolicy, LbTopicLane } from "@rakazo/contracts";
 import { marketKey, selectMarkets } from "./market.js";
 import { detectLanguage } from "./page-language.js";
 import { registrableDomain } from "./policy.js";
-import { type ProbeFacts, type ProbePage, probePages, settleProbe } from "./probe.js";
+import {
+  type ProbeFacts,
+  type ProbePage,
+  platformFromUrl,
+  probePages,
+  settleProbe,
+} from "./probe.js";
 import { useCaseLanes } from "./problem-queries.js";
 
 /**
@@ -288,4 +294,39 @@ function onHost(url: string, domain: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Spend a bounded research batch on discussion pages before generic landing pages. */
+export function prioritizeResearchUrls(
+  urls: readonly string[],
+  excludedDomains: readonly string[],
+  limit: number,
+): string[] {
+  const excluded = new Set(excludedDomains.map((domain) => domain.toLowerCase()));
+  const best = new Map<string, { url: string; rank: number }>();
+  for (const value of urls) {
+    const domain = registrableDomain(value);
+    if (!domain || excluded.has(domain.toLowerCase())) continue;
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      continue;
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") continue;
+    const rank =
+      platformFromUrl(value) !== "unknown"
+        ? 3
+        : /(?:^|\.)(?:forum|community|discuss|board)s?\./i.test(url.hostname) ||
+            /^\/(?:forum|community|discussion)s?(?:\/|$)/i.test(url.pathname)
+          ? 2
+          : /\/(?:signup|register)(?:\/|$)/i.test(url.pathname)
+            ? 1
+            : 0;
+    if (!best.has(domain) || best.get(domain)!.rank < rank) best.set(domain, { url: value, rank });
+  }
+  return [...best.values()]
+    .sort((a, b) => b.rank - a.rank)
+    .slice(0, Math.max(0, limit))
+    .map((entry) => entry.url);
 }

@@ -67,6 +67,8 @@ describe("research missions", () => {
     );
     expect(html).not.toContain('href="javascript:');
     expect(html).toContain("Skipped 2");
+    expect(html).toContain("No eligible sites in this batch.");
+    expect(html).toContain("Nothing is being registered or posted.");
     expect(html).toContain("Picked 0");
   });
   it("does not invent progress when there are no saved results", () => {

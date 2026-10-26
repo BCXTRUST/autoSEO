@@ -162,6 +162,7 @@ export const LbProjectDetailSchema = z.object({
 export type LbProjectDetail = z.infer<typeof LbProjectDetailSchema>;
 
 export const LbProjectCardSchema = z.object({
+  stage: z.enum(["research", "register", "warmup", "place", "verify"]).optional(),
   id: Id,
   name: z.string(),
   slug: z.string(),

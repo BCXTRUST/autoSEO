@@ -93,13 +93,24 @@ export function overviewPill(input: {
   return input.activityLabel;
 }
 
-export const HOME_STATUSES = ["Posting", "Waiting", "Needs you", "Paused"] as const;
+export const HOME_STATUSES = [
+  "Posting",
+  "Working",
+  "Researching",
+  "Registering",
+  "Preparing",
+  "Verifying",
+  "Waiting",
+  "Needs you",
+  "Paused",
+] as const;
 export type HomeStatus = (typeof HOME_STATUSES)[number];
 
 /** The only status a home screen shows. Not a host board. */
 export function homeStatus(input: {
   activity?: string | null;
   activityLabel?: string | null;
+  stage?: string | null;
   intent?: OverviewIntent;
   needsYou?: boolean;
 }): HomeStatus {
@@ -109,7 +120,11 @@ export function homeStatus(input: {
   }
   if (input.intent === "paused" || input.activity === "paused") return "Paused";
   if (input.intent === "working" || input.activity === "running" || input.activity === "overtime") {
-    return "Posting";
+    if (input.stage === "research") return "Researching";
+    if (input.stage === "register") return "Registering";
+    if (input.stage === "warmup") return "Preparing";
+    if (input.stage === "verify") return "Verifying";
+    return input.stage === "place" ? "Posting" : "Working";
   }
   return "Waiting";
 }
