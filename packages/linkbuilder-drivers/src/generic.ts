@@ -344,6 +344,7 @@ function click(field: FormFieldInfo): FieldAction {
 export function planRegistration(
   fields: readonly FormFieldInfo[],
   profile: RegistrationProfile,
+  options: { birthdayRequired?: boolean } = {},
 ): RegistrationPlan {
   const open = visible(fields);
   const used = new Set<string>();
@@ -421,7 +422,7 @@ export function planRegistration(
     const ranked = pick(except(open, used), (field) => scoreBirthday(field, part), 2);
     const parked = take(ranked, `birthday ${part}`);
     if (parked) return { ok: false, ...parked };
-    if (ranked.field?.required)
+    if (ranked.field && (ranked.field.required || options.birthdayRequired))
       actions.push(fill(ranked.field, optionValue(ranked.field, [value])));
   }
 
@@ -873,7 +874,12 @@ export class GenericFormDriver implements BoardDriver {
   async fillRegistration(session: BrowserSession, account: BoardAccount): Promise<void> {
     await holdSignupForm(session);
     const fields = await fieldsIn(session, "form");
-    const plan = fields ? planRegistration(fields, registrationProfile(account)) : null;
+    const birthdayRequired = /please enter (?:your birthday|a valid date of birth)/i.test(
+      (await this.pageMessages(session)).join("\n"),
+    );
+    const plan = fields
+      ? planRegistration(fields, registrationProfile(account), { birthdayRequired })
+      : null;
     if (!plan?.ok) throw new UnmappedFormError("register");
     this.submitSelector = plan.submit.selector;
     for (const action of plan.actions) {
