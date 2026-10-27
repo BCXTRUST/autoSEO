@@ -5,8 +5,8 @@ import {
   FORUM_USERNAME_MAX,
   generateForumPassword,
   generateForumUsername,
-  simplifyForumUsername,
   type RandomBytes,
+  simplifyForumUsername,
 } from "./credentials.js";
 
 function seeded(seed: number): RandomBytes {
@@ -55,6 +55,16 @@ describe("forum credentials", () => {
   });
 
   it("keeps usernames within platform limits", () => {
+    const random = seeded(19);
+    const names = Array.from({ length: 6 }, () =>
+      generateForumUsername("Alexanderson Verylongsurname", random, {
+        alphanumeric: true,
+        maxLength: 15,
+      }),
+    );
+    expect(names.every((name) => /^[a-z0-9]{3,15}$/.test(name))).toBe(true);
+    expect(new Set(names).size).toBeGreaterThan(1);
+    expect(names.every((name) => /\d{2}$/.test(name))).toBe(true);
     fc.assert(
       fc.property(
         fc.string({ maxLength: 80 }),

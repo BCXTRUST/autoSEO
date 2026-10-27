@@ -1738,11 +1738,12 @@ describe("dataforseo primary search", () => {
 
 describe("daily research ceiling", () => {
   it.each([
-    { reviewed: 20, eligible: 0, searchExpected: false },
+    { reviewed: 20, eligible: 0, searchExpected: true },
+    { reviewed: 100, eligible: 4, searchExpected: true },
     { reviewed: 5, eligible: 5, searchExpected: false },
     { reviewed: 5, eligible: 1, searchExpected: true },
   ])(
-    "respects the review ceiling and eligible goal: $reviewed reviewed, $eligible eligible",
+    "continues until the eligible goal: $reviewed reviewed, $eligible eligible",
     async ({ reviewed, eligible, searchExpected }) => {
       const previous = process.env.LINK_BUILDER_BROWSER_SEARCH;
       process.env.LINK_BUILDER_BROWSER_SEARCH = "off";
@@ -1793,7 +1794,7 @@ describe("daily research ceiling", () => {
             return args.data;
           },
         },
-        lbCostEntry: { count: async () => 0 },
+        lbCostEntry: { count: async () => 41 },
       } as unknown as PrismaClient;
       try {
         await discoverDueProjects({
@@ -1810,7 +1811,7 @@ describe("daily research ceiling", () => {
           },
         });
         expect(searched).toBe(searchExpected);
-        if (reviewed === 20) expect(actions).toContain("Research complete: 20 sites reviewed");
+        expect(actions).not.toContain("Research complete: 20 sites reviewed");
       } finally {
         if (previous === undefined) delete process.env.LINK_BUILDER_BROWSER_SEARCH;
         else process.env.LINK_BUILDER_BROWSER_SEARCH = previous;

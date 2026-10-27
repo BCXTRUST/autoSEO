@@ -871,12 +871,18 @@ export class GenericFormDriver implements BoardDriver {
     return "form";
   }
 
-  async fillRegistration(session: BrowserSession, account: BoardAccount): Promise<void> {
+  async fillRegistration(
+    session: BrowserSession,
+    account: BoardAccount,
+    options: { birthdayRequired?: boolean } = {},
+  ): Promise<void> {
     await holdSignupForm(session);
     const fields = await fieldsIn(session, "form");
-    const birthdayRequired = /please enter (?:your birthday|a valid date of birth)/i.test(
-      (await this.pageMessages(session)).join("\n"),
-    );
+    const birthdayRequired =
+      options.birthdayRequired ||
+      /please enter (?:your birthday|a valid date of birth)/i.test(
+        (await this.pageMessages(session)).join("\n"),
+      );
     const plan = fields
       ? planRegistration(fields, registrationProfile(account), { birthdayRequired })
       : null;

@@ -52,7 +52,7 @@ const REPLIES_CLOSED =
 const FIXABLE_FORM =
   /already (?:in use|taken|registered|exists)|username you entered is already|banned email|email address is banned|e-?mail .* (?:gesperrt|banned|not allowed)|password is required|passworts ist erforderlich|entering a password is required|please enter (?:your birthday|a valid date of birth)|please answer the security question|please choose a newsletter|gültige e-?mail/i;
 const USERNAME_TAKEN =
-  /already (?:in use|taken|registered|exists)|username you entered is already|benutzername .* vergeben/i;
+  /(?:username|user name|benutzername)[^.\n]{0,100}(?:already (?:in use|taken|registered|exists)|vergeben|belegt)|already (?:in use|taken|registered|exists)[^.\n]{0,80}(?:username|user name)/i;
 
 export function registrationClosed(text: string): boolean {
   return REGISTRATION_CLOSED.test(text);
@@ -77,7 +77,7 @@ export function usernameTaken(messages: readonly string[]): boolean {
 }
 
 const USERNAME_FORMAT =
-  /anderen namen|gewünschten format|does not match the required format|enter a different name|invalid username|benutzername .{0,40}(?:ungültig|format)/i;
+  /anderen namen|gewünschten format|does not match the required format|enter a different name|invalid username|user ?names?[^.\n]{0,100}(?:must contain|may contain only|letters and (?:digits|numbers)|invalid format)|benutzername .{0,40}(?:ungültig|format)/i;
 
 /** The board rejected the shape of the username, not the captcha and not a taken name. */
 export function usernameFormatRejected(messages: readonly string[]): boolean {

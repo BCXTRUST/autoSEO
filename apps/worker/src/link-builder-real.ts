@@ -624,7 +624,10 @@ export class LinkBuilderRealRunner {
     const liveMet = isLiveMet(ctx.run.counters, quotas);
     const schedule = isWithinWindow(ctx.now, ctx.project.schedule, { liveMet });
     if (!schedule.active && !liveMet) return { kind: "close" };
-    if (ctx.project.content.researchBeforeRegistration && ctx.project.content.researchSiteLimit) {
+    if (
+      ctx.project.content.researchBeforeRegistration &&
+      (ctx.project.content.researchSiteLimit || ctx.project.content.researchTargetCount)
+    ) {
       const reviewed = await this.deps.prisma.lbHost.count({
         where: {
           projectId: ctx.project.id,
@@ -636,6 +639,7 @@ export class LinkBuilderRealRunner {
         ? await this.deps.prisma.lbHost.count({
             where: {
               projectId: ctx.project.id,
+              lastProbeAt: { gte: startOfZonedDay(ctx.now, ctx.project.schedule.timezone) },
               status: {
                 in: [
                   "qualified",
@@ -651,8 +655,9 @@ export class LinkBuilderRealRunner {
           })
         : 0;
       if (
-        reviewed < ctx.project.content.researchSiteLimit &&
-        (!targetCount || eligible < targetCount)
+        targetCount
+          ? eligible < targetCount
+          : reviewed < (ctx.project.content.researchSiteLimit ?? 0)
       )
         return { kind: "wait", reason: "research_batch" };
     }
