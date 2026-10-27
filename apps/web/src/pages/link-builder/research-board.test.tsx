@@ -23,6 +23,7 @@ const host: LbHostView = {
   minPostsForLinks: null,
   registerUrl: null,
   statusReason: null,
+  lastProbeAt: new Date().toISOString(),
 };
 const thread: LbThreadView = {
   id: "page",
@@ -52,6 +53,21 @@ describe("research missions", () => {
     );
     expect(html).toContain("1/5 eligible sites");
     expect(html).toContain("Finding replacements for skipped sites");
+    expect(html).not.toContain("Research limit reached");
+    expect(html).not.toContain("daily cap");
+    expect(html).toContain("goal 5 eligible sites");
+  });
+  it("does not count yesterday's eligible sites toward today's goal", () => {
+    const html = renderToStaticMarkup(
+      <ResearchBoard
+        hosts={[{ ...host, lastProbeAt: new Date(Date.now() - 86400000).toISOString() }]}
+        threads={[]}
+        searches={0}
+        currentUrl={null}
+        targetCount={5}
+      />,
+    );
+    expect(html).toContain("0/5 eligible sites");
   });
   it("shows real targets, recorded evidence, decisions, and safe visit links", () => {
     const html = renderToStaticMarkup(

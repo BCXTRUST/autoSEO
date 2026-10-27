@@ -663,11 +663,15 @@ async function discoverByDataForSeo(args: {
     researchSiteLimit?: number;
     researchTargetCount?: number;
   } | null;
-  const dailyLimit = research?.researchSiteLimit;
+  // A shortlist goal counts eligible sites, never rejected candidate reviews.
+  const targetCount = research?.researchTargetCount;
+  const dailyLimit = targetCount ? undefined : research?.researchSiteLimit;
+  let eligible = 0;
   if (research?.researchTargetCount) {
-    const eligible = await input.prisma.lbHost.count({
+    eligible = await input.prisma.lbHost.count({
       where: {
         projectId: project.id,
+        lastProbeAt: { gte: startOfZonedDay(input.now, timeZone) },
         status: {
           in: [
             "qualified",
@@ -712,7 +716,7 @@ async function discoverByDataForSeo(args: {
   }
 
   const used = await searchesToday(input.prisma, project.id, timeZone, input.now);
-  if (used >= SEARCHES_PER_DAY) {
+  if (!targetCount && used >= SEARCHES_PER_DAY) {
     await recordDiscoveryStep(input.prisma, project, input.now, "Search budget reached", null);
     await input.prisma.lbProject.update({
       where: { id: project.id },
@@ -722,70 +726,108 @@ async function discoverByDataForSeo(args: {
   }
   const queries = planDiscoveryQueries(
     problemQueries(project),
-    Math.min(8, SEARCHES_PER_DAY - used),
+    targetCount ? 8 : Math.min(8, SEARCHES_PER_DAY - used),
     market.language,
     /^en(?:-|$)/i.test(market.language) ? used : 0,
   ).filter((query) => !/vitaminexpress/i.test(query));
   if (queries.length === 0) return 0;
-  await recordDiscoveryStep(
-    input.prisma,
-    project,
-    input.now,
-    "Researching with search service",
-    null,
-  );
-  const context = { ...adapter, workspaceId: project.workspaceId };
-  const urls: string[] = [];
-  try {
-    for (const query of queries) {
-      const results = await searchWithRetry(
-        input,
-        { query, country: market.country, language: market.language, depth: 20 },
-        context,
-      );
-      await recordSearchCost(input, project, timeZone, query);
-      const notice = partialNoticeOf(input.search);
-      if (notice) await recordPartialResults(input.prisma, project, input.now, notice);
-      urls.push(...results.map((result) => result.url));
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "search failed";
-    await recordDiscoveryFailure(
-      input.prisma,
-      project,
-      input.now,
-      message,
-      `Search failed: ${message}`,
-    );
-    if (urls.length === 0) {
-      if (message.includes("40101")) {
-        await input.prisma.lbProject.update({
-          where: { id: project.id },
-          data: { lastDiscoveredAt: input.now },
-        });
-      } else await pauseAfterEmptySearch(input, project);
-      return 0;
-    }
-    await recordPartialResults(
-      input.prisma,
-      project,
-      input.now,
-      "Search service interrupted; reviewing saved results",
-    );
-  }
-  const seen = dailyLimit
-    ? await input.prisma.lbHost.findMany({
-        where: { projectId: project.id },
-        select: { registrableDomain: true },
+  const seen =
+    dailyLimit || targetCount
+      ? await input.prisma.lbHost.findMany({
+          where: { projectId: project.id },
+          select: { registrableDomain: true },
+        })
+      : [];
+  const excluded = [...seen.map((host) => host.registrableDomain), ...args.denyHosts];
+  const savedQueue = targetCount
+    ? await input.prisma.lbRunStep.findFirst({
+        where: {
+          run: { projectId: project.id },
+          kind: "discover",
+          outcome: { path: ["researchQueue"], equals: true },
+        },
+        orderBy: { startedAt: "desc" },
+        select: { outcome: true },
       })
-    : [];
-  const limitedUrls = dailyLimit
+    : null;
+  const pending = (savedQueue?.outcome as { pendingResearchUrls?: unknown } | undefined)
+    ?.pendingResearchUrls;
+  const urls: string[] = Array.isArray(pending)
     ? prioritizeResearchUrls(
-        urls,
-        [...seen.map((host) => host.registrableDomain), ...args.denyHosts],
-        dailyLimit - inspectedToday,
+        pending.filter((url): url is string => typeof url === "string"),
+        excluded,
+        1000,
       )
-    : urls;
+    : [];
+  if (urls.length === 0) {
+    await recordDiscoveryStep(
+      input.prisma,
+      project,
+      input.now,
+      "Researching with search service",
+      null,
+    );
+    const context = { ...adapter, workspaceId: project.workspaceId };
+    try {
+      for (const query of queries) {
+        const diversifiedQuery = targetCount
+          ? `${query} ${seen
+              .slice(-8)
+              .map((host) => `-site:${host.registrableDomain}`)
+              .join(" ")}`.trim()
+          : query;
+        const results = await searchWithRetry(
+          input,
+          {
+            query: diversifiedQuery,
+            country: market.country,
+            language: market.language,
+            depth: 20,
+          },
+          context,
+        );
+        await recordSearchCost(input, project, timeZone, diversifiedQuery);
+        const notice = partialNoticeOf(input.search);
+        if (notice) await recordPartialResults(input.prisma, project, input.now, notice);
+        urls.push(...results.map((result) => result.url));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "search failed";
+      await recordDiscoveryFailure(
+        input.prisma,
+        project,
+        input.now,
+        message,
+        `Search failed: ${message}`,
+      );
+      if (urls.length === 0) {
+        if (message.includes("40101")) {
+          await input.prisma.lbProject.update({
+            where: { id: project.id },
+            data: { lastDiscoveredAt: input.now },
+          });
+        } else if (!targetCount) await pauseAfterEmptySearch(input, project);
+        return 0;
+      }
+      await recordPartialResults(
+        input.prisma,
+        project,
+        input.now,
+        "Search service interrupted; reviewing saved results",
+      );
+    }
+  }
+  const ranked = targetCount ? prioritizeResearchUrls(urls, excluded, 1000) : [];
+  const batchSize = targetCount ? Math.min(20, targetCount - eligible) : 0;
+  const limitedUrls = targetCount
+    ? ranked.slice(0, batchSize)
+    : dailyLimit
+      ? prioritizeResearchUrls(
+          urls,
+          [...seen.map((host) => host.registrableDomain), ...args.denyHosts],
+          dailyLimit - inspectedToday,
+        )
+      : urls;
   const paid = (
     await probeResultUrls({
       urls: limitedUrls,
@@ -801,7 +843,18 @@ async function discoverByDataForSeo(args: {
     where: { id: project.id },
     data: { lastDiscoveredAt: input.now },
   });
-  if (added === 0) await pauseAfterEmptySearch(input, project);
+  if (targetCount) {
+    await recordDiscoveryStep(
+      input.prisma,
+      project,
+      input.now,
+      limitedUrls.length > 0
+        ? "Candidates reviewed; continuing toward eligible-site goal"
+        : "No new candidates; research will retry",
+      limitedUrls.length > 0 ? null : "no_new_candidates",
+      { researchQueue: true, pendingResearchUrls: ranked.slice(batchSize) },
+    );
+  } else if (added === 0) await pauseAfterEmptySearch(input, project);
   return added;
 }
 
@@ -1427,7 +1480,7 @@ async function recordSearchCost(
     projectId: project.id,
     kind: "search_query",
     quantity: 1,
-    sourceKey: `search:${project.id}:${localDateKey(input.now, timeZone)}:${query}`,
+    sourceKey: `search:${project.id}:${localDateKey(input.now, timeZone)}:${input.now.toISOString()}:${query}`,
     occurredAt: input.now,
   }).catch(() => undefined);
 }

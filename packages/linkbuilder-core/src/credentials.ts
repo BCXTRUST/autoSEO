@@ -56,15 +56,18 @@ function asciiSlug(value: string): string {
 
 /**
  * Board username from the persona name plus two digits, e.g. `mira_sol42`. ASCII only, 3 to 20
- * characters, which every supported platform accepts.
+ * characters by default. A strict retry keeps only letters/digits within the site's cap.
  */
 export function generateForumUsername(
   displayName: string,
   randomBytes: RandomBytes = defaultRandomBytes,
+  options: { alphanumeric?: boolean; maxLength?: number } = {},
 ): string {
   const suffix = pick(DIGITS, 2, randomBytes);
-  const base = asciiSlug(displayName) || "member";
-  const trimmed = base.slice(0, FORUM_USERNAME_MAX - suffix.length).replace(/_+$/, "");
+  const slug = asciiSlug(displayName);
+  const base = (options.alphanumeric ? slug.replace(/[^a-z0-9]/g, "") : slug) || "member";
+  const max = Math.max(3, Math.min(FORUM_USERNAME_MAX, options.maxLength ?? FORUM_USERNAME_MAX));
+  const trimmed = base.slice(0, max - suffix.length).replace(/_+$/, "");
   const name = `${trimmed.length >= 1 ? trimmed : "member"}${suffix}`;
   return name.length >= 3 ? name : `member${suffix}`;
 }
@@ -74,6 +77,9 @@ export function generateForumUsername(
  * Strict XenForo rules are often 15 characters and no underscore.
  */
 export function simplifyForumUsername(username: string): string {
-  const plain = username.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 15);
+  const plain = username
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .slice(0, 15);
   return plain.length >= 3 ? plain : username;
 }

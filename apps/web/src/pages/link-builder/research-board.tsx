@@ -68,8 +68,13 @@ export function ResearchBoard({
       host.lastProbeAt &&
       localDateKey(new Date(host.lastProbeAt), timeZone) === localDateKey(new Date(), timeZone),
   ).length;
-  const eligibleCount = hosts.filter((host) =>
-    ["picked", "working", "done"].includes(hostLane(host.status)),
+  const eligibleCount = hosts.filter(
+    (host) =>
+      ["picked", "working", "done"].includes(hostLane(host.status)) &&
+      Boolean(
+        host.lastProbeAt &&
+          localDateKey(new Date(host.lastProbeAt), timeZone) === localDateKey(new Date(), timeZone),
+      ),
   ).length;
   const [filter, setFilter] = useState<Lane | "all">("all");
   const [query, setQuery] = useState("");
@@ -149,7 +154,19 @@ export function ResearchBoard({
           {targets.filter((target) => target.lane === "done").length} completed
         </span>
       </div>
-      {dailyLimit ? (
+      {targetCount ? (
+        <div className="flex flex-col gap-1 text-xs text-[#A39E90]">
+          <span>
+            {reviewedToday} candidates reviewed today · goal {targetCount} eligible sites
+          </span>
+          <progress
+            aria-label="Eligible-site progress"
+            max={targetCount}
+            value={Math.min(eligibleCount, targetCount)}
+            className="h-2 w-full accent-[#FFE14A]"
+          />
+        </div>
+      ) : dailyLimit ? (
         <div className="flex flex-col gap-1 text-xs text-[#A39E90]">
           <span>
             {reviewedToday} reviewed today · daily cap {dailyLimit} sites
@@ -167,20 +184,20 @@ export function ResearchBoard({
           {eligibleCount}/{targetCount} eligible sites ·{" "}
           {eligibleCount >= targetCount
             ? "Shortlist ready for registration"
-            : dailyLimit && reviewedToday >= dailyLimit
-              ? "Research limit reached before the shortlist was filled"
-              : "Finding replacements for skipped sites"}
+            : "Finding replacements for skipped sites"}
         </p>
       ) : null}
       {targets.length > 0 && targets.every((target) => target.lane === "skipped") ? (
         <BuiCard className="border-[#E6C07B] p-3 text-sm text-[#E6C07B]">
           <p>No eligible sites in this batch.</p>
           <p className="mt-1 text-xs">
-            Nothing is being registered or posted. Inspect a skipped target to see its reason.
+            {targetCount
+              ? "Skipped sites do not count toward the goal. Research needs more eligible sites."
+              : "Nothing is being registered or posted. Inspect a skipped target to see its reason."}
           </p>
         </BuiCard>
       ) : null}
-      {dailyLimit && reviewedToday >= dailyLimit ? (
+      {!targetCount && dailyLimit && reviewedToday >= dailyLimit ? (
         <p className="text-xs text-[#E6C07B]">
           {reviewedToday > dailyLimit
             ? "Today's total exceeds the current cap. "

@@ -15,7 +15,8 @@ describe("research before registration", () => {
     { count: 20, target: undefined, eligible: 0, wait: false },
     { count: 5, target: 5, eligible: 1, wait: true },
     { count: 8, target: 5, eligible: 5, wait: false },
-    { count: 20, target: 5, eligible: 2, wait: false },
+    { count: 20, target: 5, eligible: 2, wait: true },
+    { count: 100, target: 5, eligible: 4, wait: true },
   ])(
     "plans safely for $count reviews and $eligible eligible sites",
     async ({ count, target, eligible, wait }) => {

@@ -407,8 +407,22 @@ export const LbModelLaneOverrideSchema = z.object({
 });
 export type LbModelLaneOverride = z.infer<typeof LbModelLaneOverrideSchema>;
 
+export const LbRegistrationRepairSchema = z.object({
+  issue: z.enum([
+    "username_taken",
+    "username_format",
+    "password_missing",
+    "birthday_required",
+    "form_fields",
+    "unknown",
+  ]),
+});
+export type LbRegistrationIssue = z.infer<typeof LbRegistrationRepairSchema>["issue"];
+
 export const LbContentSchema = z.object({
+  /** Legacy candidate ceiling; ignored when an eligible-site goal is configured. */
   researchSiteLimit: z.number().int().min(1).max(100).optional(),
+  /** Daily eligible-site goal. Rejected candidates do not count toward it. */
   researchTargetCount: z.number().int().min(1).max(100).optional(),
   researchBeforeRegistration: z.boolean().optional(),
   toneNotes: z.string().max(1000).default(""),

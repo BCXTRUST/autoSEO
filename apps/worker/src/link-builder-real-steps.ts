@@ -38,6 +38,7 @@ import type {
   LbPersona,
   LbPlacementStatus,
   LbProxyPolicy,
+  LbRegistrationIssue,
   LbRunStatus,
   LbSchedule,
   LbTarget,
@@ -124,7 +125,6 @@ import {
   clickResendMail,
   enrichCaptchaChallenge,
   fitsOnOnePage,
-  formErrorFixable,
   formErrorTextFromHtml,
   GenericFormDriver,
   instructionClickSelector,
@@ -137,7 +137,6 @@ import {
   solveImageCaptcha,
   splitFormContinues,
   UnmappedFormError,
-  usernameTaken,
   verifyPlacement,
 } from "@rakazo/linkbuilder-drivers";
 import { bumpModelRefusal, composeReply, threadDiscussionExcerpt } from "./link-builder-draft.js";
@@ -154,6 +153,11 @@ import {
   usablePageLinks,
 } from "./link-builder-page-move.js";
 import { ensureProxyLease } from "./link-builder-proxy.js";
+import {
+  diagnoseRegistrationIssue,
+  registrationRepairAllowed,
+  registrationRepairHistory,
+} from "./link-builder-registration-repair.js";
 import {
   berlinDayStart,
   CAPTCHA_SOLVES_PER_HOST_DAY,
@@ -208,8 +212,9 @@ export interface PoolEntry {
   cookieChecked: boolean;
   registerFormReady: boolean;
   captchaAttempts: number;
-  /** One correction of a fixable registration error (taken username, banned email, missing password). */
+  /** Legacy flag; persisted per-issue repair history controls the bounded recovery. */
   registrationRetried: boolean;
+  registrationRepairHistory?: LbRegistrationIssue[];
   /** Spam-protection retries already used on this registration. */
   spamRetries: number;
   /** Split signup steps filled after a submit left the next form open. */
@@ -1630,11 +1635,15 @@ async function ensurePersonalDisplayName(ctx: StepContext): Promise<string> {
   return displayName;
 }
 
-async function freshUsername(ctx: StepContext, host: HostRow): Promise<string> {
+async function freshUsername(ctx: StepContext, host: HostRow, strict = false): Promise<string> {
   const displayName = await ensurePersonalDisplayName(ctx);
   const site = new URL(host.homepageUrl).hostname.replace(/^www\./, "").toLowerCase();
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const username = generateForumUsername(displayName);
+    const username = generateForumUsername(
+      displayName,
+      undefined,
+      strict ? { alphanumeric: true, maxLength: 15 } : {},
+    );
     const taken = await ctx.services.prisma.siteLogin.count({
       where: {
         workspaceId: ctx.project.workspaceId,
@@ -1879,7 +1888,10 @@ async function register(ctx: StepContext): Promise<StepResult> {
     return noSignupForm(ctx, host, artifactIds);
   }
   const credentials = await ensureCredentials(ctx, host);
-  await driver.fillRegistration(entry.session, credentials);
+  await previousRegistrationRepairs(ctx, host, entry);
+  await driver.fillRegistration(entry.session, credentials, {
+    birthdayRequired: entry.registrationRepairHistory?.includes("birthday_required"),
+  });
   entry.registerFormReady = true;
   entry.captchaAttempts = 0;
   const artifactIds = await screenshot(ctx, entry, "register");
@@ -2395,7 +2407,9 @@ async function finishRegistration(
     entry.captchaAttempts = attempt;
     // The board re-renders the form; refill it so a retry or the operator only has the captcha left.
     const credentials = await ensureCredentials(ctx, host);
-    await driver.fillRegistration(entry.session, credentials);
+    await driver.fillRegistration(entry.session, credentials, {
+      birthdayRequired: entry.registrationRepairHistory?.includes("birthday_required"),
+    });
     if (attempt < MAX_CAPTCHA_ATTEMPTS) {
       return withEvent(
         {
@@ -2436,7 +2450,9 @@ async function finishRegistration(
     entry.registerFormReady = false;
     entry.captchaAttempts = 0;
     const credentials = await ensureCredentials(ctx, host);
-    await driver.fillRegistration(entry.session, credentials);
+    await driver.fillRegistration(entry.session, credentials, {
+      birthdayRequired: entry.registrationRepairHistory?.includes("birthday_required"),
+    });
     return withEvent(
       {
         kind: "step",
@@ -2472,7 +2488,9 @@ async function finishRegistration(
     if (used < 3) {
       entry.splitSteps = used + 1;
       const credentials = await ensureCredentials(ctx, host);
-      await driver.fillRegistration(entry.session, credentials);
+      await driver.fillRegistration(entry.session, credentials, {
+        birthdayRequired: entry.registrationRepairHistory?.includes("birthday_required"),
+      });
       entry.registerFormReady = true;
       entry.captchaAttempts = 0;
       return withEvent(
@@ -2488,30 +2506,51 @@ async function finishRegistration(
       );
     }
   }
-  if (
-    result.kind === "form_error" &&
-    formErrorFixable(result.messages) &&
-    !entry.registrationRetried
-  ) {
-    entry.registrationRetried = true;
-    entry.registerFormReady = false;
-    entry.captchaAttempts = 0;
-    if (usernameTaken(result.messages)) await rotateUsername(ctx, host);
-    return withEvent(
-      {
-        kind: "step",
-        lastAction: "Correcting the registration form",
-        hostId: host.id,
-        artifactIds,
-        outcome: {
-          registration: "form_error",
-          retry: true,
-          messages: redactAll(ctx, result.messages),
+  if (result.kind === "form_error") {
+    const issue = await diagnoseRegistrationIssue({
+      messages: redactAll(ctx, result.messages),
+      model: ctx.services.textModel,
+      context: ctx.adapter,
+      sensitiveValues: [ctx.account?.username ?? ""],
+    });
+    const history = await previousRegistrationRepairs(ctx, host, entry);
+    if (registrationRepairAllowed(issue, history)) {
+      entry.registrationRetried = true;
+      entry.registrationRepairHistory = [...history, issue];
+      entry.captchaAttempts = 0;
+      if (issue === "username_taken" || issue === "username_format")
+        await rotateUsername(
+          ctx,
+          host,
+          issue === "username_format" || history.includes("username_format"),
+        );
+      const credentials = await ensureCredentials(ctx, host);
+      await driver.fillRegistration(entry.session, credentials, {
+        birthdayRequired: entry.registrationRepairHistory.includes("birthday_required"),
+      });
+      entry.registerFormReady = true;
+      return withEvent(
+        {
+          kind: "step",
+          lastAction:
+            issue === "username_taken"
+              ? "Username already used; trying a different name"
+              : issue === "username_format"
+                ? "Adjusting the username to the site's format"
+                : "Refilling the required registration fields",
+          hostId: host.id,
+          artifactIds,
+          outcome: {
+            registration: "form_error",
+            retry: true,
+            repairReason: issue,
+            messages: redactAll(ctx, result.messages),
+          },
         },
-      },
-      event,
-      credits,
-    );
+        event,
+        credits,
+      );
+    }
   }
   return withEvent(
     await registrationOutcome(ctx, host, entry, result, artifactIds),
@@ -2533,12 +2572,33 @@ async function unmappedForm(
   };
 }
 
-async function rotateUsername(ctx: StepContext, host: HostRow): Promise<void> {
+async function previousRegistrationRepairs(
+  ctx: StepContext,
+  host: HostRow,
+  entry: PoolEntry,
+): Promise<LbRegistrationIssue[]> {
+  const previous = await ctx.services.prisma.lbRunStep.findMany({
+    where: { runId: ctx.run.id, hostId: host.id, outcome: { path: ["retry"], equals: true } },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: { outcome: true },
+  });
+  const saved = registrationRepairHistory(previous.map((step) => step.outcome));
+  const history =
+    (entry.registrationRepairHistory?.length ?? 0) > saved.length
+      ? entry.registrationRepairHistory!
+      : saved;
+  entry.registrationRepairHistory = history;
+  return history;
+}
+
+async function rotateUsername(ctx: StepContext, host: HostRow, strict = false): Promise<void> {
   const { prisma, secrets } = ctx.services;
   const account = await prisma.lbHostAccount.findUnique({ where: { hostId: host.id } });
-  if (!account?.siteLoginId) return;
+  if (!account?.siteLoginId)
+    throw new StepFailure("Cannot repair username without stored account credentials");
   const password = await loadPassword(ctx, account.siteLoginId);
-  const username = await freshUsername(ctx, host);
+  const username = await freshUsername(ctx, host, strict);
   const stored = await upsertSiteLogin(
     { prisma, secrets },
     {
@@ -2551,7 +2611,7 @@ async function rotateUsername(ctx: StepContext, host: HostRow): Promise<void> {
       from: "bot",
     },
   );
-  if ("error" in stored) return;
+  if ("error" in stored) throw new StepFailure("Could not save the corrected username");
   await prisma.lbHostAccount.update({
     where: { id: account.id },
     data: { username, siteLoginId: stored.login.id },

@@ -102,7 +102,11 @@ export interface BoardDriver {
   /** Opens the registration form, accepting the board terms on the way. */
   openRegistration(session: BrowserSession, homepageUrl: string): Promise<RegistrationPage>;
   /** Fills the form without submitting it; password fields are filled as secrets. */
-  fillRegistration(session: BrowserSession, account: BoardAccount): Promise<void>;
+  fillRegistration(
+    session: BrowserSession,
+    account: BoardAccount,
+    options?: { birthdayRequired?: boolean },
+  ): Promise<void>;
   detectCaptcha(session: BrowserSession): Promise<CaptchaChallenge>;
   /** The register form's submit control, clicked by the Page Helper loop after a token lands. */
   readonly registerSubmitSelector: string;
