@@ -1560,8 +1560,8 @@ async function persistDiscovered(
 
 async function discoveryHeld(prisma: PrismaClient, projectId: string, now: Date): Promise<boolean> {
   const run = await prisma.lbRun.findFirst({
-    where: { projectId, status: { in: ["running", "overtime"] } },
-    orderBy: { updatedAt: "desc" },
+    where: { projectId },
+    orderBy: { createdAt: "desc" },
     select: { id: true },
   });
   if (!run) return false;
@@ -1675,8 +1675,8 @@ async function recordDiscoveryFailure(
     ? `Search failed: ${message}`.slice(0, 90)
     : lastAction;
   const run = await prisma.lbRun.findFirst({
-    where: { projectId: project.id, status: { in: ["running", "overtime"] } },
-    orderBy: { updatedAt: "desc" },
+    where: { projectId: project.id },
+    orderBy: { createdAt: "desc" },
   });
   if (!run) {
     console.error("linkbuilder.discover", project.id, error);
@@ -1708,10 +1708,12 @@ async function recordDiscoveryFailure(
       finishedAt: now,
     },
   });
-  await prisma.lbRun.update({
-    where: { id: run.id },
-    data: { lastAction: action },
-  });
+  if (run.status === "running" || run.status === "overtime") {
+    await prisma.lbRun.update({
+      where: { id: run.id },
+      data: { lastAction: action },
+    });
+  }
 }
 
 async function fetchProbeText(
