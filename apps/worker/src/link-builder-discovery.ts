@@ -1625,10 +1625,18 @@ async function recordDiscoveryStep(
 ): Promise<void> {
   const action = lastAction.slice(0, 180);
   const stored = error?.slice(0, 500) ?? null;
-  const run = await prisma.lbRun.findFirst({
+  let run = await prisma.lbRun.findFirst({
     where: { projectId: project.id, status: { in: ["running", "overtime"] } },
     orderBy: { updatedAt: "desc" },
   });
+  // Research can run before the browser schedule opens. Keep its pending queue
+  // on the latest campaign run without reopening that run or changing its status.
+  if (!run && detail?.researchQueue === true) {
+    run = await prisma.lbRun.findFirst({
+      where: { projectId: project.id },
+      orderBy: { createdAt: "desc" },
+    });
+  }
   if (!run) {
     console.error("linkbuilder.discover", project.id, action);
     return;
@@ -1647,10 +1655,12 @@ async function recordDiscoveryStep(
       finishedAt: now,
     },
   });
-  await prisma.lbRun.update({
-    where: { id: run.id },
-    data: { lastAction: action },
-  });
+  if (run.status === "running" || run.status === "overtime") {
+    await prisma.lbRun.update({
+      where: { id: run.id },
+      data: { lastAction: action },
+    });
+  }
 }
 
 async function recordDiscoveryFailure(

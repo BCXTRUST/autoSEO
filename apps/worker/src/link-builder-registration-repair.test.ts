@@ -47,12 +47,14 @@ describe("registration recovery", () => {
     const model = { complete } as unknown as TextModel;
     expect(
       await diagnoseRegistrationIssue({
-        messages: ["This handle is disallowed for person@example.invalid"],
+        messages: ["This handle Alpha789 is disallowed for person@example.invalid"],
+        sensitiveValues: ["Alpha789"],
         model,
         context,
       }),
     ).toBe("username_format");
     expect(complete.mock.calls[0]![0].user).not.toContain("person@example.invalid");
+    expect(complete.mock.calls[0]![0].user).not.toContain("Alpha789");
     complete.mockResolvedValue({ ok: true, value: { issue: "execute_script" } });
     expect(
       await diagnoseRegistrationIssue({
