@@ -4,9 +4,10 @@ import { sampleForumHtml } from "@rakazo/linkbuilder-core";
 import { expect, it } from "vitest";
 import { discoverDueProjects } from "./link-builder-discovery.js";
 
-it.each(["running", "partial"])(
+it.each(["running", "partial", "partial_error"])(
   "replaces rejected candidates from saved results until five qualify with a %s run",
-  async (runStatus) => {
+  async (scenario) => {
+    const runStatus = scenario === "running" ? "running" : "partial";
     const oldMode = process.env.LINK_BUILDER_BROWSER_SEARCH;
     process.env.LINK_BUILDER_BROWSER_SEARCH = "off";
     const now = new Date("2026-10-27T12:00:00Z");
@@ -99,6 +100,8 @@ it.each(["running", "partial"])(
     const search = {
       search: async () => {
         searches += 1;
+        if (scenario === "partial_error")
+          throw new Error("status 20000/40101 Internal SE Server Error.");
         return Array.from({ length: 9 }, (_, i) => ({
           url: `https://candidate-${i}.test/viewtopic.php?t=1`,
           title: "Meditation",
@@ -126,8 +129,18 @@ it.each(["running", "partial"])(
           now,
           fetchImpl: fetchImpl as typeof fetch,
           allowPrivate: true,
+          retryDelayMs: 0,
         });
       await run();
+      if (scenario === "partial_error") {
+        expect(searches).toBe(2);
+        await run();
+        expect(searches).toBe(2);
+        expect(steps.some((step) => step.error?.includes("40101"))).toBe(true);
+        expect(runUpdates).toBe(0);
+        expect(paused).toBe(false);
+        return;
+      }
       expect(hosts.filter((host) => host.status === "qualified")).toHaveLength(1);
       expect(hosts).toHaveLength(25);
       const paidSearches = searches;
