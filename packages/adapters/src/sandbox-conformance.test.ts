@@ -5,6 +5,7 @@ import path from "node:path";
 import type { ComputerRef, ProcessEvent, SandboxProvider } from "@rakazo/adapter-kit";
 import { afterAll, describe, expect, it } from "vitest";
 import { BoxSandboxEmulator } from "./box-emulator.js";
+import { PORTABLE_BROWSER_STOP_COMMAND } from "./computer-workspace.js";
 import { DaytonaSandboxEmulator } from "./daytona-emulator.js";
 import { DesktopSandboxProvider } from "./desktop-sandbox.js";
 import { DockerSandboxProvider } from "./docker-sandbox.js";
@@ -28,6 +29,28 @@ async function drain(provider: SandboxProvider, computer: ComputerRef) {
   }
   return stdout;
 }
+
+async function runDockerCommand(
+  provider: DockerSandboxProvider,
+  computer: ComputerRef,
+  argv: string[],
+) {
+  let exitCode: number | undefined;
+  for await (const event of provider.execute(computer, { argv }, ctx)) {
+    if (event.type === "exit") exitCode = event.code;
+  }
+  expect(exitCode).toBe(0);
+}
+
+const stopBrowserAndWaitCommand =
+  `${PORTABLE_BROWSER_STOP_COMMAND}; ` +
+  'attempt=0; while [ "$attempt" -lt 50 ]; do ' +
+  "if ! pgrep -f '[g]oogle-chrome|[c]hromium|[f]irefox' >/dev/null; then exit 0; fi; " +
+  "attempt=$((attempt + 1)); sleep 0.1; done; " +
+  "pkill -KILL -f '[g]oogle-chrome|[c]hromium|[f]irefox' || true; " +
+  'attempt=0; while [ "$attempt" -lt 50 ]; do ' +
+  "if ! pgrep -f '[g]oogle-chrome|[c]hromium|[f]irefox' >/dev/null; then exit 0; fi; " +
+  "attempt=$((attempt + 1)); sleep 0.1; done; exit 1";
 
 describe("sandbox conformance", () => {
   it("runs the same graphical command across fake, managed-provider emulators, and desktop", async () => {
@@ -264,18 +287,35 @@ describe("docker sandbox", () => {
       { botId, homePath: path.join(dataDir, "homes", botId) },
       ctx,
     );
-    const out = await drain(provider, computer);
-    expect(out).toContain("graphical-ok");
-    const session = await provider.connectScreen(computer, { view: "stream" }, ctx);
-    expect(session.url).toMatch(/embed\.html/);
-    for await (const _event of provider.execute(
-      computer,
-      { argv: ["chmod", "-R", "a+rwX", "/home/rakazo"] },
-      ctx,
-    )) {
-      // Drain the command so permissions are updated before container removal.
+    try {
+      const out = await drain(provider, computer);
+      expect(out).toContain("graphical-ok");
+      const session = await provider.connectScreen(computer, { view: "stream" }, ctx);
+      expect(session.url).toMatch(/embed\.html/);
+    } finally {
+      try {
+        await runDockerCommand(provider, computer, ["bash", "-lc", stopBrowserAndWaitCommand]);
+      } finally {
+        try {
+          await runDockerCommand(provider, computer, [
+            "find",
+            "/home/rakazo",
+            "-mindepth",
+            "1",
+            "-maxdepth",
+            "1",
+            "-exec",
+            "rm",
+            "-rf",
+            "--",
+            "{}",
+            "+",
+          ]);
+        } finally {
+          await provider.destroy(computer, ctx);
+        }
+      }
     }
-    await provider.destroy(computer, ctx);
   }, 180_000);
 });
 
