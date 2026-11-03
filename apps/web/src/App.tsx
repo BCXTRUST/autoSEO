@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
 import { BuiButton, LoadingState } from "./components/beautiful-ui/primitives";
 import { authClient } from "./lib/auth";
 import { markAfterPaint, markOnce } from "./lib/performance";
@@ -16,13 +17,33 @@ const AuthPage = lazy(() =>
   import("./pages/Auth").then((module) => ({ default: module.AuthPage })),
 );
 const OnboardingPage = lazy(() =>
-  import("./pages/Onboarding").then((module) => ({ default: module.OnboardingPage })),
+  import("./pages/Onboarding").then((module) => ({
+    default: module.OnboardingPage,
+  })),
 );
 const WelcomePage = lazy(() =>
   import("./pages/Welcome").then((module) => ({ default: module.WelcomePage })),
 );
+const CampaignDashboardPage = lazy(() =>
+  import("./pages/campaigns/CampaignDashboard").then((module) => ({
+    default: module.CampaignDashboard,
+  })),
+);
+const CampaignDetailPage = lazy(() =>
+  import("./pages/campaigns/CampaignDetail").then((module) => ({
+    default: module.CampaignDetail,
+  })),
+);
 
 export function App() {
+  return (
+    <AppErrorBoundary>
+      <AppContent />
+    </AppErrorBoundary>
+  );
+}
+
+function AppContent() {
   const session = authClient.useSession();
   const gate = sessionGate(session);
   const [holdingUnreachable, setHoldingUnreachable] = useState(false);
@@ -54,7 +75,13 @@ export function App() {
   const user = session.data?.user;
   return (
     <div className="h-full" data-rakazo-app-state="ready">
-      <Suspense fallback={<div className="h-full bg-[#050506]" />}>
+      <Suspense
+        fallback={
+          <div className="grid h-full place-items-center bg-[#090a0e]">
+            <LoadingState label="Loading workspace" />
+          </div>
+        }
+      >
         <Routes>
           <Route path="/" element={user ? <Navigate to="/app" replace /> : <WelcomePage />} />
           <Route
@@ -73,7 +100,22 @@ export function App() {
             path="/mcp/oauth/callback"
             element={user ? <McpOAuthCallbackPage /> : <Navigate to="/sign-in" replace />}
           />
-          <Route path="/app" element={user ? <ShellPage /> : <Navigate to="/sign-in" replace />} />
+          <Route
+            path="/app"
+            element={user ? <CampaignDashboardPage /> : <Navigate to="/sign-in" replace />}
+          />
+          <Route
+            path="/app/campaigns"
+            element={user ? <CampaignDashboardPage /> : <Navigate to="/sign-in" replace />}
+          />
+          <Route
+            path="/app/campaigns/:campaignId"
+            element={user ? <CampaignDetailPage /> : <Navigate to="/sign-in" replace />}
+          />
+          <Route
+            path="/app/agents"
+            element={user ? <ShellPage /> : <Navigate to="/sign-in" replace />}
+          />
           <Route
             path="/app/g/:groupId"
             element={user ? <ShellPage /> : <Navigate to="/sign-in" replace />}

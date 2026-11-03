@@ -102,6 +102,9 @@ import {
 } from "@rakazo/db";
 import { assignAgentMailInbox, listAgentMailInboxes } from "./agentmail.js";
 import { createOwnedArtifact, getOwnedArtifact, getWorkspaceArtifact } from "./artifacts.js";
+import { createCampaignChallengeService } from "./campaign-challenges.js";
+import { createCampaignPublicationService } from "./campaign-publications.js";
+import { createCampaignService } from "./campaigns.js";
 import {
   executionBlocksUserTakeover,
   resolveBusyBotName,
@@ -308,6 +311,10 @@ export interface RouterDeps {
     screenProxySecret: string;
     sandboxProvider: string;
     agentMailApiKey?: string;
+    discourseBaseUrl?: string;
+    discourseApiKey?: string;
+    discourseApiUsername?: string;
+    discoursePublishingEnabled?: boolean;
   };
 }
 
@@ -316,6 +323,13 @@ export function createRouter(deps: RouterDeps) {
   const repos = createRepos(deps.prisma);
   const mcpOAuth = deps.mcpOAuth ?? new McpOAuthBroker(deps.prisma, deps.secrets);
   const groupRepos = createGroupRepos(deps.prisma);
+  const campaigns = createCampaignService(deps.prisma);
+  const campaignPublications = createCampaignPublicationService(deps.prisma, deps.env);
+  const campaignChallenges = createCampaignChallengeService({
+    prisma: deps.prisma,
+    secrets: deps.secrets,
+    env: process.env,
+  });
   const taughtSkills = createTaughtSkillsService({
     prisma: deps.prisma,
     events: deps.events,
@@ -352,6 +366,63 @@ export function createRouter(deps: RouterDeps) {
         : [null, []];
       return { me, bots, botSections, archivedBots, thread, routines };
     }),
+    campaigns: {
+      list: authed.campaigns.list.handler(({ context }) => campaigns.list(context.actor)),
+      create: authed.campaigns.create.handler(({ context, input }) =>
+        campaigns.create(context.actor, input),
+      ),
+      update: authed.campaigns.update.handler(({ context, input }) =>
+        campaigns.update(context.actor, input),
+      ),
+      get: authed.campaigns.get.handler(({ context, input }) =>
+        campaigns.get(context.actor, input),
+      ),
+      addItem: authed.campaigns.addItem.handler(({ context, input }) =>
+        campaigns.addItem(context.actor, input),
+      ),
+      updateDraft: authed.campaigns.updateDraft.handler(({ context, input }) =>
+        campaigns.updateDraft(context.actor, input),
+      ),
+      review: authed.campaigns.review.handler(({ context, input }) =>
+        campaigns.review(context.actor, input),
+      ),
+      reviewOpportunity: authed.campaigns.reviewOpportunity.handler(({ context, input }) =>
+        campaigns.reviewOpportunity(context.actor, input),
+      ),
+      control: authed.campaigns.control.handler(({ context, input }) =>
+        campaigns.control(context.actor, input),
+      ),
+      stopAll: authed.campaigns.stopAll.handler(({ context, input }) =>
+        campaigns.stopAll(context.actor, input.clientNonce),
+      ),
+      challengeStatus: authed.campaigns.challengeStatus.handler(({ context, input }) =>
+        campaignChallenges.status(context.actor, input),
+      ),
+      createChallenge: authed.campaigns.createChallenge.handler(({ context, input }) =>
+        campaignChallenges.create(context.actor, input, context.signal),
+      ),
+      pollChallenge: authed.campaigns.pollChallenge.handler(({ context, input }) =>
+        campaignChallenges.poll(context.actor, input, context.signal),
+      ),
+      challengeResult: authed.campaigns.challengeResult.handler(({ context, input }) =>
+        campaignChallenges.result(context.actor, input),
+      ),
+      publicationStatus: authed.campaigns.publicationStatus.handler(({ context, input }) =>
+        campaignPublications.status(context.actor, input.campaignId),
+      ),
+      publicationActions: authed.campaigns.publicationActions.handler(({ context, input }) =>
+        campaignPublications.actions(context.actor, input.campaignId),
+      ),
+      publishDraft: authed.campaigns.publishDraft.handler(({ context, input }) =>
+        campaignPublications.publishDraft(context.actor, input),
+      ),
+      verifyPublication: authed.campaigns.verifyPublication.handler(({ context, input }) =>
+        campaignPublications.verifyPublication(context.actor, input),
+      ),
+      recoverItem: authed.campaigns.recoverItem.handler(({ context, input }) =>
+        campaigns.recoverItem(context.actor, input),
+      ),
+    },
     deployment: {
       get: authed.deployment.get.handler(async ({ context }) => {
         if (!context.actor.isDeploymentOwner) throw new ORPCError("FORBIDDEN");

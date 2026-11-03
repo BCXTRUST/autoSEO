@@ -46,4 +46,14 @@ describe("openrouter model defaults", () => {
     expect(resolveAuxOpenRouterModelId("moonshotai/kimi-k2")).toBe("x-ai/grok-4-fast");
     vi.unstubAllEnvs();
   });
+
+  it("resolves defaults safely when running without a Node process global", () => {
+    vi.stubGlobal("process", undefined);
+    const computerModel = resolveOpenRouterModelId(LEGACY_FLASH_MODEL_ID);
+    const auxModel = resolveAuxOpenRouterModelId(undefined);
+    vi.unstubAllGlobals();
+
+    expect(computerModel).toBe(DEFAULT_OPENROUTER_MODEL_ID);
+    expect(auxModel).toBe(DEFAULT_AUX_MODEL_ID);
+  });
 });

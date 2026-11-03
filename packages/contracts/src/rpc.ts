@@ -2,6 +2,19 @@ import { eventIterator, oc } from "@orpc/contract";
 import * as z from "zod";
 import { ATTACHMENT_MAX_BASE64_LENGTH, ATTACHMENT_MAX_COUNT } from "./attachments.js";
 import {
+  Campaign,
+  CampaignChallengeResult,
+  CampaignChallengeStatus,
+  CampaignChallengeTask,
+  CampaignConfigInput,
+  CampaignHttpUrl,
+  CampaignItem,
+  CampaignMode,
+  CampaignPublicationAction,
+  CampaignPublicationStatus,
+  CampaignSnapshot,
+} from "./campaigns.js";
+import {
   ActionApprovalRuleSchema,
   AppBootstrapSchema,
   ArtifactSchema,
@@ -100,6 +113,136 @@ export const appContract = {
   health: oc.output(z.object({ ok: z.literal(true), version: z.string() })),
   me: oc.output(MeSchema),
   bootstrap: oc.input(z.object({ botId: Id.optional() })).output(AppBootstrapSchema),
+  campaigns: {
+    list: oc.output(z.array(Campaign)),
+    create: oc
+      .input(
+        z.object({
+          config: CampaignConfigInput,
+          mode: CampaignMode.default("research"),
+          clientNonce: z.string().trim().min(1).max(200),
+        }),
+      )
+      .output(Campaign),
+    update: oc
+      .input(
+        z.object({
+          campaignId: Id,
+          expectedRevision: z.number().int().positive().safe(),
+          config: CampaignConfigInput,
+        }),
+      )
+      .output(Campaign),
+    get: oc
+      .input(
+        z.object({
+          campaignId: Id,
+          afterSequence: z.number().int().nonnegative().safe().default(0),
+        }),
+      )
+      .output(CampaignSnapshot),
+    addItem: oc
+      .input(
+        z.object({
+          campaignId: Id,
+          kind: z.enum(["source", "opportunity"]),
+          url: CampaignHttpUrl,
+          title: z.string().trim().min(1).max(200),
+          clientNonce: z.string().trim().min(1).max(200),
+        }),
+      )
+      .output(CampaignItem),
+    updateDraft: oc
+      .input(
+        z.object({
+          campaignId: Id,
+          itemId: Id,
+          body: z.string().max(20_000),
+          expectedUpdatedAt: z.iso.datetime({ offset: true }),
+        }),
+      )
+      .output(CampaignItem),
+    review: oc
+      .input(
+        z.object({
+          campaignId: Id,
+          itemId: Id,
+          decision: z.enum(["approve", "reject"]),
+          expectedUpdatedAt: z.iso.datetime({ offset: true }),
+        }),
+      )
+      .output(CampaignItem),
+    reviewOpportunity: oc
+      .input(
+        z.object({
+          campaignId: Id,
+          itemId: Id,
+          expectedUpdatedAt: z.iso.datetime({ offset: true }),
+          action: z.enum(["select", "dismiss"]),
+          clientNonce: z.string().trim().min(1).max(200),
+        }),
+      )
+      .output(CampaignItem),
+    control: oc
+      .input(
+        z.object({
+          campaignId: Id,
+          action: z.enum(["start", "pause", "resume"]),
+          clientNonce: z.string().trim().min(1).max(200),
+        }),
+      )
+      .output(Campaign),
+    stopAll: oc
+      .input(z.object({ clientNonce: z.string().trim().min(1).max(200) }))
+      .output(z.object({ pausedCount: z.number().int().nonnegative().safe() })),
+    challengeStatus: oc.input(z.object({ campaignId: Id })).output(CampaignChallengeStatus),
+    createChallenge: oc
+      .input(
+        z.object({
+          campaignId: Id,
+          clientNonce: z.string().trim().min(1).max(200),
+          imageBase64: z
+            .string()
+            .min(1)
+            .max(7 * 1024 * 1024),
+          authorizedUse: z.literal(true),
+        }),
+      )
+      .output(CampaignChallengeTask),
+    pollChallenge: oc.input(z.object({ campaignId: Id, taskId: Id })).output(CampaignChallengeTask),
+    challengeResult: oc
+      .input(z.object({ campaignId: Id, taskId: Id }))
+      .output(CampaignChallengeResult),
+    publicationStatus: oc.input(z.object({ campaignId: Id })).output(CampaignPublicationStatus),
+    publicationActions: oc
+      .input(z.object({ campaignId: Id }))
+      .output(z.array(CampaignPublicationAction)),
+    publishDraft: oc
+      .input(
+        z.object({
+          campaignId: Id,
+          draftId: Id,
+          expectedUpdatedAt: z.iso.datetime({ offset: true }),
+          topicId: z.number().int().positive().safe(),
+          clientNonce: z.string().trim().min(1).max(200),
+          confirmReviewed: z.literal(true),
+        }),
+      )
+      .output(CampaignPublicationAction),
+    verifyPublication: oc
+      .input(z.object({ campaignId: Id, actionId: Id }))
+      .output(CampaignPublicationAction),
+    recoverItem: oc
+      .input(
+        z.object({
+          campaignId: Id,
+          itemId: Id,
+          action: z.enum(["retry", "defer", "skip"]),
+          clientNonce: z.string().trim().min(1).max(200),
+        }),
+      )
+      .output(CampaignItem),
+  },
   deployment: {
     get: oc.output(DeploymentSettingsSchema),
     update: oc

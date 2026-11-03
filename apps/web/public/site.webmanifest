@@ -1,7 +1,7 @@
 {
-  "name": "Rakazo",
-  "short_name": "Rakazo",
-  "description": "Your team of always-on agents.",
+  "name": "AutoSEO",
+  "short_name": "AutoSEO",
+  "description": "Campaign research and drafts, ready for your review.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#050506",

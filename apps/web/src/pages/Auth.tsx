@@ -20,7 +20,7 @@ export function AuthPage({ mode }: { mode: "in" | "up" }) {
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const title = mode === "in" ? "Sign in to Rakazo" : "Create your Rakazo";
+  const title = mode === "in" ? "Sign in to AutoSEO" : "Create your AutoSEO account";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -93,7 +93,11 @@ export function AuthPage({ mode }: { mode: "in" | "up" }) {
             className="mt-2 w-full rounded-[13px] border border-[#E4E4DE] bg-[#F1F1ED] px-[18px] py-[17px] text-[17px] text-[#1B1B1E] outline-none"
           />
         </label>
-        {error ? <p className="mt-3 w-full text-sm text-[#C94244]">{error}</p> : null}
+        {error ? (
+          <p role="alert" className="mt-3 w-full text-sm text-[#C94244]">
+            {error}
+          </p>
+        ) : null}
         <button
           type="submit"
           disabled={pending}

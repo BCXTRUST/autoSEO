@@ -3,6 +3,7 @@ export * from "./answerable-ask.js";
 export * from "./async.js";
 export * from "./attachments.js";
 export * from "./bot-sections.js";
+export * from "./campaign-scheduling.js";
 export * from "./compose-update.js";
 export * from "./computer-desktop.js";
 export * from "./cron.js";

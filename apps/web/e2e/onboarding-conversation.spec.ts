@@ -1,16 +1,19 @@
 import { expect, type Page, test } from "@playwright/test";
-import { captureScreenshot, completeOnboarding, rpc, signup } from "./helpers";
+import { activeBotId, captureScreenshot, completeOnboarding, rpc, signup } from "./helpers";
 
 function slackCard(page: Page) {
   return page.getByRole("group", { name: "Slack connection" });
 }
 
-test("focus choice suggests apps and preserves a completed connection", async ({
+test("legacy bot focus choice still supports app suggestions and persisted connection", async ({
   page,
 }, testInfo) => {
   const stamp = Date.now();
   await signup(page, `onboarding-${stamp}@rakazo.test`, "password12", "Robin");
   await completeOnboarding(page);
+  const botId = activeBotId(page);
+  await rpc(page, "onboarding/start", { botId });
+  await page.reload();
 
   await expect(
     page.getByText("Hey Robin. Fresh start on my side, so I’ll keep this short."),

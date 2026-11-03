@@ -2,10 +2,9 @@
 import Logo from "./Logo.astro";
 
 const NAV_LINKS = [
-  { href: "/#offers", label: "Offers" },
-  { href: "/#geo", label: "SEO + GEO" },
-  { href: "/#work", label: "How it works" },
-  { href: "/#match", label: "Who we take" },
+  { href: "/#workflow", label: "Workflow" },
+  { href: "/#control", label: "Review & control" },
+  { href: "/support/", label: "Support" },
 ];
 ---
 
@@ -20,12 +19,8 @@ const NAV_LINKS = [
   </div>
   <div class="site-header__right">
     <div class="site-header__cta">
-      <button class="button button--secondary button--small" type="button" data-get-started-open data-apply-intent="call">
-        Book a fit call
-      </button>
-      <button class="button button--primary button--small" type="button" data-get-started-open data-apply-intent="apply">
-        Apply
-      </button>
+      <a class="site-header__app" href="https://app.autoseo.run/app">Open workspace <span class="external-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M5 11 11 5M5 5h6v6" /></svg></span></a>
+      <button class="button button--primary button--small" type="button" data-get-started-open data-apply-intent="apply">Apply</button>
     </div>
     <details class="site-menu" data-site-menu>
       <summary class="site-menu__toggle" aria-label="Menu">
@@ -40,9 +35,8 @@ const NAV_LINKS = [
         {NAV_LINKS.map((link) => (
           <a href={link.href}>{link.label}</a>
         ))}
-        <button class="button button--primary button--small" type="button" data-get-started-open data-apply-intent="apply">
-          Apply
-        </button>
+        <a href="https://app.autoseo.run/app">Open workspace <span class="external-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M5 11 11 5M5 5h6v6" /></svg></span></a>
+        <button class="button button--primary button--small" type="button" data-get-started-open data-apply-intent="apply">Apply for early access</button>
       </nav>
     </details>
   </div>

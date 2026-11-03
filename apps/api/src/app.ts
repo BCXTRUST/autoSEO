@@ -249,6 +249,10 @@ export async function createApp(
       screenProxySecret: env.authSecret,
       sandboxProvider: env.sandboxProvider,
       agentMailApiKey: env.agentMailApiKey,
+      discourseBaseUrl: env.discourseBaseUrl,
+      discourseApiKey: env.discourseApiKey,
+      discourseApiUsername: env.discourseApiUsername,
+      discoursePublishingEnabled: env.discoursePublishingEnabled,
     },
   });
   const rpc = new RPCHandler(router);

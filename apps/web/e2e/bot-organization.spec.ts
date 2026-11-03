@@ -5,7 +5,7 @@ test("pinned bots and sidebar sections persist", async ({ page }, testInfo) => {
   const stamp = Date.now();
   await signup(page, `bot-organize-${stamp}@rakazo.test`, "password12", "Test User");
   await completeOnboarding(page);
-  await page.goto("/app");
+  await page.goto("/app/agents");
   await page.waitForURL(/\/app\/[^/]+$/);
 
   const sidebar = page.locator("aside").first();

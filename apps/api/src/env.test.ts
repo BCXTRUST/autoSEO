@@ -95,4 +95,22 @@ describe("loadEnv", () => {
       "1d2a517deadbeef",
     );
   });
+
+  it("keeps live campaign publication disabled unless explicitly enabled", () => {
+    expect(loadEnv(base).discoursePublishingEnabled).toBe(false);
+    expect(
+      loadEnv({
+        ...base,
+        DISCOURSE_BASE_URL: "https://forum.example.test",
+        DISCOURSE_API_KEY: "test-key",
+        DISCOURSE_API_USERNAME: "campaign-bot",
+        CAMPAIGN_DISCOURSE_PUBLISHING_ENABLED: "true",
+      }),
+    ).toMatchObject({
+      discourseBaseUrl: "https://forum.example.test",
+      discourseApiKey: "test-key",
+      discourseApiUsername: "campaign-bot",
+      discoursePublishingEnabled: true,
+    });
+  });
 });

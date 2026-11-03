@@ -8,6 +8,21 @@
       "types": "./src/index.ts",
       "development": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./challenge": {
+      "types": "./src/challenge.ts",
+      "development": "./src/challenge.ts",
+      "default": "./src/challenge.ts"
+    },
+    "./campaign-drafting": {
+      "types": "./src/campaign-drafting.ts",
+      "development": "./src/campaign-drafting.ts",
+      "default": "./src/campaign-drafting.ts"
+    },
+    "./campaign-search": {
+      "types": "./src/campaign-search.ts",
+      "development": "./src/campaign-search.ts",
+      "default": "./src/campaign-search.ts"
     }
   },
   "scripts": {

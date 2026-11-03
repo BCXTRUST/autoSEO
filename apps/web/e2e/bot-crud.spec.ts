@@ -5,7 +5,7 @@ test("bot creation, editing, and deletion persist", async ({ page }, testInfo) =
   const stamp = Date.now();
   await signup(page, `bot-crud-${stamp}@rakazo.test`, "password12", "Bot CRUD");
   await completeOnboarding(page);
-  await page.goto("/app");
+  await page.goto("/app/agents");
   await page.waitForURL(/\/app\/[^/]+$/);
 
   const botList = page.locator("aside").first();
@@ -73,7 +73,10 @@ test("bot creation, editing, and deletion persist", async ({ page }, testInfo) =
   await nameInput.fill("Atlas");
   await titleInput.fill("Research lead");
   await descriptionInput.fill("Builds durable, source-backed research briefs.");
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page
+    .getByTestId("bot-settings")
+    .getByRole("button", { name: "Save bot profile", exact: true })
+    .click();
   await expect(botList.getByRole("button", { name: /^Atlas/ })).toBeVisible();
   await expect(page.getByPlaceholder("Message Atlas")).toBeVisible();
   await captureScreenshot(page, testInfo, "28-edited-bot-profile");

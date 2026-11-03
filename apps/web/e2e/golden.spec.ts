@@ -226,6 +226,7 @@ test("sign-in, spawn, and stop work in the shell", async ({ page }, testInfo) =>
   await page.getByPlaceholder("Password").fill("password12");
   await page.getByRole("button", { name: "Continue with email" }).click();
   await page.waitForURL(/\/app/, { timeout: 20_000 });
+  await page.goto("/app/agents");
   await expect(
     page.getByRole("complementary").getByRole("button", { name: /^Chief/ }),
   ).toBeVisible();

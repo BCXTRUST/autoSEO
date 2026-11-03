@@ -15,6 +15,14 @@ describe("initial bootstrap target", () => {
     expect(initialBootstrapTarget("/app/g/group-1", false)).toEqual({ botId: undefined });
   });
 
+  it("does not treat reserved campaign and legacy-shell routes as bot ids", () => {
+    expect(initialBootstrapTarget("/app/agents", false)).toEqual({ botId: undefined });
+    expect(initialBootstrapTarget("/app/campaigns", false)).toEqual({ botId: undefined });
+    expect(initialBootstrapTarget("/app/campaigns/campaign-1", false)).toEqual({
+      botId: undefined,
+    });
+  });
+
   it("does not prime unrelated routes", () => {
     expect(initialBootstrapTarget("/sign-in", true)).toBeNull();
     expect(initialBootstrapTarget("/onboarding", false)).toBeNull();

@@ -4,8 +4,15 @@ import { loadRootEnv } from "@rakazo/core/node/load-root-env";
 loadRootEnv();
 
 import {
+  createAntiCaptchaAdapter,
   createBackgroundJobHandlers,
+  createBingCampaignSearchProvider,
+  createCampaignChallengeWorker,
+  createCampaignDraftProvider,
+  createCampaignPublicationWorker,
+  createCampaignWorker,
   createConnectorStack,
+  createDiscourseCampaignAdapter,
   createJobReconciler,
   createPostgresReconciliationLeadership,
   createRunExecutor,
@@ -128,6 +135,49 @@ async function main() {
     deploymentModelKey: process.env.OPENROUTER_API_KEY,
   });
   await jobHost.start(jobHandlers);
+  const campaignAiEnabled = process.env.CAMPAIGN_AI_DRAFTING_ENABLED === "true";
+  const campaignAiReservationMicros = safePositiveInteger(
+    process.env.CAMPAIGN_AI_RESERVATION_MICROS,
+  );
+  const campaignDraftProvider = createCampaignDraftProvider({
+    enabled: campaignAiEnabled,
+    providerId: process.env.CAMPAIGN_AI_PROVIDER_ID,
+    modelId: process.env.CAMPAIGN_AI_MODEL_ID,
+    apiKey: process.env.CAMPAIGN_AI_API_KEY ?? process.env.OPENROUTER_API_KEY,
+    timeoutMs: 12_000,
+  });
+  const campaignWorker = createCampaignWorker({
+    prisma,
+    workerId: process.pid.toString(),
+    aiDrafting: {
+      enabled: campaignAiEnabled,
+      ownerUserId: process.env.CAMPAIGN_AI_OWNER_USER_ID,
+      maxReservationMicros: campaignAiReservationMicros,
+      provider: campaignDraftProvider,
+    },
+    discovery: {
+      enabled: process.env.CAMPAIGN_DISCOVERY_ENABLED !== "false",
+      searchProviderId: "bing-rss",
+      searchProvider:
+        process.env.CAMPAIGN_DISCOVERY_ENABLED === "false"
+          ? undefined
+          : createBingCampaignSearchProvider(),
+    },
+  });
+  campaignWorker.start();
+  const antiCaptchaKey = process.env.ANTI_CAPTCHA_API_KEY?.trim();
+  const campaignChallengeWorker = createCampaignChallengeWorker({
+    prisma,
+    provider: antiCaptchaKey ? createAntiCaptchaAdapter({ clientKey: antiCaptchaKey }) : undefined,
+    secrets,
+  });
+  campaignChallengeWorker.start();
+  const publicationAdapter = createDiscoursePublicationAdapter();
+  const campaignPublicationWorker = createCampaignPublicationWorker({
+    prisma,
+    adapter: publicationAdapter,
+  });
+  campaignPublicationWorker.start();
   const reconciler = createJobReconciler({
     prisma,
     jobs,
@@ -140,6 +190,9 @@ async function main() {
     if (stopping) return;
     stopping = true;
     await reconciler.stop();
+    await campaignPublicationWorker.stop();
+    await campaignChallengeWorker.stop();
+    await campaignWorker.stop();
     await jobHost.stop();
     await jobs.close();
     await realtime.close();
@@ -158,3 +211,37 @@ main().catch((error) => {
   console.error(error);
   process.exit(1);
 });
+
+function safePositiveInteger(value: string | undefined): number | undefined {
+  if (!value || !/^[1-9][0-9]*$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function createDiscoursePublicationAdapter() {
+  const baseUrl = process.env.DISCOURSE_BASE_URL?.trim();
+  const apiKey = process.env.DISCOURSE_API_KEY?.trim();
+  const apiUsername = process.env.DISCOURSE_API_USERNAME?.trim();
+  if (!baseUrl || !apiKey || !apiUsername) return undefined;
+  try {
+    const parsed = new URL(baseUrl);
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return undefined;
+    }
+    return createDiscourseCampaignAdapter({
+      baseUrl,
+      apiKey,
+      apiUsername,
+      authorizedSite: true,
+      timeoutMs: 9_000,
+    });
+  } catch {
+    return undefined;
+  }
+}

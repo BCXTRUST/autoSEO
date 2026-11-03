@@ -3860,6 +3860,7 @@ function BotSettings({
       <div className="mt-5 flex flex-col items-start gap-3">
         <button
           type="button"
+          aria-label="Save bot profile"
           disabled={saving}
           onClick={() => {
             setSaving(true);

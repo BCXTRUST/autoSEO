@@ -69,6 +69,9 @@ async function main() {
     process.env.DATA_DIR = path.join(reportDir, "data");
     process.env.SIGNUPS_ENABLED = "true";
     process.env.CI = "1";
+    process.env.CAMPAIGN_AI_DRAFTING_ENABLED = "false";
+    process.env.CAMPAIGN_PAID_CHALLENGES_ENABLED = "false";
+    process.env.CAMPAIGN_DISCOURSE_PUBLISHING_ENABLED = "false";
 
     execSync("pnpm --filter @rakazo/db generate", { stdio: "inherit", env: process.env });
     execSync("pnpm --filter @rakazo/db exec prisma migrate deploy", {
@@ -78,6 +81,7 @@ async function main() {
     });
 
     if (integration) {
+      process.env.CAMPAIGN_PG_TEST_URL = databaseUrl;
       execSync(
         [
           "pnpm exec vitest run --no-file-parallelism",
@@ -91,6 +95,12 @@ async function main() {
           "packages/adapters/src/wakeup.postgres.test.ts",
           "packages/adapters/src/realtime.postgres.test.ts",
           "packages/adapters/src/job-reconciler.postgres.test.ts",
+          "packages/db/src/campaigns.integration.test.ts",
+          "packages/adapters/src/campaign-worker.postgres.test.ts",
+          "packages/db/src/campaign-challenges.integration.test.ts",
+          "packages/db/src/campaign-publications.integration.test.ts",
+          "apps/api/src/campaigns.test.ts",
+          "apps/api/src/campaign-challenges.test.ts",
         ].join(" "),
         {
           stdio: "inherit",
@@ -106,8 +116,18 @@ async function main() {
       return;
     }
 
-    const [{ ComposioEmulator, PipedreamConnector, ThirdPartyConnectorEmulator }, { createApp }] =
-      await Promise.all([import("@rakazo/adapters"), import("../../../../apps/api/src/app.ts")]);
+    const [
+      {
+        CampaignCatalogError,
+        CampaignResearchError,
+        ComposioEmulator,
+        PipedreamConnector,
+        ThirdPartyConnectorEmulator,
+        createCampaignWorker,
+        inspectCampaignOpportunity,
+      },
+      { createApp },
+    ] = await Promise.all([import("@rakazo/adapters"), import("../../../../apps/api/src/app.ts")]);
     const { serve } = await import("@hono/node-server");
     const thirdParties = new ThirdPartyConnectorEmulator();
     const pipedream = new PipedreamConnector(
@@ -130,6 +150,274 @@ async function main() {
         resolveHostname: thirdParties.resolveHostname,
       },
     });
+    let blockedCatalogReads = 0;
+    let blockedDiscoveryCandidateReads = 0;
+    const catalogFixtureLinks = [
+      { url: "https://catalog.example.test/products/mesh-router", label: "Mesh router product" },
+      { url: "https://catalog.example.test/articles/setup-guide", label: "Setup guide" },
+      { url: "https://catalog.example.test/app/blocked", label: "Restricted app page" },
+      { url: "https://external.example.test/shop", label: "External shop candidate" },
+    ];
+    const catalogResearch = async (
+      url: string,
+      request: { allowedOrigin: string; allowedUrl?: (candidate: string) => boolean },
+    ) => {
+      const catalogOrigin = "https://catalog.example.test";
+      const discoveryOrigin = "https://discovery.example.test";
+      if (![catalogOrigin, discoveryOrigin].includes(request.allowedOrigin)) {
+        throw new CampaignCatalogError("transient", "fixture_unavailable");
+      }
+      if (new URL(url).origin !== request.allowedOrigin) {
+        throw new CampaignCatalogError("unsupported", "fixture_unavailable");
+      }
+      if (url.endsWith("/robots.txt")) {
+        const robotsText = "User-agent: AutoSEO\nAllow: /\n";
+        return {
+          url,
+          title: "robots.txt",
+          text: robotsText,
+          robotsText,
+          contentType: "text/plain" as const,
+          fetchedAt: new Date().toISOString(),
+          links: [],
+          httpStatus: 200,
+        };
+      }
+      if (!request.allowedUrl?.(url)) {
+        throw new CampaignCatalogError("unsupported", "robots_disallowed");
+      }
+      if (request.allowedOrigin === discoveryOrigin) {
+        if (url === `${discoveryOrigin}/llms.txt` || url.endsWith("/sitemap.xml")) {
+          throw new CampaignCatalogError("unsupported", "page_absent");
+        }
+        if (url === `${discoveryOrigin}/`) {
+          return {
+            url,
+            title: "Acme Mesh Router Product",
+            text: "Acme mesh router with secure Wi-Fi setup for home.",
+            contentType: "text/html" as const,
+            fetchedAt: new Date().toISOString(),
+            links: [
+              {
+                url: `${discoveryOrigin}/products/mesh-router`,
+                label: "Acme Mesh Router Product",
+              },
+            ],
+            httpStatus: 200,
+          };
+        }
+        if (url === `${discoveryOrigin}/products/mesh-router`) {
+          return {
+            url,
+            title: "Acme Mesh Router Product",
+            text: "Acme mesh router with secure Wi-Fi setup for home and device pairing.",
+            contentType: "text/html" as const,
+            fetchedAt: new Date().toISOString(),
+            links: [],
+            httpStatus: 200,
+          };
+        }
+        throw new CampaignCatalogError("transient", "fixture_unavailable");
+      }
+      if (url === "https://catalog.example.test/llms.txt") {
+        throw new CampaignCatalogError("unsupported", "page_absent");
+      }
+      if (url === "https://catalog.example.test/") {
+        return {
+          url,
+          title: "Catalog Fixture Home",
+          text: "Catalog fixture homepage for a mesh router service.",
+          contentType: "text/html" as const,
+          fetchedAt: new Date().toISOString(),
+          links: catalogFixtureLinks,
+          httpStatus: 200,
+        };
+      }
+      if (url === "https://catalog.example.test/sitemap.xml") {
+        return {
+          url,
+          title: "Catalog sitemap",
+          text: "Fixture sitemap listing product and article pages.",
+          contentType: "application/xml" as const,
+          fetchedAt: new Date().toISOString(),
+          links: catalogFixtureLinks.slice(0, 2),
+          httpStatus: 200,
+        };
+      }
+      if (url === "https://catalog.example.test/app/blocked" && blockedCatalogReads++ === 0) {
+        throw new CampaignCatalogError("unsupported", "page_forbidden");
+      }
+      if (url === "https://catalog.example.test/products/mesh-router") {
+        return {
+          url,
+          title: "Mesh Router Product",
+          text: "Fixture facts: dual-band mesh router, white shell, and 2.4/5 GHz support.",
+          contentType: "text/html" as const,
+          fetchedAt: new Date().toISOString(),
+          links: [],
+          httpStatus: 200,
+        };
+      }
+      if (url === "https://catalog.example.test/articles/setup-guide") {
+        return {
+          url,
+          title: "Setup Guide",
+          text: "Fixture guidance: place the router centrally.",
+          contentType: "text/html" as const,
+          fetchedAt: new Date().toISOString(),
+          links: [],
+          httpStatus: 200,
+        };
+      }
+      if (url === "https://catalog.example.test/app/blocked") {
+        return {
+          url,
+          title: "Restricted Collection",
+          text: "Catalog fixture recovered after an explicit human retry.",
+          contentType: "text/html" as const,
+          fetchedAt: new Date().toISOString(),
+          links: [],
+          httpStatus: 200,
+        };
+      }
+      throw new CampaignCatalogError("transient", "fixture_unavailable");
+    };
+    const discoveryFetchPage = async (
+      url: string,
+      request: {
+        allowedOrigin: string;
+        allowedUrl?: (candidate: string) => boolean;
+      },
+      blockPrivateCandidate = false,
+    ) => {
+      const origin = "https://community.discovery.example.test";
+      if (request.allowedOrigin !== origin || new URL(url).origin !== origin) {
+        throw new CampaignCatalogError("unsupported", "fixture_unavailable");
+      }
+      if (url === `${origin}/robots.txt`) {
+        const robotsText = blockPrivateCandidate
+          ? "User-agent: AutoSEO\nDisallow: /private/\nAllow: /\n"
+          : "User-agent: AutoSEO\nAllow: /\n";
+        return {
+          url,
+          title: "robots.txt",
+          text: robotsText,
+          robotsText,
+          contentType: "text/plain" as const,
+          fetchedAt: new Date().toISOString(),
+          links: [],
+          httpStatus: 200,
+        };
+      }
+      if (!request.allowedUrl?.(url)) {
+        throw new CampaignCatalogError("unsupported", "robots_disallowed");
+      }
+      const privateUrl = `${origin}/private/router-board`;
+      const discussionUrl = `${origin}/t/mesh-router-setup`;
+      if (url === privateUrl) {
+        return {
+          url,
+          title: "Private Router Board",
+          text: "Fixture evidence: router owners discuss mesh setup and device pairing.",
+          contentType: "text/html" as const,
+          fetchedAt: new Date().toISOString(),
+          links: [{ url: `${origin}/guidelines/router-setup`, label: "Community guidelines" }],
+          httpStatus: 200,
+        };
+      }
+      if (url === discussionUrl) {
+        return {
+          url,
+          title: "Mesh Router Setup Discussion",
+          text: "Fixture evidence: owners describe setting up the Acme mesh router.",
+          contentType: "text/html" as const,
+          fetchedAt: new Date().toISOString(),
+          links: [{ url: `${origin}/guidelines/router-setup`, label: "Community rules" }],
+          httpStatus: 200,
+        };
+      }
+      throw new CampaignCatalogError("unsupported", "fixture_unavailable");
+    };
+    const discoverySearchProvider = {
+      async search(request: { query: string; limit: number }) {
+        const observedAt = new Date().toISOString();
+        if (!request.query.includes("discovery.example.test")) {
+          return { query: request.query, provider: "fixture-search", observedAt, results: [] };
+        }
+        return {
+          query: request.query,
+          provider: "fixture-search",
+          observedAt,
+          results: [
+            {
+              url: "https://community.discovery.example.test/private/router-board",
+              title: "Private Router Board",
+              snippet: "A candidate community discussing router setup.",
+              rank: 1,
+            },
+            {
+              url: "https://community.discovery.example.test/t/mesh-router-setup",
+              title: "Mesh Router Setup Discussion",
+              snippet: "A candidate discussion about mesh router setup.",
+              rank: 2,
+            },
+          ].slice(0, Math.min(4, request.limit)),
+        };
+      },
+    };
+    const inspectDiscoveryFixture = async (input: {
+      url: string;
+      signal?: AbortSignal;
+      now?: () => Date;
+    }) => {
+      const isPrivateCandidate =
+        input.url === "https://community.discovery.example.test/private/router-board";
+      const blockPrivateCandidate = isPrivateCandidate && blockedDiscoveryCandidateReads === 0;
+      if (isPrivateCandidate) blockedDiscoveryCandidateReads += 1;
+      return inspectCampaignOpportunity({
+        ...input,
+        fetchCatalogPage: (url, request) => discoveryFetchPage(url, request, blockPrivateCandidate),
+      });
+    };
+    const researchDiscoveryFixture = async (url: string) => {
+      const facts = new Map([
+        [
+          "https://community.discovery.example.test/private/router-board",
+          {
+            title: "Private Router Board",
+            text: "Fixture evidence: router owners discuss mesh setup and device pairing.",
+          },
+        ],
+        [
+          "https://community.discovery.example.test/t/mesh-router-setup",
+          {
+            title: "Mesh Router Setup Discussion",
+            text: "Fixture evidence: owners describe setting up the Acme mesh router.",
+          },
+        ],
+      ]);
+      const evidence = facts.get(url);
+      if (!evidence) throw new CampaignResearchError("invalid_input", "fixture_unavailable");
+      return {
+        url,
+        ...evidence,
+        contentType: "text/html" as const,
+        fetchedAt: new Date().toISOString(),
+      };
+    };
+    const campaignWorker = createCampaignWorker({
+      prisma: handles.prisma,
+      workerId: "testkit-e2e-campaign-worker",
+      research: researchDiscoveryFixture,
+      catalogResearch,
+      discovery: {
+        enabled: true,
+        searchProviderId: "fixture-search",
+        searchProvider: discoverySearchProvider,
+        inspectOpportunity: inspectDiscoveryFixture,
+      },
+    });
+    campaignWorker.start();
     let activeRequests = 0;
     const requestWaiters = new Set<() => void>();
     const server = serve({
@@ -194,6 +482,7 @@ async function main() {
       if (activeRequests > 0) {
         await new Promise<void>((resolve) => requestWaiters.add(resolve));
       }
+      await campaignWorker.stop().catch(() => undefined);
       await handles.stop().catch(() => undefined);
       for (let index = 0; index < computers.length; index += 4) {
         const results = await Promise.allSettled(

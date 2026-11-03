@@ -9,8 +9,15 @@ export const LEGACY_FLASH_MODEL_ID = "deepseek/deepseek-v4-flash-0731";
 const WEAK_COMPUTER_MODEL =
   /(?:^|\/)(?:aion(?:[-.\s]*2(?:\.0)?)?|gpt-4\.1-mini|gpt-4o-mini|deepseek-v4-flash)/i;
 
+function configuredEnv(name: string): string | undefined {
+  const runtime = globalThis as typeof globalThis & {
+    process?: { env?: Record<string, string | undefined> };
+  };
+  return runtime.process?.env?.[name];
+}
+
 function strongComputerModelFromEnv(): string | undefined {
-  for (const value of [process.env.PI_COMPUTER_MODEL, process.env.PI_DEFAULT_MODEL]) {
+  for (const value of [configuredEnv("PI_COMPUTER_MODEL"), configuredEnv("PI_DEFAULT_MODEL")]) {
     const env = value?.trim();
     if (env && env !== LEGACY_FLASH_MODEL_ID && !WEAK_COMPUTER_MODEL.test(env)) return env;
   }
@@ -26,7 +33,7 @@ export function resolveOpenRouterModelId(id: string | undefined): string {
 }
 
 export function resolveAuxOpenRouterModelId(id: string | undefined): string {
-  const env = process.env.PI_AUX_MODEL?.trim();
+  const env = configuredEnv("PI_AUX_MODEL")?.trim();
   if (env) return env;
   const trimmed = id?.trim();
   if (trimmed && trimmed !== DEFAULT_OPENROUTER_MODEL_ID) return trimmed;

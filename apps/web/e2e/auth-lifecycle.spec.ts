@@ -26,15 +26,15 @@ test("logout protects bot deep links and sign-in restores the session", async ({
   await captureScreenshot(page, testInfo, "36-account-menu");
 
   await page.getByRole("button", { name: "Log out" }).click();
-  await expect(page.getByRole("heading", { name: "Sign in to Rakazo" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to AutoSEO" })).toBeVisible();
   await page.goto("/");
-  await expect(page.getByText(/Your team of always-on agents/)).toBeVisible();
+  await expect(page.getByText(/Campaign research and drafts/)).toBeVisible();
   await expect(page.getByRole("button", { name: /Sign in/ })).toBeVisible();
   await captureScreenshot(page, testInfo, "37-logged-out-welcome");
 
   await page.goto(protectedBotPath);
   await page.waitForURL((url) => url.pathname === "/sign-in");
-  await expect(page.getByRole("heading", { name: "Sign in to Rakazo" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to AutoSEO" })).toBeVisible();
   await expect(page.getByText("Chief", { exact: true })).toHaveCount(0);
   await expect(page.getByText(userName, { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Email")).toHaveAttribute("autocomplete", "username");
@@ -44,19 +44,15 @@ test("logout protects bot deep links and sign-in restores the session", async ({
   await page.getByPlaceholder("Your email address").fill(email);
   await page.getByPlaceholder("Password").fill("wrong-password12");
   await page.getByRole("button", { name: "Continue with email" }).click();
-  await expect(
-    page
-      .locator("form")
-      .getByText(/invalid email or password|invalid credentials|incorrect password/i),
-  ).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveText("Email or password is wrong.");
   await expect(page).toHaveURL(/\/sign-in$/);
   await captureScreenshot(page, testInfo, "39-invalid-credentials");
 
   await page.getByPlaceholder("Password").fill(password);
   await page.getByRole("button", { name: "Continue with email" }).click();
-  await page.waitForURL((url) => url.pathname === protectedBotPath, {
-    timeout: 20_000,
-  });
+  await page.waitForURL((url) => url.pathname === "/app", { timeout: 20_000 });
+  await page.goto(protectedBotPath);
+  await page.waitForURL((url) => url.pathname === protectedBotPath, { timeout: 20_000 });
   const composer = page.getByRole("textbox", { name: "Message Chief" });
   await expect(composer).toHaveAttribute("name", "chat-message");
   await expect(composer).toHaveAttribute("autocomplete", "off");

@@ -38,6 +38,10 @@ export interface AppEnv {
   mcpStdioEnabled: boolean;
   mcpStdioAllowedCommands: string[];
   agentMailApiKey: string | undefined;
+  discourseBaseUrl: string | undefined;
+  discourseApiKey: string | undefined;
+  discourseApiUsername: string | undefined;
+  discoursePublishingEnabled: boolean;
   port: number;
   gitSha: string | undefined;
 }
@@ -81,6 +85,10 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): AppEnv {
       .map((value) => value.trim())
       .filter(Boolean),
     agentMailApiKey: optional(source.AGENTMAIL_API_KEY),
+    discourseBaseUrl: optional(source.DISCOURSE_BASE_URL),
+    discourseApiKey: optional(source.DISCOURSE_API_KEY),
+    discourseApiUsername: optional(source.DISCOURSE_API_USERNAME),
+    discoursePublishingEnabled: source.CAMPAIGN_DISCOURSE_PUBLISHING_ENABLED === "true",
     port: Number(source.API_PORT ?? 3100),
     gitSha:
       optional(source.GIT_SHA) ??

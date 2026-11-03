@@ -1,3 +1,6 @@
+export * from "./campaign-challenges.js";
+export * from "./campaign-publications.js";
+export * from "./campaigns.js";
 export * from "./client.js";
 export * from "./computers.js";
 export * from "./events.js";

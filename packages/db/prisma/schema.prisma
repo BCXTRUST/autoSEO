@@ -26,6 +26,7 @@ model User {
   botSections      BotSection[]
   actionApprovalRules ActionApprovalRule[]
   siteLogins          SiteLogin[]
+  campaigns           Campaign[]
 
   @@unique([email])
   @@map("user")
@@ -114,6 +115,7 @@ model Organization {
   workspaceMemoryConfig WorkspaceMemoryConfig?
   chatGroups  ChatGroup[]
   siteLogins  SiteLogin[]
+  campaigns   Campaign[]
 
   @@unique([slug])
   @@map("organization")
@@ -865,4 +867,162 @@ model BotMcpServer {
   @@unique([botId, serverId])
   @@index([workspaceId, userId, botId])
   @@map("bot_mcp_servers")
+}
+
+model Campaign {
+  id            String          @id @default(cuid())
+  workspaceId   String
+  workspace     Organization    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientNonce   String
+  config        Json
+  status        String          @default("draft")
+  mode          String          @default("research")
+  revision      Int             @default(1)
+  eventSequence Int             @default(0)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  items         CampaignItem[]
+  events        CampaignEvent[]
+  jobs          CampaignJob[]
+  commands      CampaignCommand[]
+  challengeTasks CampaignChallengeTask[]
+  publicationActions CampaignPublicationAction[]
+
+  @@unique([workspaceId, userId, clientNonce])
+  @@index([workspaceId, userId, updatedAt])
+  @@map("campaigns")
+}
+
+model CampaignItem {
+  id        String   @id @default(cuid())
+  campaignId String
+  campaign  Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  kind      String
+  url       String?
+  title     String
+  body      String   @default("")
+  status    String
+  details   Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  jobs      CampaignJob[]
+  publicationActions CampaignPublicationAction[]
+
+  @@index([campaignId, kind, status, createdAt])
+  @@map("campaign_items")
+}
+
+model CampaignEvent {
+  id         String   @id @default(cuid())
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  sequence   Int
+  type       String
+  summary    String
+  stepId     String?
+  occurredAt DateTime @default(now())
+
+  @@unique([campaignId, sequence])
+  @@index([campaignId, occurredAt])
+  @@map("campaign_events")
+}
+
+model CampaignJob {
+  id             String        @id @default(cuid())
+  campaignId     String
+  campaign       Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  itemId         String?
+  item           CampaignItem? @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  operation      String
+  status         String        @default("queued")
+  attemptCount   Int           @default(0)
+  maxAttempts    Int           @default(3)
+  availableAt    DateTime      @default(now())
+  startedAt      DateTime?
+  heartbeatAt    DateTime?
+  deadlineAt     DateTime?
+  leaseExpiresAt DateTime?
+  leaseOwner     String?
+  leaseFence     Int           @default(0)
+  lastError      String?
+  checkpoint     Json          @default("{}")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([status, availableAt, createdAt])
+  @@index([status, leaseExpiresAt])
+  @@index([campaignId, status, availableAt])
+  @@map("campaign_jobs")
+}
+
+model CampaignCommand {
+  id          String   @id @default(cuid())
+  campaignId  String
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  nonce       String
+  payloadHash String
+  result      Json
+  createdAt   DateTime @default(now())
+
+  @@unique([campaignId, nonce])
+  @@index([campaignId, createdAt])
+  @@map("campaign_commands")
+}
+
+model CampaignChallengeTask {
+  id                 String   @id @default(cuid())
+  campaignId         String
+  campaign           Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  nonce              String
+  payloadHash        String
+  status             String   @default("creating")
+  providerTaskId     String?  @unique
+  reservationMicros  BigInt
+  actualCostMicros   BigInt?
+  pollAttempts       Int      @default(0)
+  maxPollAttempts    Int      @default(12)
+  deadlineAt         DateTime
+  nextPollAt         DateTime?
+  pollLeaseUntil     DateTime?
+  safeError          String?
+  solutionCiphertext String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([campaignId, nonce])
+  @@index([campaignId, status, createdAt])
+  @@index([campaignId, createdAt])
+  @@map("campaign_challenge_tasks")
+}
+
+model CampaignPublicationAction {
+  id                       String       @id @default(cuid())
+  campaignId               String
+  campaign                 Campaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  draftId                  String
+  draft                    CampaignItem @relation(fields: [draftId], references: [id], onDelete: Restrict)
+  nonce                    String
+  payloadHash              String
+  status                   String
+  topicId                  Int
+  bodySnapshot             String
+  approvedDraftUpdatedAt   DateTime
+  contentHash              String
+  expectedLink             String
+  providerPostId           Int?
+  publicUrl                String?
+  safeError                String?
+  verificationAttempts     Int          @default(0)
+  maxVerificationAttempts  Int          @default(12)
+  deadlineAt               DateTime
+  nextVerifyAt             DateTime?
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+
+  @@unique([campaignId, nonce])
+  @@index([campaignId, status, createdAt])
+  @@index([status, nextVerifyAt])
+  @@map("campaign_publication_actions")
 }
